@@ -63,8 +63,7 @@ defmodule Penbot.TUI do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
     GenServer.call(__MODULE__, {:print, [
-      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset],
-      []
+      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset]
     ]})
   end
 
@@ -212,7 +211,9 @@ defmodule Penbot.TUI do
     action_part = if state.action, do: [:magenta, " │ ⠋ #{trunc(state.action, 50)}", :reset], else: []
     bottom = [:faint, " #{state.step}/#{state.max_steps} │ ", :yellow, state.cost, :reset] ++ action_part
 
-    progress_lines ++ [bottom]
+    # Add blank separator line before progress if there are items
+    separator = if progress_lines != [], do: [[]], else: []
+    separator ++ progress_lines ++ [bottom]
   end
 
   # --- Helpers ---
