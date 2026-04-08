@@ -26,7 +26,7 @@ defmodule Penbot.TUI do
 
   def agent_text(nil), do: :ok
   def agent_text(text) do
-    GenServer.call(__MODULE__, {:print, [[:cyan, "● ", :reset, text]]})
+    GenServer.call(__MODULE__, {:print, [[], [:cyan, "● ", :reset, text]]})
   end
 
   def tool_call(name, detail) do
