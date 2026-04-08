@@ -160,6 +160,16 @@ defmodule Penbot.Runner do
 
             state = %{state | messages: messages, step: step, history: history}
             loop(state, system)
+
+          {:continue_with_image, %{text: text, base64: base64}} ->
+            # Add tool result with image content block (for screenshots)
+            messages = append_tool_exchange_with_image(messages, response, tool_call, text, base64)
+
+            input_summary = summarize_input(tool_call)
+            history = state.history ++ [{tool_call.name, input_summary, "[screenshot]"}]
+
+            state = %{state | messages: messages, step: step, history: history}
+            loop(state, system)
         end
 
       {:ok, %{text: text, tool_use: []}} ->
@@ -253,6 +263,48 @@ defmodule Penbot.Runner do
           type: "tool_result",
           tool_use_id: tool_call.id,
           content: result
+        }
+      ]
+    }
+
+    messages ++
+      [
+        %{role: "assistant", content: assistant_content},
+        tool_result
+      ]
+  end
+
+  # Same as append_tool_exchange but includes an image in the tool result
+  defp append_tool_exchange_with_image(messages, response, tool_call, text, base64) do
+    assistant_content =
+      []
+      |> maybe_add_text(response.text)
+      |> Kernel.++([
+        %{
+          type: "tool_use",
+          id: tool_call.id,
+          name: tool_call.name,
+          input: tool_call.input
+        }
+      ])
+
+    tool_result = %{
+      role: "user",
+      content: [
+        %{
+          type: "tool_result",
+          tool_use_id: tool_call.id,
+          content: [
+            %{type: "text", text: text},
+            %{
+              type: "image",
+              source: %{
+                type: "base64",
+                media_type: "image/png",
+                data: base64
+              }
+            }
+          ]
         }
       ]
     }

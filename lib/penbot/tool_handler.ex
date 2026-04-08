@@ -51,6 +51,65 @@ defmodule Penbot.ToolHandler do
     {:think, reasoning}
   end
 
+  def execute(%{name: "screenshot", input: _input}) do
+    Logger.info("  [screenshot]")
+
+    case Penbot.Screenshot.capture() do
+      {:ok, %{path: path, base64: base64}} ->
+        {:continue_with_image, %{text: "Screenshot saved to #{path}", base64: base64}}
+
+      {:error, reason} ->
+        {:continue, "[error] Screenshot failed: #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}) do
+    Logger.info("  [gui_click] #{x},#{y}")
+
+    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
+      {:ok, %{exit_code: 0}} -> {:continue, "Clicked at (#{x}, #{y})"}
+      {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
+      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "gui_type", input: %{"text" => text}}) do
+    Logger.info("  [gui_type] #{String.slice(text, 0, 50)}")
+    # Use xdotool type with --clearmodifiers to avoid modifier key issues
+    escaped = String.replace(text, "'", "'\\''")
+
+    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool type --clearmodifiers '#{escaped}'", timeout: 10_000) do
+      {:ok, %{exit_code: 0}} -> {:continue, "Typed text"}
+      {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
+      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "gui_key", input: %{"key" => key}}) do
+    Logger.info("  [gui_key] #{key}")
+
+    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
+      {:ok, %{exit_code: 0}} -> {:continue, "Pressed #{key}"}
+      {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
+      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "gui_scroll", input: input}) do
+    direction = Map.get(input, "direction", "down")
+    clicks = Map.get(input, "clicks", 3)
+    button = if direction == "up", do: 4, else: 5
+    Logger.info("  [gui_scroll] #{direction} #{clicks}")
+
+    cmds = Enum.map_join(1..clicks, " && ", fn _ -> "DISPLAY=:99 xdotool click #{button}" end)
+
+    case Penbot.Sandbox.exec(cmds, timeout: 5_000) do
+      {:ok, %{exit_code: 0}} -> {:continue, "Scrolled #{direction} #{clicks} clicks"}
+      {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
+      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
   def execute(%{name: "done", input: input}) do
     success = Map.get(input, "success", false)
     summary = Map.get(input, "summary", "No summary provided")

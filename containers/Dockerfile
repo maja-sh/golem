@@ -15,14 +15,19 @@ RUN apt-get update && apt-get install -y \
     ca-certificates gnupg lsb-release \
     # For potential web work
     sqlite3 libsqlite3-dev \
+    # Virtual display and GUI tools
+    xvfb scrot xdotool imagemagick x11-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Create agent user with passwordless sudo
 RUN useradd -m -s /bin/bash agent && \
     echo "agent ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER agent
 WORKDIR /home/agent
+ENV DISPLAY=:99
 
-# Keep container running
-CMD ["sleep", "infinity"]
+ENTRYPOINT ["/entrypoint.sh"]
