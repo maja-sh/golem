@@ -34,6 +34,16 @@ defmodule Penbot.Prompt do
     - Use `sub_agent` to delegate self-contained sub-tasks that would bloat your context.
     - When installing packages, use appropriate package managers (apt, pip, npm, etc.) and handle missing repos gracefully.
 
+    ## Progress tracking
+
+    Use `update_progress` to keep the operator informed of your progress. Call it:
+    - At the start of a run to set up initial items from the plan
+    - When you start working on a step (mark it `in_progress`)
+    - When you finish a step (mark it `completed`)
+    - When the plan changes (update the full list)
+
+    Each call sends the FULL item list — include all items every time, with their current status. Keep items short (under 50 chars). 5-15 items is ideal.
+
     ## General guidelines
 
     - Read before you write. Understand the current state before making changes.

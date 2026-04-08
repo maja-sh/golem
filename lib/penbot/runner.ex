@@ -32,6 +32,9 @@ defmodule Penbot.Runner do
     Logger.info("#{prefix}Goal: #{goal}")
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
+    # Initialize TUI for top-level runs
+    if depth == 0, do: Penbot.TUI.init(run_id, goal)
+
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
     case result do
@@ -51,6 +54,7 @@ defmodule Penbot.Runner do
         Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
     end
 
+    if depth == 0, do: Penbot.TUI.stop()
     result
   end
 
@@ -243,7 +247,9 @@ defmodule Penbot.Runner do
     # Make run_id available to tool handlers (for ask_user Discord messages)
     if run_id = Map.get(state, :run_id), do: Process.put(:penbot_run_id, run_id)
     costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
-    Logger.info("#{p}--- Step #{step}/#{state.max_steps} | $#{format_cost(costs)} ---")
+    cost_str = "$#{format_cost(costs)}"
+    Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
+    if state.depth == 0, do: Penbot.TUI.update_status(step, state.max_steps, cost_str)
 
     model = Application.get_env(:penbot, :executor_model)
     max_tokens = Application.get_env(:penbot, :executor_max_tokens, 8000)
@@ -317,6 +323,8 @@ defmodule Penbot.Runner do
   end
 
   defp execute_tool_calls([tc | rest], depth, executed) do
+    Penbot.TUI.update_action(tc.name, summarize_input(tc))
+
     case Penbot.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
         {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
@@ -512,6 +520,7 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: "screenshot", input: _}), do: "display"
   defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
   defp summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
+  defp summarize_input(%{name: "update_progress", input: _}), do: "progress"
 
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"

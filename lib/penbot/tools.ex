@@ -126,6 +126,24 @@ defmodule Penbot.Tools do
         },
         required: ["reasoning"]
       }),
+      tool("update_progress", "Update your progress tracking. Call this as you start and complete plan steps so the operator can see your progress. Each call sets the FULL list of items — include all items every time, not just changed ones.", %{
+        type: "object",
+        properties: %{
+          items: %{
+            type: "array",
+            description: "Full list of progress items",
+            items: %{
+              type: "object",
+              properties: %{
+                text: %{type: "string", description: "Short description of the step"},
+                status: %{type: "string", enum: ["pending", "in_progress", "completed"], description: "Current status"}
+              },
+              required: ["text", "status"]
+            }
+          }
+        },
+        required: ["items"]
+      }),
       tool("screenshot", "Take a screenshot of the virtual display to see GUI applications visually.", %{
         type: "object",
         properties: %{},

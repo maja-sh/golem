@@ -179,6 +179,23 @@ defmodule Penbot.ToolHandler do
     end
   end
 
+  def execute(%{name: "update_progress", input: %{"items" => items}}, _depth) do
+    parsed =
+      Enum.map(items, fn item ->
+        %{
+          text: Map.get(item, "text", ""),
+          status: String.to_atom(Map.get(item, "status", "pending"))
+        }
+      end)
+
+    completed = Enum.count(parsed, &(&1.status == :completed))
+    total = length(parsed)
+    Logger.info("  [update_progress] #{completed}/#{total} completed")
+
+    Penbot.TUI.set_progress(parsed)
+    {:continue, "Progress updated (#{completed}/#{total} completed)."}
+  end
+
   def execute(%{name: "screenshot", input: _input}, _depth) do
     Logger.info("  [screenshot]")
 
