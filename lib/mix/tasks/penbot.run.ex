@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Penbot.Run do
   ## Usage
 
       mix penbot.run "Build a web scraper in Python"
+      mix penbot.run --scenario smoke_maze
       mix penbot.run --plan plan.md "Build a web scraper in Python"
       mix penbot.run --max-steps 50 "Set up a Phoenix project"
   """
@@ -17,14 +18,30 @@ defmodule Mix.Tasks.Penbot.Run do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [plan: :string, max_steps: :integer],
-        aliases: [p: :plan, s: :max_steps]
+        strict: [plan: :string, max_steps: :integer, scenario: :string],
+        aliases: [p: :plan, s: :max_steps, S: :scenario]
       )
 
-    goal = Enum.join(rest, " ")
+    goal =
+      case opts[:scenario] do
+        nil ->
+          Enum.join(rest, " ")
+
+        name ->
+          path = Path.join("scenarios", "#{name}.md")
+
+          case File.read(path) do
+            {:ok, content} -> extract_goal(content)
+            {:error, _} ->
+              Mix.shell().error("Scenario not found: #{path}")
+              Mix.shell().info("Available: #{list_scenarios()}")
+              exit({:shutdown, 1})
+          end
+      end
 
     if goal == "" do
       Mix.shell().error("Usage: mix penbot.run \"your goal here\"")
+      Mix.shell().error("       mix penbot.run --scenario smoke_maze")
       exit({:shutdown, 1})
     end
 
@@ -67,6 +84,27 @@ defmodule Mix.Tasks.Penbot.Run do
 
       {:error, reason} ->
         Mix.shell().error("\n✗ Error: #{inspect(reason)}")
+    end
+  end
+
+  # Extract the goal text from a scenario markdown file (content under ## Goal)
+  defp extract_goal(content) do
+    case Regex.run(~r/## Goal\s*\n(.*)/s, content) do
+      [_, goal] -> String.trim(goal)
+      nil -> String.trim(content)
+    end
+  end
+
+  defp list_scenarios do
+    case File.ls("scenarios") do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".md"))
+        |> Enum.map(&String.replace_suffix(&1, ".md", ""))
+        |> Enum.join(", ")
+
+      _ ->
+        "(none found)"
     end
   end
 end
