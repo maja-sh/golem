@@ -33,7 +33,7 @@ defmodule Penbot.Runner do
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
     # Initialize TUI for top-level runs
-    if depth == 0, do: Penbot.TUI.init(run_id, goal)
+    if depth == 0, do: Penbot.TUI.init_display(run_id, goal)
 
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
@@ -44,7 +44,7 @@ defmodule Penbot.Runner do
         {:error, reason} -> Penbot.TUI.run_error(reason)
       end
 
-      Penbot.TUI.stop()
+      Penbot.TUI.stop_display()
     end
 
     # Always log to file

@@ -12,7 +12,8 @@ defmodule Penbot.Application do
     end
 
     children = [
-      Penbot.Sandbox
+      Penbot.Sandbox,
+      Penbot.TUI
     ]
 
     opts = [strategy: :one_for_one, name: Penbot.Supervisor]
