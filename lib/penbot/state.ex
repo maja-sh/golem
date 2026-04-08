@@ -7,7 +7,6 @@ defmodule Penbot.State do
   require Logger
 
   @runs_dir "runs"
-  @save_interval 10
 
   @doc """
   Generate a new run ID.
@@ -22,9 +21,10 @@ defmodule Penbot.State do
   end
 
   @doc """
-  Should we save at this step? (Every @save_interval steps)
+  Always save — it's just a JSON write and ensures we always have
+  a recent checkpoint for resume.
   """
-  def should_save?(step), do: rem(step, @save_interval) == 0
+  def should_save?(_step), do: true
 
   @doc """
   Save run state to disk.
