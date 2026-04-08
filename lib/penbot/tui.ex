@@ -179,18 +179,37 @@ defmodule Penbot.TUI do
   # --- Progress ---
 
   def set_progress(items) do
-    update_state(%{progress: items})
+    # Print progress items as scrolling output
+    completed = Enum.count(items, &(&1.status == :completed))
+    total = length(items)
+
+    Enum.each(items, fn item ->
+      {icon, color} = case item.status do
+        :completed -> {"✓", :green}
+        :in_progress -> {"→", :yellow}
+        :pending -> {"·", :faint}
+      end
+      style = if item.status == :pending, do: :faint, else: :white
+      puts([
+        Owl.Data.tag("  [", :faint),
+        Owl.Data.tag(icon, color),
+        Owl.Data.tag("] ", :faint),
+        Owl.Data.tag(trunc_text(item.text, 60), style)
+      ])
+    end)
+
+    puts([Owl.Data.tag("  (#{completed}/#{total})", :faint)])
   end
 
   # --- Status Bar Renderer ---
 
-  defp render_statusbar(%{step: step, max_steps: max, cost: cost, progress: progress, action: action}) do
+  defp render_statusbar(%{step: step, max_steps: max, cost: cost, action: action}) do
     bar_width = 20
     pct = if max > 0, do: min(step / max, 1.0), else: 0
     filled = round(pct * bar_width)
     empty = bar_width - filled
 
-    bar = [
+    line = [
       Owl.Data.tag(String.duplicate("█", filled), :green),
       Owl.Data.tag(String.duplicate("░", empty), :faint),
       " ",
@@ -199,33 +218,16 @@ defmodule Penbot.TUI do
       Owl.Data.tag(cost, :yellow)
     ]
 
-    prog =
-      Enum.map(progress, fn item ->
-        {icon, color} = case item.status do
-          :completed -> {"✓", :green}
-          :in_progress -> {"→", :yellow}
-          :pending -> {"·", :faint}
-        end
-        style = if item.status == :pending, do: :faint, else: :white
-        [
-          Owl.Data.tag(" [", :faint),
-          Owl.Data.tag(icon, color),
-          Owl.Data.tag("] ", :faint),
-          Owl.Data.tag(trunc_text(item.text, 50), style)
-        ]
-      end)
+    if action do
+      line ++ [Owl.Data.tag(" │ ", :faint), Owl.Data.tag("⠋ #{trunc_text(action, 40)}", :magenta)]
+    else
+      line
+    end
+  end
 
-    act =
-      if action do
-        [Owl.Data.tag(" ⠋ #{trunc_text(action, 60)}", [:faint, :magenta])]
-      else
-        []
-      end
-
-    [bar | prog ++ [act]]
-    |> Enum.reject(&(&1 == []))
-    |> Enum.intersperse("\n")
-    |> List.flatten()
+  # Catch-all for any extra keys in state
+  defp render_statusbar(state) do
+    render_statusbar(Map.take(state, [:step, :max_steps, :cost, :action]))
   end
 
   # --- Helpers ---
