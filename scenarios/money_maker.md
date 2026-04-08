@@ -1,53 +1,87 @@
 # Revenue Product: Research, Plan, Build
 
 **Difficulty:** Very Hard (open-ended research + full build)
-**Expected steps:** 100+
+**Expected steps:** 150-300
+**Recommended max_steps:** 400
 **Tools exercised:** web_search, web_fetch, think, write_file, edit_file, shell, sub_agent, glob, grep
 **Validates:** Phased execution (research → replan → build), sustained multi-phase work
 
 ## Goal
 
-Your mission is to research, plan, and build a small revenue-generating software product. This is a multi-phase task — do NOT skip the research.
+Your mission is to research, plan, and build a small revenue-generating software product. This is a multi-phase task — do NOT skip the research. Thorough research is the difference between building something nobody wants and building something people will pay for.
 
-### Phase 1: Market Research
+### Environment
 
-Research the current landscape of small, profitable software products (micro-SaaS, developer tools, paid APIs, niche utilities). Look for:
-- Gaps in the market where existing solutions are missing, overpriced, or poorly executed
-- Niches where a single focused tool can charge $10-50/month
-- Problems that developers, small businesses, or creators face repeatedly
-- Areas where incumbents are bloated and a simple focused alternative would win
+Your container has Python, Node.js, and basic Linux tools pre-installed. Elixir and PHP are NOT pre-installed — you will need to install your chosen language as the first step of the build phase. For Elixir: install Erlang and Elixir via apt or asdf. For PHP: install php, composer, and any needed extensions via apt.
 
-Search broadly. Look at Indie Hackers, Hacker News, Product Hunt, Reddit, and niche communities. Spend at least 15-20 search queries on this. Do not rush.
+### Phase 1: Market Research (spend at least 20 searches here)
 
-### Phase 2: Evaluate and Decide
+Research the current landscape of small, profitable software products (micro-SaaS, developer tools, paid APIs, niche utilities). Your goal is to find REAL gaps, not to generate ideas from your training data.
 
-After researching, use `think` to synthesize your findings. Evaluate each opportunity against these criteria:
-- **Market gap**: Is there a real underserved need?
+**What to search for:**
+- "micro saas ideas 2025 2026" on Indie Hackers, Hacker News
+- "what tools do you wish existed" threads on Reddit (r/SaaS, r/smallbusiness, r/webdev, r/freelance)
+- Pricing pages of existing small tools — find ones that are overpriced for what they do
+- Product Hunt launches in the last 6 months — what got traction, what flopped
+- "I built X and it makes $Y/month" posts — what's actually working
+- Common complaints about existing tools (too expensive, too complex, missing feature X)
+
+**What to look for in each opportunity:**
+- Real user complaints or requests (link to sources)
+- What existing solutions charge and what they're missing
+- Whether the audience is reachable (where do they hang out online?)
+
+**Do NOT:**
+- Generate ideas from your general knowledge without searching first
+- Pick the first idea that sounds good — research at least 5-7 different niches
+- Move to Phase 2 until you have concrete evidence (real URLs, real pricing data, real user complaints)
+
+### Phase 2: Validate and Decide
+
+After researching, you need to validate your top 2-3 ideas before committing.
+
+**For each candidate idea, search for:**
+- Existing solutions (to confirm the gap is real and not already filled)
+- The actual pricing of competitors
+- How people currently solve the problem (workarounds, spreadsheets, manual processes)
+
+Use `think` (without replan) to synthesize your findings. Evaluate each opportunity against ALL of these criteria:
+- **Market gap**: Is there a REAL underserved need? Cite your evidence.
 - **Revenue potential**: What are realistic monthly revenue scenarios? (pessimistic / realistic / optimistic)
-- **Scope**: Can it be built as an MVP in under 1000 lines of code?
-- **Solo maintainability**: Can one person run this indefinitely? No complex infrastructure, no 24/7 ops burden, no customer support nightmare.
-- **Language fit**: Must be built in Elixir or PHP. No Python.
+- **Scope**: Can it be built as an MVP in under 1000 lines of code? No external services beyond a database and maybe email.
+- **Solo maintainability**: Can one person run this indefinitely? No complex infrastructure, no 24/7 ops burden, no customer support nightmare. Must be deployable on a single $5-20/month VPS.
+- **Language fit**: Must be built in Elixir or PHP. No Python. Think about which language fits the problem better.
 
-Write your analysis to /home/agent/product/RESEARCH.md before proceeding.
+Write your full analysis (all candidates, with evidence and citations) to /home/agent/product/RESEARCH.md.
 
-Then use `think` with `request_replan: true` to present your recommendation and get a build plan.
+Then use `think` with `request_replan: true` to present your chosen product and get a detailed build plan.
 
 ### Phase 3: Build the MVP
 
-Build the actual product. Requirements:
-- Written in Elixir or PHP (your choice based on what fits)
-- Minimal dependencies
-- Working code that could actually be deployed
-- Include a README with: what it does, who it's for, how to deploy, pricing model
-- Include basic tests
-- Put everything in /home/agent/product/
+Use a `sub_agent` to do the actual building — this keeps your research context from bloating the build context. Give the sub-agent:
+- The specific product to build
+- The language choice and why
+- The key features for the MVP (keep it minimal)
+- Clear file structure expectations
+
+**Build requirements:**
+- Written in Elixir or PHP (no Python)
+- Minimal dependencies — fewer deps = less maintenance
+- Working code that actually runs (not just stubs)
+- Include a README with: what it does, who it's for, how to run it, how to deploy, pricing model
+- Include basic tests that pass
+- Put everything in /home/agent/product/src/
+- Infrastructure: SQLite or flat files for storage (no external database server needed for MVP)
+
+After the sub-agent finishes, verify the build by running the tests yourself.
 
 ### Phase 4: Revenue Analysis
 
-After building, create /home/agent/product/BUSINESS.md with:
-- Target customer profile
-- Pricing strategy with justification
-- Customer acquisition channels (where would you find first 10 customers?)
-- Monthly cost estimate to run the infrastructure
-- Break-even analysis (how many customers to cover costs?)
-- 6-month revenue projection (pessimistic / realistic / optimistic)
+Create /home/agent/product/BUSINESS.md with:
+- **Product summary**: One paragraph on what it does and why it matters
+- **Target customer profile**: Who exactly would pay for this? Be specific (job title, company size, pain point)
+- **Pricing strategy**: What to charge and why (reference competitor pricing from your research)
+- **Customer acquisition plan**: Where would you find the first 10 customers? The first 100? Be specific — name the subreddits, forums, communities.
+- **Infrastructure costs**: Monthly cost to run on a VPS (be realistic)
+- **Break-even analysis**: How many paying customers to cover infrastructure + domain + time?
+- **6-month projection**: Pessimistic / realistic / optimistic revenue scenarios with assumptions stated
