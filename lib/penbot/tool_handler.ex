@@ -179,6 +179,26 @@ defmodule Penbot.ToolHandler do
     end
   end
 
+  def execute(%{name: "browse", input: %{"url" => url}}, _depth) do
+    Logger.info("  [browse] #{url}")
+
+    # Kill any existing Firefox, then open the URL
+    Penbot.Sandbox.exec("DISPLAY=:99 pkill -f firefox 2>/dev/null; sleep 0.5", timeout: 5_000)
+    Penbot.Sandbox.exec("DISPLAY=:99 firefox --no-remote '#{url}' &", timeout: 5_000)
+
+    # Wait for page to load
+    Process.sleep(4_000)
+
+    # Take screenshot
+    case Penbot.Screenshot.capture() do
+      {:ok, %{path: path, base64: base64}} ->
+        {:continue_with_image, %{text: "Browsed #{url} — screenshot saved to #{path}", base64: base64}}
+
+      {:error, reason} ->
+        {:continue, "[error] Screenshot failed after browsing #{url}: #{inspect(reason)}"}
+    end
+  end
+
   def execute(%{name: "update_progress", input: %{"items" => items}}, _depth) do
     parsed =
       Enum.map(items, fn item ->

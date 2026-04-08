@@ -550,6 +550,7 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: "web_search", input: %{"query" => q}}), do: String.slice(q, 0, 100)
   defp summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
   defp summarize_input(%{name: "screenshot", input: _}), do: "display"
+  defp summarize_input(%{name: "browse", input: %{"url" => u}}), do: u
   defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
   defp summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
   defp summarize_input(%{name: "update_progress", input: _}), do: "progress"

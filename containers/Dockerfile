@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     sqlite3 libsqlite3-dev \
     # Virtual display and GUI tools
     xvfb scrot xdotool imagemagick x11-utils \
+    # Browser for testing web UIs
+    firefox \
     && rm -rf /var/lib/apt/lists/*
 
 # Create agent user with passwordless sudo

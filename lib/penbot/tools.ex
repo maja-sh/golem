@@ -126,6 +126,13 @@ defmodule Penbot.Tools do
         },
         required: ["reasoning"]
       }),
+      tool("browse", "Open a URL in Firefox on the virtual display and take a screenshot. Returns the screenshot so you can see the page visually. Use this to verify web UIs you've built.", %{
+        type: "object",
+        properties: %{
+          url: %{type: "string", description: "URL to open (e.g. http://localhost:3000)"}
+        },
+        required: ["url"]
+      }),
       tool("update_progress", "Update your progress tracking. Call this as you start and complete plan steps so the operator can see your progress. Each call sets the FULL list of items — include all items every time, not just changed ones.", %{
         type: "object",
         properties: %{
