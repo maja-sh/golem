@@ -133,7 +133,7 @@ defmodule Penbot.TUI do
   def handle_call({:init, run_id, goal}, _from, state) do
     Logger.configure(level: :warning)
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
-    IO.puts(IO.ANSI.format([:faint, "  #{trunc(goal, 90)}", :reset]))
+    IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
     IO.puts("")
     {:reply, :ok, %{state | active: true, status_lines: 0}}
   end
