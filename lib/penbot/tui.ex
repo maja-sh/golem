@@ -124,9 +124,22 @@ defmodule Penbot.TUI do
 
   # --- GenServer ---
 
+  @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  @spinner_interval 500
+
+  @forge_verbs [
+    "Forging", "Hammering", "Smelting", "Tempering", "Quenching",
+    "Annealing", "Casting", "Welding", "Shaping", "Refining"
+  ]
+
   @impl true
   def init(_opts) do
-    {:ok, %{active: false, cost: "$0.0000", step: 0, max_steps: 0, progress: [], action: nil, status_lines: 0}}
+    {:ok, %{
+      active: false, cost: "$0.0000", step: 0, max_steps: 0,
+      progress: [], action: nil, status_lines: 0,
+      started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
+      ticker: nil
+    }}
   end
 
   @impl true
@@ -135,7 +148,15 @@ defmodule Penbot.TUI do
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
     IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
     IO.puts("")
-    {:reply, :ok, %{state | active: true, status_lines: 0}}
+
+    {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
+
+    {:reply, :ok, %{state |
+      active: true, status_lines: 0,
+      started_at: System.monotonic_time(:second),
+      verb: Enum.random(@forge_verbs),
+      ticker: ticker
+    }}
   end
 
   def handle_call({:print, lines}, _from, state) do
@@ -161,10 +182,27 @@ defmodule Penbot.TUI do
   end
 
   def handle_call(:stop, _from, state) do
+    if state.ticker, do: :timer.cancel(state.ticker)
     state = erase_status(state)
+    elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
+    IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
     Logger.configure(level: :info)
-    {:reply, :ok, %{state | active: false, status_lines: 0}}
+    {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
   end
+
+  @impl true
+  def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
+    state = erase_status(state)
+    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
+    state = draw_status(state)
+    {:noreply, state}
+  end
+
+  def handle_info(:tick, %{active: true} = state) do
+    {:noreply, %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def handle_cast({:update, updates}, state) do
@@ -207,9 +245,16 @@ defmodule Penbot.TUI do
         [:faint, " [", color, icon, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
       end)
 
-    # Bottom line: step/max | cost | action
-    action_part = if state.action, do: [:magenta, " │ ⠋ #{trunc(state.action, 50)}", :reset], else: []
-    bottom = [:faint, " #{state.step}/#{state.max_steps} │ ", :yellow, state.cost, :reset] ++ action_part
+    # Bottom line: spinner + verb + elapsed + cost + action
+    spinner = Enum.at(@spinner_frames, state.spinner_idx)
+    elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
+    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
+
+    bottom = [
+      :cyan, " #{spinner} ", :reset,
+      :white, "#{state.verb} for #{elapsed}", :reset,
+      :faint, " · ", :yellow, state.cost, :reset
+    ] ++ action_part
 
     # Add blank lines to separate from scrolling content and between checklist and cost
     top_sep = if progress_lines != [], do: [[]], else: [[]]
@@ -221,6 +266,13 @@ defmodule Penbot.TUI do
 
   defp print_line([]), do: IO.puts("")
   defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
+
+  defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
+  defp format_duration(seconds) do
+    mins = div(seconds, 60)
+    secs = rem(seconds, 60)
+    if secs == 0, do: "#{mins}m", else: "#{mins}m #{secs}s"
+  end
 
   defp trunc(text, max) when is_binary(text) do
     if String.length(text) > max, do: String.slice(text, 0, max - 3) <> "...", else: text
