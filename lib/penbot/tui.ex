@@ -37,19 +37,18 @@ defmodule Penbot.TUI do
   end
 
   @doc """
-  Write a chunk of streamed text directly to the terminal.
-  Called from the streaming callback — bypasses GenServer for low latency.
+  Buffer a chunk of streamed text. Flushed to terminal on next tick
+  so the status area stays visible.
   """
   def stream_text(chunk) do
-    :io.put_chars(chunk)
+    GenServer.cast(__MODULE__, {:stream_chunk, chunk})
   end
 
   @doc """
-  End streaming — prints a newline and redraws the status area.
+  End streaming — flush remaining buffer and redraw status.
   """
   def stream_end do
-    IO.write("\n")
-    GenServer.call(__MODULE__, :redraw_status)
+    GenServer.call(__MODULE__, :stream_end)
   end
 
   def tool_call(name, detail) do
@@ -161,7 +160,7 @@ defmodule Penbot.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil
+      ticker: nil, streaming: false, stream_buffer: ""
     }}
   end
 
@@ -185,12 +184,17 @@ defmodule Penbot.TUI do
   def handle_call({:stream_start}, _from, state) do
     state = erase_status(state)
     IO.write(IO.ANSI.format([:cyan, "\n● ", :reset]))
-    {:reply, :ok, state}
+    state = draw_status(state)
+    {:reply, :ok, %{state | streaming: true, stream_buffer: ""}}
   end
 
-  def handle_call(:redraw_status, _from, state) do
+  def handle_call(:stream_end, _from, state) do
+    # Flush any remaining buffer
+    state = flush_stream_buffer(state)
+    state = erase_status(state)
+    IO.write("\n")
     state = draw_status(state)
-    {:reply, :ok, state}
+    {:reply, :ok, %{state | streaming: false, stream_buffer: ""}}
   end
 
   def handle_call({:print, lines}, _from, state) do
@@ -226,9 +230,16 @@ defmodule Penbot.TUI do
 
   @impl true
   def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
-    state = erase_status(state)
+    # Overwrite in place — no erase/redraw gap (prevents flicker)
     state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
-    state = draw_status(state)
+    overwrite_status(state)
+    {:noreply, state}
+  end
+
+  def handle_info(:tick, %{active: true, streaming: true} = state) do
+    # During streaming, flush buffered text and draw status below it
+    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
+    state = flush_stream_buffer(state)
     {:noreply, state}
   end
 
@@ -239,6 +250,10 @@ defmodule Penbot.TUI do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
+  def handle_cast({:stream_chunk, chunk}, state) do
+    {:noreply, %{state | stream_buffer: (state.stream_buffer || "") <> chunk}}
+  end
+
   def handle_cast({:update, updates}, state) do
     state = erase_status(state)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
@@ -250,7 +265,6 @@ defmodule Penbot.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
-    # Move up n lines and clear each one
     IO.write("\e[#{n}A")
     for _ <- 1..n, do: IO.write("\e[2K\n")
     IO.write("\e[#{n}A")
@@ -261,10 +275,34 @@ defmodule Penbot.TUI do
   defp draw_status(state) do
     lines = build_status_lines(state)
     Enum.each(lines, fn line ->
-      IO.write("\e[2K")  # Clear current line
+      IO.write("\e[2K")
       IO.puts(IO.ANSI.format(line))
     end)
     %{state | status_lines: length(lines)}
+  end
+
+  # Overwrite status in place — move to start of status area, redraw each line.
+  # No erase step, so no flicker.
+  defp overwrite_status(%{status_lines: 0}), do: :ok
+  defp overwrite_status(%{status_lines: n} = state) do
+    IO.write("\e[#{n}A")
+    lines = build_status_lines(state)
+    Enum.each(lines, fn line ->
+      IO.write("\e[2K")
+      IO.puts(IO.ANSI.format(line))
+    end)
+  end
+
+  # Flush buffered stream text, then redraw status below it
+  defp flush_stream_buffer(%{stream_buffer: ""} = state) do
+    overwrite_status(state)
+    state
+  end
+  defp flush_stream_buffer(%{stream_buffer: buf} = state) do
+    state = erase_status(state)
+    IO.write(buf)
+    state = %{state | stream_buffer: ""}
+    draw_status(state)
   end
 
   defp build_status_lines(state) do
