@@ -35,19 +35,25 @@ Research the current landscape of small, profitable software products (micro-Saa
 - Generate ideas from your general knowledge without searching first
 - Pick the first idea that sounds good — research at least 5-7 different niches
 - Move to Phase 2 until you have concrete evidence (real URLs, real pricing data, real user complaints)
-- Suggest anything in these saturated categories (every LLM suggests these — they're NOT gaps):
+- Suggest anything in these saturated categories (every LLM suggests these — they're NOT gaps). If you suggest any of these you have FAILED:
   - Uptime/status page monitoring (Statuspage, BetterUptime, dozens more)
   - URL shorteners
-  - Invoice/billing tools (Stripe already does this)
+  - Invoice/billing/accounting tools of ANY kind (FreshBooks, Wave, Stripe Invoicing, QuickBooks, Xero — this market is absurdly crowded, including for freelancers)
   - Webhook debugging/relay (ngrok, RequestBin alternatives exist)
   - Social media schedulers
   - Link-in-bio pages
-  - Habit trackers
+  - Habit trackers / todo apps / productivity tools
   - Bookmark managers
   - Email signature generators
   - QR code generators
+  - Time tracking tools (Toggl, Harvest, Clockify, dozens more)
+  - Form builders (Typeform, Google Forms, Tally)
+  - CRM tools of any kind
+  - Landing page builders
+  - Freelancer tools in general (invoicing, proposals, contracts — all done to death)
   - Generic "API for X" where X already has 5+ providers
-- The idea needs to be SPECIFIC and UNIQUE — not a category, but a particular pain point that you found real people complaining about. "PDF invoicing" is a category. "Converting French CERFA tax forms to structured JSON for accounting software" is a specific pain point.
+  - Anything you can describe in 3 words that returns 50+ results on Product Hunt
+- The idea needs to be SPECIFIC and UNIQUE — not a category, but a particular pain point that you found REAL PEOPLE complaining about in actual forum posts. "PDF invoicing" is a category (bad). "Converting French CERFA tax forms to structured JSON for accounting software" is a specific pain point (good). If you can't link to a real post/thread where someone complained about the problem, it's not evidence-based.
 
 ### Phase 2: Validate and Decide
 
