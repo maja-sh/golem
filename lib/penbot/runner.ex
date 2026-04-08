@@ -261,6 +261,8 @@ defmodule Penbot.Runner do
     # Trim messages if conversation is getting long
     messages = trim_messages(state.messages)
 
+    llm_start = System.monotonic_time(:millisecond)
+
     case Penbot.Claude.call(messages,
            model: model,
            max_tokens: max_tokens,
@@ -269,10 +271,19 @@ defmodule Penbot.Runner do
            thinking_budget: thinking_budget
          ) do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
+        llm_elapsed = System.monotonic_time(:millisecond) - llm_start
+        output_tokens = Map.get(response.usage, :output_tokens, 0)
+
         if response.text do
           Logger.info("#{p}  Agent: #{response.text}")
           if state.depth == 0, do: Penbot.TUI.agent_text(response.text)
         end
+
+        # Show LLM call timing inline if no text was shown
+        if is_nil(response.text) and state.depth == 0 do
+          Penbot.TUI.agent_text("(#{Penbot.TUI.format_elapsed(llm_elapsed)} · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
+        end
+
         costs = accumulate_costs(costs, response.usage, model)
 
         if length(tool_calls) > 1 do
@@ -331,25 +342,31 @@ defmodule Penbot.Runner do
     detail = summarize_input(tc)
     Penbot.TUI.tool_call(tc.name, detail)
 
+    start = System.monotonic_time(:millisecond)
+
     case Penbot.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
-        Penbot.TUI.tool_result("Done: #{summary.summary}")
+        elapsed = System.monotonic_time(:millisecond) - start
+        Penbot.TUI.tool_result(tc.name, detail, summary.summary, elapsed, nil)
         {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
 
       {:think_replan, reasoning} ->
-        Penbot.TUI.tool_result("Re-planning...")
+        elapsed = System.monotonic_time(:millisecond) - start
+        Penbot.TUI.tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
         {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
 
       {:continue, result} ->
+        elapsed = System.monotonic_time(:millisecond) - start
         if String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code") do
-          Penbot.TUI.tool_error(result)
+          Penbot.TUI.tool_error(tc.name, detail, result)
         else
-          Penbot.TUI.tool_result(result)
+          Penbot.TUI.tool_result(tc.name, detail, result, elapsed, nil)
         end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
 
       {:continue_with_image, %{text: text, base64: base64}} ->
-        Penbot.TUI.tool_result(text)
+        elapsed = System.monotonic_time(:millisecond) - start
+        Penbot.TUI.tool_result(tc.name, detail, text, elapsed, nil)
         execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
     end
   end

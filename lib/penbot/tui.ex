@@ -1,205 +1,196 @@
 defmodule Penbot.TUI do
   @moduledoc """
-  Terminal UI using Owl.LiveScreen.
+  Terminal UI matching Claude Code's output style.
 
-  Scrolling output (thoughts, tool calls, results) is printed sequentially
-  via Owl.IO.puts and flows above the sticky status bar.
-
-  The status bar at the bottom shows step count, cost, and progress items.
+  Scrolling output shows agent thoughts, collapsed tool calls with
+  timing/token info, and sub-agent trees. Status bar at bottom shows
+  progress bar and checklist items.
   """
 
   require Logger
 
-  @doc """
-  Initialize the TUI display. Call once at the start of a run.
-  """
+  @state_key :penbot_tui_state
+
+  # --- Lifecycle ---
+
   def init(run_id, goal) do
     Application.ensure_all_started(:owl)
 
-    # Suppress console logger — output goes through TUI instead.
-    # File logger still captures everything.
+    :persistent_term.put(@state_key, %{
+      step: 0, max_steps: 0, cost: "$0.0000", progress: [], action: nil
+    })
+
     Logger.configure(level: :warning)
 
-    goal_short = truncate_text(goal, 80)
-
+    goal_short = trunc_text(goal, 90)
     puts([
-      Owl.Data.tag("┌─ Forge ", :cyan),
-      Owl.Data.tag(run_id, [:faint, :cyan]),
-      Owl.Data.tag(" ─", :cyan)
+      Owl.Data.tag("● ", :cyan),
+      Owl.Data.tag("Forge ", [:bright, :white]),
+      Owl.Data.tag(run_id, :faint)
     ])
-    puts([
-      Owl.Data.tag("│ ", :cyan),
-      Owl.Data.tag(goal_short, :white)
-    ])
-    puts(Owl.Data.tag("└──────────────────────────────────────", :cyan))
+    puts([Owl.Data.tag("  #{goal_short}", :faint)])
     puts("")
 
-    # Status bar block — stays pinned at the bottom
     Owl.LiveScreen.add_block(:statusbar,
       state: %{step: 0, max_steps: 0, cost: "$0.0000", progress: [], action: nil},
       render: &render_statusbar/1
     )
   end
 
-  @doc """
-  Print a step header — called at the start of each step.
-  """
-  def step_header(step, max_steps, cost_str) do
-    Owl.LiveScreen.update(:statusbar, fn state ->
-      %{state | step: step, max_steps: max_steps, cost: cost_str, action: nil}
-    end)
-
-    puts([
-      Owl.Data.tag("── Step #{step}/#{max_steps}", :faint),
-      Owl.Data.tag(" │ ", :faint),
-      Owl.Data.tag(cost_str, [:faint, :yellow]),
-      Owl.Data.tag(" ──────────────────────", :faint)
-    ])
-  end
-
-  @doc """
-  Print the agent's thought/text for a step.
-  """
-  def agent_text(text) when is_binary(text) do
-    puts([Owl.Data.tag("  ", :white), Owl.Data.tag(text, :white)])
-  end
-  def agent_text(_), do: :ok
-
-  @doc """
-  Print a tool call summary line.
-  """
-  def tool_call(name, detail) do
-    Owl.LiveScreen.update(:statusbar, fn state ->
-      %{state | action: "#{name} #{detail}"}
-    end)
-
-    puts([
-      "  ",
-      Owl.Data.tag("▶ #{name}", :magenta),
-      " ",
-      Owl.Data.tag(truncate_text(detail, 70), :faint)
-    ])
-  end
-
-  @doc """
-  Print a tool result summary.
-  """
-  def tool_result(text) when is_binary(text) do
-    # Show first meaningful line of output, truncated
-    summary =
-      text
-      |> String.split("\n", trim: true)
-      |> List.first("")
-      |> truncate_text(80)
-
-    if summary != "" do
-      puts([
-        "    ",
-        Owl.Data.tag("→ ", :green),
-        Owl.Data.tag(summary, :faint)
-      ])
-    end
-  end
-  def tool_result(_), do: :ok
-
-  @doc """
-  Print a tool error/failure.
-  """
-  def tool_error(text) do
-    puts([
-      "    ",
-      Owl.Data.tag("✗ ", :red),
-      Owl.Data.tag(truncate_text(text, 80), [:faint, :red])
-    ])
-  end
-
-  @doc """
-  Print a planning/replanning message.
-  """
-  def planning(label \\ "Planning with Opus...") do
-    puts([Owl.Data.tag("⠋ #{label}", :yellow)])
-  end
-
-  @doc """
-  Print plan created confirmation.
-  """
-  def plan_created(plan) do
-    # Count phases and steps
-    phases = Regex.scan(~r/^## /m, plan) |> length()
-    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
-
-    puts([
-      Owl.Data.tag("✓ Plan created", :green),
-      Owl.Data.tag(" (#{phases} phases, #{steps} steps)", :faint)
-    ])
-    puts("")
-  end
-
-  @doc """
-  Print run completion.
-  """
-  def run_complete(success, summary) do
-    Owl.LiveScreen.update(:statusbar, fn state -> %{state | action: nil} end)
-
-    puts("")
-    if success do
-      puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Goal achieved", :green)])
-    else
-      puts([Owl.Data.tag("✗ ", :red), Owl.Data.tag("Goal not achieved", :red)])
-    end
-    puts([Owl.Data.tag("  #{truncate_text(summary, 120)}", :faint)])
-  end
-
-  @doc """
-  Print a run paused message.
-  """
-  def run_paused(run_id) do
-    puts("")
-    puts([
-      Owl.Data.tag("⏸ Paused", :yellow),
-      Owl.Data.tag(" — resume with: ", :faint),
-      Owl.Data.tag("mix penbot.resume #{run_id}", :white)
-    ])
-  end
-
-  @doc """
-  Print a run error.
-  """
-  def run_error(reason) do
-    puts("")
-    puts([Owl.Data.tag("✗ Error: #{inspect(reason)}", :red)])
-  end
-
-  @doc """
-  Set the full progress list. Each item is %{text, status}.
-  """
-  def set_progress(items) do
-    Owl.LiveScreen.update(:statusbar, fn state -> %{state | progress: items} end)
-  end
-
-  @doc """
-  Clean up and flush the display.
-  """
   def stop do
     try do
       Owl.LiveScreen.flush()
     catch
       :exit, _ -> :ok
     end
-
     Logger.configure(level: :info)
   end
 
-  # --- Status Bar Renderer (pinned at bottom) ---
+  # --- Planning ---
+
+  def planning(label \\ "Planning...") do
+    puts([Owl.Data.tag("+ ", :yellow), Owl.Data.tag(label, :yellow)])
+  end
+
+  def plan_created(plan) do
+    phases = Regex.scan(~r/^## /m, plan) |> length()
+    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
+    puts([
+      Owl.Data.tag("✓ ", :green),
+      Owl.Data.tag("Plan created ", :green),
+      Owl.Data.tag("(#{phases} phases, #{steps} steps)", :faint)
+    ])
+    puts("")
+  end
+
+  # --- Steps ---
+
+  def step_header(step, max_steps, cost_str) do
+    update_state(%{step: step, max_steps: max_steps, cost: cost_str, action: nil})
+  end
+
+  def agent_text(nil), do: :ok
+  def agent_text(text) do
+    puts([
+      Owl.Data.tag("● ", :cyan),
+      Owl.Data.tag(trunc_text(text, 120), :white)
+    ])
+  end
+
+  # --- Tool Calls ---
+
+  def tool_call(name, detail) do
+    update_state(%{action: "#{name} #{detail}"})
+  end
+
+  def tool_result(name, detail, result, elapsed_ms, tokens) do
+    elapsed = format_elapsed(elapsed_ms)
+    tok = format_tokens(tokens)
+
+    # Format result summary
+    result_summary = result_oneliner(result)
+
+    puts([
+      Owl.Data.tag("  #{tool_icon(name)} ", :faint),
+      Owl.Data.tag(tool_label(name, detail), :white),
+      Owl.Data.tag(" (#{elapsed}", :faint),
+      if(tok != "", do: Owl.Data.tag(" · #{tok}", :faint), else: ""),
+      Owl.Data.tag(")", :faint)
+    ])
+
+    if result_summary != "" do
+      puts([Owl.Data.tag("  └ #{result_summary}", :faint)])
+    end
+  end
+
+  def tool_error(name, detail, error_text) do
+    puts([
+      Owl.Data.tag("  ✗ ", :red),
+      Owl.Data.tag(tool_label(name, detail), :red),
+    ])
+    puts([Owl.Data.tag("  └ #{trunc_text(error_text, 100)}", [:faint, :red])])
+  end
+
+  # --- Sub-agents ---
+
+  def sub_agent_start(goal) do
+    puts([
+      Owl.Data.tag("  ● ", :magenta),
+      Owl.Data.tag("Running sub-agent...", :magenta)
+    ])
+    puts([Owl.Data.tag("  │ #{trunc_text(goal, 90)}", :faint)])
+  end
+
+  def sub_agent_result(goal, steps, success) do
+    icon = if success, do: "✓", else: "✗"
+    color = if success, do: :green, else: :red
+    puts([
+      Owl.Data.tag("  #{icon} ", color),
+      Owl.Data.tag("Sub-agent ", color),
+      Owl.Data.tag("· #{steps} steps · ", :faint),
+      Owl.Data.tag(trunc_text(goal, 60), :faint)
+    ])
+  end
+
+  # --- Replan ---
+
+  def replan_start do
+    puts([
+      Owl.Data.tag("+ ", :yellow),
+      Owl.Data.tag("Re-planning with Opus...", :yellow)
+    ])
+  end
+
+  def replan_done do
+    puts([
+      Owl.Data.tag("✓ ", :green),
+      Owl.Data.tag("Plan revised", :green)
+    ])
+  end
+
+  # --- Completion ---
+
+  def run_complete(success, summary) do
+    update_state(%{action: nil})
+    puts("")
+    if success do
+      puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Goal achieved", [:bright, :green])])
+    else
+      puts([Owl.Data.tag("✗ ", :red), Owl.Data.tag("Goal not achieved", [:bright, :red])])
+    end
+    puts([Owl.Data.tag("  #{trunc_text(summary, 120)}", :faint)])
+  end
+
+  def run_paused(run_id) do
+    puts("")
+    puts([
+      Owl.Data.tag("⏸ ", :yellow),
+      Owl.Data.tag("Paused ", :yellow),
+      Owl.Data.tag("— resume: ", :faint),
+      Owl.Data.tag("mix penbot.resume #{run_id}", :white)
+    ])
+  end
+
+  def run_error(reason) do
+    puts("")
+    puts([Owl.Data.tag("✗ Error: #{inspect(reason)}", :red)])
+  end
+
+  # --- Progress ---
+
+  def set_progress(items) do
+    update_state(%{progress: items})
+  end
+
+  # --- Status Bar Renderer ---
 
   defp render_statusbar(%{step: step, max_steps: max, cost: cost, progress: progress, action: action}) do
-    # Progress bar
     bar_width = 20
     pct = if max > 0, do: min(step / max, 1.0), else: 0
     filled = round(pct * bar_width)
     empty = bar_width - filled
 
-    bar_line = [
+    bar = [
       Owl.Data.tag(String.duplicate("█", filled), :green),
       Owl.Data.tag(String.duplicate("░", empty), :faint),
       " ",
@@ -208,39 +199,30 @@ defmodule Penbot.TUI do
       Owl.Data.tag(cost, :yellow)
     ]
 
-    # Progress items (compact, single line each)
-    progress_lines =
-      case progress do
-        [] -> []
-        items ->
-          Enum.map(items, fn item ->
-            {icon, color} =
-              case item.status do
-                :completed -> {"✓", :green}
-                :in_progress -> {"→", :yellow}
-                :pending -> {"·", :faint}
-              end
+    prog =
+      Enum.map(progress, fn item ->
+        {icon, color} = case item.status do
+          :completed -> {"✓", :green}
+          :in_progress -> {"→", :yellow}
+          :pending -> {"·", :faint}
+        end
+        style = if item.status == :pending, do: :faint, else: :white
+        [
+          Owl.Data.tag(" [", :faint),
+          Owl.Data.tag(icon, color),
+          Owl.Data.tag("] ", :faint),
+          Owl.Data.tag(trunc_text(item.text, 50), style)
+        ]
+      end)
 
-            text_style = if item.status == :pending, do: :faint, else: :white
-
-            [
-              Owl.Data.tag(" [", :faint),
-              Owl.Data.tag(icon, color),
-              Owl.Data.tag("] ", :faint),
-              Owl.Data.tag(truncate_text(item.text, 50), text_style)
-            ]
-          end)
-      end
-
-    # Current action
-    action_line =
+    act =
       if action do
-        [Owl.Data.tag(" ⠋ #{truncate_text(action, 60)}", [:faint, :magenta])]
+        [Owl.Data.tag(" ⠋ #{trunc_text(action, 60)}", [:faint, :magenta])]
       else
         []
       end
 
-    [bar_line | progress_lines ++ [action_line]]
+    [bar | prog ++ [act]]
     |> Enum.reject(&(&1 == []))
     |> Enum.intersperse("\n")
     |> List.flatten()
@@ -248,16 +230,68 @@ defmodule Penbot.TUI do
 
   # --- Helpers ---
 
-  defp puts(data) do
-    Owl.IO.puts(data)
+  defp update_state(changes) do
+    current = :persistent_term.get(@state_key, %{
+      step: 0, max_steps: 0, cost: "$0.0000", progress: [], action: nil
+    })
+    new_state = Map.merge(current, changes)
+    :persistent_term.put(@state_key, new_state)
+    Owl.LiveScreen.update(:statusbar, new_state)
   end
 
-  defp truncate_text(text, max) when is_binary(text) do
-    if String.length(text) > max do
-      String.slice(text, 0, max - 3) <> "..."
-    else
-      text
-    end
+  defp puts(data), do: Owl.IO.puts(data)
+
+  defp trunc_text(text, max) when is_binary(text) do
+    if String.length(text) > max, do: String.slice(text, 0, max - 3) <> "...", else: text
   end
-  defp truncate_text(_, _), do: ""
+  defp trunc_text(_, _), do: ""
+
+  def format_elapsed(nil), do: "..."
+  def format_elapsed(ms) when ms < 1000, do: "#{ms}ms"
+  def format_elapsed(ms), do: "#{Float.round(ms / 1000, 1)}s"
+
+  def format_tokens(nil), do: ""
+  def format_tokens(0), do: ""
+  def format_tokens(n) when n < 1000, do: "#{n} tokens"
+  def format_tokens(n), do: "#{Float.round(n / 1000, 1)}k tokens"
+
+  defp tool_icon("shell"), do: "$"
+  defp tool_icon("write_file"), do: "+"
+  defp tool_icon("read_file"), do: "↓"
+  defp tool_icon("edit_file"), do: "~"
+  defp tool_icon("glob"), do: "⌕"
+  defp tool_icon("grep"), do: "⌕"
+  defp tool_icon("web_search"), do: "🔍"
+  defp tool_icon("web_fetch"), do: "↓"
+  defp tool_icon("screenshot"), do: "📷"
+  defp tool_icon("think"), do: "💭"
+  defp tool_icon("update_progress"), do: "📋"
+  defp tool_icon("done"), do: "✓"
+  defp tool_icon("sub_agent"), do: "●"
+  defp tool_icon("ask_user"), do: "?"
+  defp tool_icon(_), do: "▶"
+
+  defp tool_label("shell", cmd), do: "Shell · #{trunc_text(cmd, 60)}"
+  defp tool_label("write_file", path), do: "Write #{path}"
+  defp tool_label("read_file", path), do: "Read #{path}"
+  defp tool_label("edit_file", path), do: "Edit #{path}"
+  defp tool_label("glob", pattern), do: "Glob #{pattern}"
+  defp tool_label("grep", pattern), do: "Grep #{pattern}"
+  defp tool_label("web_search", query), do: "Search · #{trunc_text(query, 60)}"
+  defp tool_label("web_fetch", url), do: "Fetch #{trunc_text(url, 60)}"
+  defp tool_label("list_directory", path), do: "List #{path}"
+  defp tool_label("sub_agent", goal), do: "Sub-agent · #{trunc_text(goal, 50)}"
+  defp tool_label("update_progress", _), do: "Progress update"
+  defp tool_label("done", _), do: "Done"
+  defp tool_label("think", _), do: "Thinking..."
+  defp tool_label("ask_user", _), do: "Asking user..."
+  defp tool_label(name, _), do: name
+
+  defp result_oneliner(text) when is_binary(text) do
+    text
+    |> String.split("\n", trim: true)
+    |> List.first("")
+    |> trunc_text(90)
+  end
+  defp result_oneliner(_), do: ""
 end
