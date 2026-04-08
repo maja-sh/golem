@@ -211,9 +211,10 @@ defmodule Penbot.TUI do
     action_part = if state.action, do: [:magenta, " │ ⠋ #{trunc(state.action, 50)}", :reset], else: []
     bottom = [:faint, " #{state.step}/#{state.max_steps} │ ", :yellow, state.cost, :reset] ++ action_part
 
-    # Add blank separator line before progress if there are items
-    separator = if progress_lines != [], do: [[]], else: []
-    separator ++ progress_lines ++ [bottom]
+    # Add blank lines to separate from scrolling content and between checklist and cost
+    top_sep = if progress_lines != [], do: [[]], else: [[]]
+    bottom_sep = if progress_lines != [], do: [[]], else: []
+    top_sep ++ progress_lines ++ bottom_sep ++ [bottom]
   end
 
   # --- Helpers ---
