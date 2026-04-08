@@ -1,16 +1,14 @@
 defmodule Penbot.TUI do
   @moduledoc """
-  Terminal UI with scrolling output and a fixed status area at the bottom.
+  Terminal UI with scrolling output and a fixed status area.
 
-  Uses raw ANSI escape codes to maintain a reserved area at the bottom
-  of the terminal for progress checklist and cost. Scrolling output
-  (thoughts, tool calls) prints above this area.
+  Before printing any new line, the status area is erased.
+  After printing, the status area is redrawn at the bottom.
+  This keeps the status pinned at the bottom without cursor tricks.
   """
 
   use GenServer
   require Logger
-
-  @status_lines 12
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -19,81 +17,103 @@ defmodule Penbot.TUI do
   # --- Public API ---
 
   def init_display(run_id, goal) do
-    GenServer.cast(__MODULE__, {:init, run_id, goal})
+    GenServer.call(__MODULE__, {:init, run_id, goal})
   end
 
   def step_header(step, max_steps, cost_str) do
-    GenServer.cast(__MODULE__, {:step, step, max_steps, cost_str})
+    GenServer.cast(__MODULE__, {:update, cost: cost_str, step: step, max_steps: max_steps})
   end
 
   def agent_text(nil), do: :ok
-  def agent_text(text), do: GenServer.cast(__MODULE__, {:agent_text, text})
+  def agent_text(text) do
+    GenServer.call(__MODULE__, {:print, [[:cyan, "● ", :reset, text]]})
+  end
 
   def tool_call(name, detail) do
-    GenServer.cast(__MODULE__, {:tool_call, name, detail})
+    GenServer.cast(__MODULE__, {:update, action: "#{name} #{detail}"})
   end
 
   def tool_result(name, detail, result, elapsed_ms, _tokens) do
-    GenServer.cast(__MODULE__, {:tool_result, name, detail, result, elapsed_ms})
+    elapsed = format_elapsed(elapsed_ms)
+    summary = result_oneliner(result)
+    lines = [
+      [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset, :faint, " (#{elapsed})", :reset]
+    ]
+    lines = if summary != "", do: lines ++ [[:faint, "  └ #{summary}", :reset]], else: lines
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def tool_error(name, detail, error_text) do
-    GenServer.cast(__MODULE__, {:tool_error, name, detail, error_text})
+    lines = [
+      [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
+      [:faint, :red, "  └ #{trunc(error_text, 100)}", :reset]
+    ]
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def set_progress(items) do
-    GenServer.cast(__MODULE__, {:progress, items})
+    GenServer.call(__MODULE__, {:set_progress, items})
   end
 
   def planning(label \\ "Planning...") do
-    GenServer.cast(__MODULE__, {:scroll, [tag("+ ", :yellow), tag(label, :yellow)]})
+    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
   end
 
   def plan_created(plan) do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
-    GenServer.cast(__MODULE__, {:scroll, [
-      tag("✓ ", :green), tag("Plan created ", :green),
-      tag("(#{phases} phases, #{steps} steps)", :faint)
+    GenServer.call(__MODULE__, {:print, [
+      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset],
+      []
     ]})
   end
 
   def replan_start, do: planning("Re-planning with Opus...")
-  def replan_done, do: GenServer.cast(__MODULE__, {:scroll, [tag("✓ ", :green), tag("Plan revised", :green)]})
+
+  def replan_done do
+    GenServer.call(__MODULE__, {:print, [[:green, "✓ Plan revised", :reset]]})
+  end
 
   def sub_agent_start(goal) do
-    GenServer.cast(__MODULE__, {:scroll, [
-      tag("  ● ", :magenta), tag("Sub-agent: ", :magenta), tag(trunc(goal, 70), :faint)
+    GenServer.call(__MODULE__, {:print, [
+      [:magenta, "  ● Sub-agent: ", :reset, :faint, trunc(goal, 70), :reset]
     ]})
   end
 
   def sub_agent_result(_goal, steps, success) do
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
-    GenServer.cast(__MODULE__, {:scroll, [
-      tag("  #{icon} ", color), tag("Sub-agent done ", color), tag("· #{steps} steps", :faint)
+    GenServer.call(__MODULE__, {:print, [
+      [color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset]
     ]})
   end
 
   def run_complete(success, summary) do
-    GenServer.cast(__MODULE__, {:complete, success, summary})
+    lines = [[]] ++
+      if success do
+        [[:green, :bright, "✓ Goal achieved", :reset]]
+      else
+        [[:red, :bright, "✗ Goal not achieved", :reset]]
+      end ++ [[:faint, "  #{trunc(summary, 120)}", :reset]]
+
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def run_paused(run_id) do
-    GenServer.cast(__MODULE__, {:scroll, [
-      tag("⏸ ", :yellow), tag("Paused ", :yellow),
-      tag("— resume: ", :faint), tag("mix penbot.resume #{run_id}", :white)
+    GenServer.call(__MODULE__, {:print, [
+      [],
+      [:yellow, "⏸ Paused", :reset, :faint, " — resume: ", :reset, "mix penbot.resume #{run_id}"]
     ]})
   end
 
   def run_error(reason) do
-    GenServer.cast(__MODULE__, {:scroll, [tag("✗ Error: #{inspect(reason)}", :red)]})
+    GenServer.call(__MODULE__, {:print, [[:red, "✗ Error: #{inspect(reason)}", :reset]]})
   end
 
   def stop_display do
-    GenServer.cast(__MODULE__, :stop_display)
+    GenServer.call(__MODULE__, :stop)
   end
 
-  # Public helpers for runner
+  # Public helpers
   def format_elapsed(nil), do: "..."
   def format_elapsed(ms) when ms < 1000, do: "#{ms}ms"
   def format_elapsed(ms), do: "#{Float.round(ms / 1000, 1)}s"
@@ -107,190 +127,98 @@ defmodule Penbot.TUI do
 
   @impl true
   def init(_opts) do
-    {:ok, %{
-      active: false,
-      step: 0,
-      max_steps: 0,
-      cost: "$0.0000",
-      progress: [],
-      action: nil
-    }}
+    {:ok, %{active: false, cost: "$0.0000", step: 0, max_steps: 0, progress: [], action: nil, status_lines: 0}}
   end
 
   @impl true
-  def handle_cast({:init, run_id, goal}, state) do
+  def handle_call({:init, run_id, goal}, _from, state) do
     Logger.configure(level: :warning)
-    goal_short = trunc(goal, 90)
-
-    # Reserve space at bottom for status area
-    IO.write(String.duplicate("\n", @status_lines))
-    move_up(@status_lines)
-
-    scroll_line([tag("● ", :cyan), tag("Forge ", [:bright, :white]), tag(run_id, :faint)])
-    scroll_line([tag("  #{goal_short}", :faint)])
-    scroll_line("")
-
-    {:noreply, %{state | active: true}}
+    IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
+    IO.puts(IO.ANSI.format([:faint, "  #{trunc(goal, 90)}", :reset]))
+    IO.puts("")
+    {:reply, :ok, %{state | active: true, status_lines: 0}}
   end
 
-  def handle_cast({:step, step, max_steps, cost_str}, state) do
-    {:noreply, %{state | step: step, max_steps: max_steps, cost: cost_str, action: nil}
-    |> render_status()}
+  def handle_call({:print, lines}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, &print_line/1)
+    state = draw_status(state)
+    {:reply, :ok, state}
   end
 
-  def handle_cast({:agent_text, text}, state) do
-    scroll_line([tag("● ", :cyan), tag(trunc(text, 120), :white)])
-    {:noreply, state}
+  def handle_call({:print_and_update, lines, updates}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, &print_line/1)
+    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
+    state = draw_status(state)
+    {:reply, :ok, state}
   end
 
-  def handle_cast({:tool_call, name, detail}, state) do
-    state = %{state | action: "#{name} #{detail}"}
-    {:noreply, render_status(state)}
+  def handle_call({:set_progress, items}, _from, state) do
+    state = erase_status(state)
+    state = %{state | progress: items}
+    state = draw_status(state)
+    {:reply, :ok, state}
   end
 
-  def handle_cast({:tool_result, name, detail, result, elapsed_ms}, state) do
-    elapsed = format_elapsed(elapsed_ms)
-    summary = result_oneliner(result)
-
-    scroll_line([
-      tag("  #{tool_icon(name)} ", :faint),
-      tag(tool_label(name, detail), :white),
-      tag(" (#{elapsed})", :faint)
-    ])
-
-    if summary != "" do
-      scroll_line([tag("  └ #{summary}", :faint)])
-    end
-
-    state = %{state | action: nil}
-    {:noreply, render_status(state)}
-  end
-
-  def handle_cast({:tool_error, name, detail, error_text}, state) do
-    scroll_line([tag("  ✗ ", :red), tag(tool_label(name, detail), :red)])
-    scroll_line([tag("  └ #{trunc(error_text, 100)}", [:faint, :red])])
-    state = %{state | action: nil}
-    {:noreply, render_status(state)}
-  end
-
-  def handle_cast({:progress, items}, state) do
-    {:noreply, %{state | progress: items} |> render_status()}
-  end
-
-  def handle_cast({:scroll, content}, state) do
-    scroll_line(content)
-    {:noreply, state}
-  end
-
-  def handle_cast({:complete, success, summary}, state) do
-    scroll_line("")
-    if success do
-      scroll_line([tag("✓ ", :green), tag("Goal achieved", [:bright, :green])])
-    else
-      scroll_line([tag("✗ ", :red), tag("Goal not achieved", [:bright, :red])])
-    end
-    scroll_line([tag("  #{trunc(summary, 120)}", :faint)])
-    {:noreply, %{state | action: nil} |> render_status()}
-  end
-
-  def handle_cast(:stop_display, state) do
-    # Clear the status area and restore normal terminal
-    clear_status_area()
+  def handle_call(:stop, _from, state) do
+    state = erase_status(state)
     Logger.configure(level: :info)
-    {:noreply, %{state | active: false}}
+    {:reply, :ok, %{state | active: false, status_lines: 0}}
   end
 
-  # --- Rendering ---
-
-  defp render_status(state) do
-    if state.active, do: draw_status_area(state)
-    state
+  @impl true
+  def handle_cast({:update, updates}, state) do
+    state = erase_status(state)
+    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
+    state = draw_status(state)
+    {:noreply, state}
   end
 
-  defp draw_status_area(state) do
-    # Save cursor, move to status area, draw, restore cursor
-    IO.write(save_cursor())
-    IO.write(move_to_status_area())
+  # --- Status Area ---
 
-    # Clear the status area
-    for _ <- 1..@status_lines do
-      IO.write("\e[2K\n")
-    end
-    IO.write(move_to_status_area())
+  defp erase_status(%{status_lines: 0} = state), do: state
+  defp erase_status(%{status_lines: n} = state) do
+    # Move up n lines and clear each one
+    IO.write("\e[#{n}A")
+    for _ <- 1..n, do: IO.write("\e[2K\n")
+    IO.write("\e[#{n}A")
+    %{state | status_lines: 0}
+  end
 
-    # Draw progress items
-    lines_used = 0
+  defp draw_status(%{active: false} = state), do: state
+  defp draw_status(state) do
+    lines = build_status_lines(state)
+    Enum.each(lines, fn line ->
+      IO.write("\e[2K")  # Clear current line
+      IO.puts(IO.ANSI.format(line))
+    end)
+    %{state | status_lines: length(lines)}
+  end
 
-    lines_used =
-      Enum.reduce(state.progress, lines_used, fn item, acc ->
-        if acc < @status_lines - 2 do
-          {icon, color} = case item.status do
-            :completed -> {"✓", :green}
-            :in_progress -> {"→", :yellow}
-            :pending -> {"·", :faint}
-          end
-          style = if item.status == :pending, do: :faint, else: :white
-          IO.write(IO.ANSI.format([
-            :faint, " [", color, icon, :faint, "] ",
-            style, trunc(item.text, 55), :reset, "\n"
-          ]))
-          acc + 1
-        else
-          acc
+  defp build_status_lines(state) do
+    progress_lines =
+      Enum.map(state.progress, fn item ->
+        {icon, color} = case item.status do
+          :completed -> {"✓", :green}
+          :in_progress -> {"→", :yellow}
+          :pending -> {"·", :faint}
         end
+        style = if item.status == :pending, do: :faint, else: :white
+        [:faint, " [", color, icon, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
       end)
 
-    # Draw separator + cost + action on last line
-    if lines_used < @status_lines do
-      action_text = if state.action, do: " │ ⠋ #{trunc(state.action, 50)}", else: ""
-      IO.write(IO.ANSI.format([
-        :faint, " ", :yellow, state.cost, :magenta, action_text, :reset
-      ]))
-    end
+    # Bottom line: step/max | cost | action
+    action_part = if state.action, do: [:magenta, " │ ⠋ #{trunc(state.action, 50)}", :reset], else: []
+    bottom = [:faint, " #{state.step}/#{state.max_steps} │ ", :yellow, state.cost, :reset] ++ action_part
 
-    IO.write(restore_cursor())
+    progress_lines ++ [bottom]
   end
 
-  defp clear_status_area do
-    IO.write(save_cursor())
-    IO.write(move_to_status_area())
-    for _ <- 1..@status_lines do
-      IO.write("\e[2K\n")
-    end
-    IO.write(restore_cursor())
-  end
+  # --- Helpers ---
 
-  # Print a line in the scrolling area (above the status area)
-  defp scroll_line(content) do
-    # Move up into scroll area, print, scroll down
-    IO.write(save_cursor())
-    IO.write(move_to_status_area())
-    IO.write("\e[L")  # Insert line, pushing status down
-    IO.write(restore_cursor())
-    IO.write("\e[A")  # Move up one line
-
-    text = if is_list(content), do: IO.ANSI.format(flatten_tags(content)), else: content
-    IO.write("#{text}\n")
-  end
-
-  # --- ANSI Helpers ---
-
-  defp save_cursor, do: "\e[s"
-  defp restore_cursor, do: "\e[u"
-  defp move_up(n), do: IO.write("\e[#{n}A")
-  defp move_to_status_area, do: "\e[#{@status_lines}B\e[#{@status_lines}A"
-
-  # --- Formatting Helpers ---
-
-  defp tag(text, style) when is_atom(style), do: [style, text, :reset]
-  defp tag(text, styles) when is_list(styles), do: styles ++ [text, :reset]
-
-  defp flatten_tags(list) do
-    Enum.flat_map(list, fn
-      item when is_list(item) -> item
-      item -> [item]
-    end)
-  end
+  defp print_line([]), do: IO.puts("")
+  defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
 
   defp trunc(text, max) when is_binary(text) do
     if String.length(text) > max, do: String.slice(text, 0, max - 3) <> "...", else: text
@@ -313,7 +241,7 @@ defmodule Penbot.TUI do
   defp tool_icon("ask_user"), do: "?"
   defp tool_icon(_), do: "▶"
 
-  defp tool_label("shell", cmd), do: "#{trunc(cmd, 60)}"
+  defp tool_label("shell", cmd), do: trunc(cmd, 60)
   defp tool_label("write_file", path), do: "Write #{path}"
   defp tool_label("read_file", path), do: "Read #{path}"
   defp tool_label("edit_file", path), do: "Edit #{path}"
