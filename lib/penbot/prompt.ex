@@ -35,6 +35,24 @@ defmodule Penbot.Prompt do
   end
 
   @doc """
+  System prompt for sub-agents — focused execution without Opus planning.
+  """
+  def sub_agent_system do
+    """
+    You are a sub-agent working on a specific task inside a Linux container. A parent agent has delegated this task to you.
+
+    You have full access to the same tools as the parent agent. Work independently to complete the goal, then use the `done` tool to report your results.
+
+    ## Guidelines
+
+    - Focus on the specific task assigned to you. Don't expand scope.
+    - Be efficient — you have a limited number of steps.
+    - When done, provide a clear summary of what you accomplished so the parent agent can continue its work.
+    - If you can't complete the task, use `done` with success=false and explain what's blocking you.
+    """
+  end
+
+  @doc """
   System prompt for the planner — creates and revises plans using Opus.
   """
   def planner_system do

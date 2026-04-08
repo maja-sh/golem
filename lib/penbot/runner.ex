@@ -20,10 +20,13 @@ defmodule Penbot.Runner do
 
   Returns {:ok, summary} or {:error, reason}.
   """
+  @sub_agent_max_steps 50
+
   def run(goal, opts \\ []) do
     max_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
+    depth = opts[:depth] || 0
 
-    Logger.info("Starting run — goal: #{String.slice(goal, 0, 200)}")
+    Logger.info("Starting run (depth=#{depth}) — goal: #{String.slice(goal, 0, 200)}")
 
     # Phase 1: Create a plan
     plan =
@@ -53,6 +56,7 @@ defmodule Penbot.Runner do
       messages: [],
       step: 0,
       max_steps: max_steps,
+      depth: depth,
       history: []
     }
 
@@ -63,6 +67,38 @@ defmodule Penbot.Runner do
     state = %{state | messages: messages}
 
     loop(state, system)
+  end
+
+  @doc """
+  Run a sub-agent with its own context. Used by the sub_agent tool.
+  Skips Opus planning — sub-agents execute directly with Sonnet.
+  """
+  def run_sub_agent(goal, context, parent_depth) do
+    depth = parent_depth + 1
+    Logger.info("=== Sub-agent spawned (depth=#{depth}) — #{String.slice(goal, 0, 200)} ===")
+
+    system = Penbot.Prompt.sub_agent_system()
+
+    initial_content =
+      if context && context != "" do
+        "## Goal\n\n#{goal}\n\n## Context from parent agent\n\n#{context}\n\nBegin working on this goal."
+      else
+        "## Goal\n\n#{goal}\n\nBegin working on this goal."
+      end
+
+    state = %{
+      goal: goal,
+      plan: nil,
+      messages: [%{role: "user", content: initial_content}],
+      step: 0,
+      max_steps: @sub_agent_max_steps,
+      depth: depth,
+      history: []
+    }
+
+    result = loop(state, system)
+    Logger.info("=== Sub-agent finished (depth=#{depth}) ===")
+    result
   end
 
   # --- Plan Creation ---
@@ -124,7 +160,7 @@ defmodule Penbot.Runner do
 
     model = Application.get_env(:penbot, :executor_model)
     max_tokens = Application.get_env(:penbot, :executor_max_tokens, 4096)
-    tools = Penbot.Tools.all()
+    tools = Penbot.Tools.for_depth(state.depth)
 
     # Trim messages if conversation is getting long
     messages = trim_messages(state.messages)
@@ -139,8 +175,8 @@ defmodule Penbot.Runner do
         # Log any text the model produced alongside the tool call
         if response.text, do: Logger.info("  Agent: #{response.text}")
 
-        # Execute the tool
-        case Penbot.ToolHandler.execute(tool_call) do
+        # Execute the tool (pass depth for sub-agent spawning)
+        case Penbot.ToolHandler.execute(tool_call, state.depth) do
           {:done, summary} ->
             Logger.info("Goal #{if summary.success, do: "achieved", else: "failed"}: #{summary.summary}")
             {:ok, summary}
@@ -344,6 +380,7 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: "web_search", input: %{"query" => q}}), do: String.slice(q, 0, 100)
   defp summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
   defp summarize_input(%{name: "screenshot", input: _}), do: "display"
+  defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
 
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"

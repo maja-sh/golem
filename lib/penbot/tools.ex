@@ -3,10 +3,39 @@ defmodule Penbot.Tools do
   Tool definitions for Claude's tool use API.
   """
 
+  @max_agent_depth 3
+
   @doc """
-  Returns all tool definitions available to the executor.
+  Returns tool definitions for the given nesting depth.
+  Sub-agent tool is excluded when at max depth.
   """
-  def all do
+  def for_depth(depth \\ 0) do
+    base = base_tools()
+
+    if depth < @max_agent_depth do
+      base ++ [sub_agent_tool()]
+    else
+      base
+    end
+  end
+
+  @doc """
+  Returns all tool definitions (depth 0).
+  """
+  def all, do: for_depth(0)
+
+  defp sub_agent_tool do
+    tool("sub_agent", "Spawn a sub-agent to handle a self-contained sub-task. The sub-agent gets its own context window and works independently, then returns a summary. Use this for tasks that are complex enough to need many steps but don't need your full context — e.g. \"research how to set up nginx reverse proxy\", \"write the test suite for module X\", \"explore this directory and summarize the codebase\".", %{
+      type: "object",
+      properties: %{
+        goal: %{type: "string", description: "Clear description of what the sub-agent should accomplish"},
+        context: %{type: "string", description: "Any relevant context the sub-agent needs (file paths, decisions made so far, constraints)"}
+      },
+      required: ["goal"]
+    })
+  end
+
+  defp base_tools do
     [
       tool("shell", "Run a shell command in the Linux container. Returns stdout/stderr and exit code.", %{
         type: "object",

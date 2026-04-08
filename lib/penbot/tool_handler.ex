@@ -6,9 +6,12 @@ defmodule Penbot.ToolHandler do
   require Logger
 
   @doc """
-  Execute a tool call. Returns {:continue, result_text} or {:done, summary}.
+  Execute a tool call. Returns {:continue, result_text}, {:done, summary}, etc.
+  Depth is passed through for sub-agent spawning.
   """
-  def execute(%{name: "shell", input: %{"command" => command}}) do
+  def execute(tool_call, depth \\ 0)
+
+  def execute(%{name: "shell", input: %{"command" => command}}, _depth) do
     Logger.info("  [shell] #{String.slice(command, 0, 200)}")
 
     case Penbot.Sandbox.exec(command) do
@@ -26,7 +29,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}) do
+  def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
     Logger.info("  [write_file] #{path} (#{byte_size(content)} bytes)")
 
     case Penbot.Sandbox.write_file(path, content) do
@@ -35,7 +38,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "read_file", input: %{"path" => path}}) do
+  def execute(%{name: "read_file", input: %{"path" => path}}, _depth) do
     Logger.info("  [read_file] #{path}")
 
     case Penbot.Sandbox.read_file(path) do
@@ -44,7 +47,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}) do
+  def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}, _depth) do
     Logger.info("  [edit_file] #{path}")
 
     case Penbot.Sandbox.read_file(path) do
@@ -67,7 +70,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "list_directory", input: %{"path" => path}}) do
+  def execute(%{name: "list_directory", input: %{"path" => path}}, _depth) do
     Logger.info("  [list_directory] #{path}")
 
     case Penbot.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
@@ -77,7 +80,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "glob", input: input}) do
+  def execute(%{name: "glob", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
     Logger.info("  [glob] #{pattern} in #{path}")
@@ -99,7 +102,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "grep", input: input}) do
+  def execute(%{name: "grep", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
     file_glob = Map.get(input, "glob")
@@ -130,7 +133,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "web_search", input: %{"query" => query}}) do
+  def execute(%{name: "web_search", input: %{"query" => query}}, _depth) do
     Logger.info("  [web_search] #{query}")
 
     case Penbot.Web.search(query) do
@@ -139,7 +142,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "web_fetch", input: %{"url" => url}}) do
+  def execute(%{name: "web_fetch", input: %{"url" => url}}, _depth) do
     Logger.info("  [web_fetch] #{url}")
 
     case Penbot.Web.fetch(url) do
@@ -148,14 +151,14 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "think", input: %{"reasoning" => reasoning}}) do
+  def execute(%{name: "think", input: %{"reasoning" => reasoning}}, _depth) do
     Logger.info("  [think] #{String.slice(reasoning, 0, 200)}")
     # The reasoning is captured in the conversation history.
     # Signal the runner to consider re-planning.
     {:think, reasoning}
   end
 
-  def execute(%{name: "screenshot", input: _input}) do
+  def execute(%{name: "screenshot", input: _input}, _depth) do
     Logger.info("  [screenshot]")
 
     case Penbot.Screenshot.capture() do
@@ -167,7 +170,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}) do
+  def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}, _depth) do
     Logger.info("  [gui_click] #{x},#{y}")
 
     case Penbot.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
@@ -177,7 +180,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_type", input: %{"text" => text}}) do
+  def execute(%{name: "gui_type", input: %{"text" => text}}, _depth) do
     Logger.info("  [gui_type] #{String.slice(text, 0, 50)}")
     # Use xdotool type with --clearmodifiers to avoid modifier key issues
     escaped = String.replace(text, "'", "'\\''")
@@ -189,7 +192,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_key", input: %{"key" => key}}) do
+  def execute(%{name: "gui_key", input: %{"key" => key}}, _depth) do
     Logger.info("  [gui_key] #{key}")
 
     case Penbot.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
@@ -199,7 +202,7 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_scroll", input: input}) do
+  def execute(%{name: "gui_scroll", input: input}, _depth) do
     direction = Map.get(input, "direction", "down")
     clicks = Map.get(input, "clicks", 3)
     button = if direction == "up", do: 4, else: 5
@@ -214,14 +217,34 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "done", input: input}) do
+  def execute(%{name: "sub_agent", input: input}, depth) do
+    goal = Map.fetch!(input, "goal")
+    context = Map.get(input, "context", "")
+    Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
+
+    case Penbot.Runner.run_sub_agent(goal, context, depth) do
+      {:ok, %{success: true, summary: summary}} ->
+        {:continue, "Sub-agent completed successfully: #{summary}"}
+
+      {:ok, %{success: false, summary: summary}} ->
+        {:continue, "Sub-agent did not achieve its goal: #{summary}"}
+
+      {:error, :max_steps_reached} ->
+        {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — check the filesystem for progress."}
+
+      {:error, reason} ->
+        {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "done", input: input}, _depth) do
     success = Map.get(input, "success", false)
     summary = Map.get(input, "summary", "No summary provided")
     Logger.info("  [done] success=#{success} — #{summary}")
     {:done, %{success: success, summary: summary}}
   end
 
-  def execute(%{name: name}) do
+  def execute(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
