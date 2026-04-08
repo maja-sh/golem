@@ -12,7 +12,7 @@ Your mission is to research, plan, and build a small revenue-generating software
 
 ### Environment
 
-Your container has Python, Node.js, and basic Linux tools pre-installed. Elixir and PHP are NOT pre-installed — you will need to install your chosen language as the first step of the build phase. For Elixir: install Erlang and Elixir via apt or asdf. For PHP: install php, composer, and any needed extensions via apt.
+You have root access to a Ubuntu 24.04 container with Python, Node.js, and basic Linux tools pre-installed. Elixir and PHP are NOT pre-installed — you will need to install your chosen language as the first step of the build phase. For Elixir: install Erlang and Elixir via apt or asdf. For PHP: install php, composer, and any needed extensions via apt. You can install anything you need with apt.
 
 ### Phase 1: Market Research (spend at least 20 searches here)
 
@@ -72,6 +72,7 @@ Use a `sub_agent` to do the actual building — this keeps your research context
 - Include basic tests that pass
 - Put everything in /home/agent/product/src/
 - Infrastructure: SQLite or flat files for storage (no external database server needed for MVP)
+- **Containerized deployment**: Include a Dockerfile and docker-compose.yml (or podman equivalent) so the product can be deployed with a single `docker-compose up`. The container should include all runtime dependencies. This makes it trivially deployable on any VPS.
 
 After the sub-agent finishes, verify the build by running the tests yourself.
 

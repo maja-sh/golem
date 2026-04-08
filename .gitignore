@@ -31,3 +31,9 @@ penbot-*.tar
 # Agent logs
 /logs/
 
+# Saved run state (for resume)
+/runs/
+
+# Exported output
+/output/
+

@@ -25,13 +25,14 @@ defmodule Penbot.Runner do
   def run(goal, opts \\ []) do
     max_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
     depth = opts[:depth] || 0
+    run_id = opts[:run_id] || Penbot.State.new_run_id()
     prefix = depth_prefix(depth)
 
-    Logger.info("#{prefix}========== RUN STARTED ==========")
+    Logger.info("#{prefix}========== RUN STARTED (#{run_id}) ==========")
     Logger.info("#{prefix}Goal: #{goal}")
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
-    result = do_run(goal, opts, max_steps, depth, prefix)
+    result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
     case result do
       {:ok, %{success: true} = s} ->
@@ -42,6 +43,10 @@ defmodule Penbot.Runner do
         Logger.info("#{prefix}========== RUN FAILED ==========")
         Logger.info("#{prefix}#{s.summary}")
 
+      {:error, :max_steps_reached} ->
+        Logger.warning("#{prefix}========== RUN PAUSED (max steps) ==========")
+        Logger.warning("#{prefix}Resume with: Penbot.resume(\"#{run_id}\")")
+
       {:error, reason} ->
         Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
     end
@@ -49,7 +54,60 @@ defmodule Penbot.Runner do
     result
   end
 
-  defp do_run(goal, opts, max_steps, depth, prefix) do
+  @doc """
+  Resume a previously paused run.
+  """
+  def resume(run_id, opts \\ []) do
+    case Penbot.State.load(run_id) do
+      {:ok, saved} ->
+        extra_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
+        new_max = saved.step + extra_steps
+        prefix = depth_prefix(saved.depth)
+
+        Logger.info("#{prefix}========== RESUMING RUN #{run_id} ==========")
+        Logger.info("#{prefix}Continuing from step #{saved.step}, new max: #{new_max}")
+
+        state = %{
+          goal: saved.goal,
+          plan: saved.plan,
+          messages: saved.messages,
+          step: saved.step,
+          max_steps: new_max,
+          depth: saved.depth,
+          prefix: prefix,
+          history: saved.history,
+          run_id: run_id
+        }
+
+        system = Penbot.Prompt.executor_system()
+        result = loop(state, system)
+
+        case result do
+          {:ok, %{success: true} = s} ->
+            Logger.info("#{prefix}========== RUN SUCCEEDED ==========")
+            Logger.info("#{prefix}#{s.summary}")
+
+          {:ok, %{success: false} = s} ->
+            Logger.info("#{prefix}========== RUN FAILED ==========")
+            Logger.info("#{prefix}#{s.summary}")
+
+          {:error, :max_steps_reached} ->
+            Logger.warning("#{prefix}========== RUN PAUSED (max steps) ==========")
+            Logger.warning("#{prefix}Resume with: Penbot.resume(\"#{run_id}\")")
+
+          {:error, reason} ->
+            Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
+        end
+
+        result
+
+      {:error, reason} ->
+        Logger.error("Failed to load run #{run_id}: #{inspect(reason)}")
+        {:error, {:load_failed, reason}}
+    end
+  end
+
+  defp do_run(goal, opts, max_steps, depth, prefix, run_id) do
     plan_result =
       case opts[:plan] do
         nil ->
@@ -72,7 +130,8 @@ defmodule Penbot.Runner do
           max_steps: max_steps,
           depth: depth,
           prefix: prefix,
-          history: []
+          history: [],
+          run_id: run_id
         }
 
         system = Penbot.Prompt.executor_system()
@@ -170,8 +229,9 @@ defmodule Penbot.Runner do
 
   # --- Main Loop ---
 
-  defp loop(%{step: step, max_steps: max, prefix: prefix} = _state, _system) when step >= max do
-    Logger.warning("#{prefix}Hit max steps (#{max}). Stopping.")
+  defp loop(%{step: step, max_steps: max, prefix: prefix} = state, _system) when step >= max do
+    Logger.warning("#{prefix}Hit max steps (#{max}). Saving state...")
+    if run_id = Map.get(state, :run_id), do: Penbot.State.save(run_id, state)
     {:error, :max_steps_reached}
   end
 
@@ -206,25 +266,24 @@ defmodule Penbot.Runner do
             handle_replan(state, system, step, tool_call, reasoning)
 
           {:continue, result} ->
-            # Add the assistant's response and tool result to messages
             messages = append_tool_exchange(messages, response, tool_call, result)
 
-            # Track in history
             input_summary = summarize_input(tool_call)
             result_summary = String.slice(result, 0, 200)
             history = state.history ++ [{tool_call.name, input_summary, result_summary}]
 
             state = %{state | messages: messages, step: step, history: history}
+            maybe_save(state)
             loop(state, system)
 
           {:continue_with_image, %{text: text, base64: base64}} ->
-            # Add tool result with image content block (for screenshots)
             messages = append_tool_exchange_with_image(messages, response, tool_call, text, base64)
 
             input_summary = summarize_input(tool_call)
             history = state.history ++ [{tool_call.name, input_summary, "[screenshot]"}]
 
             state = %{state | messages: messages, step: step, history: history}
+            maybe_save(state)
             loop(state, system)
         end
 
@@ -374,19 +433,90 @@ defmodule Penbot.Runner do
   defp maybe_add_text(blocks, nil), do: blocks
   defp maybe_add_text(blocks, text), do: blocks ++ [%{type: "text", text: text}]
 
-  # Keep conversation manageable — trim middle turns when too long.
-  # Messages come in pairs (assistant tool_use + user tool_result),
-  # so we must always keep an even number from the tail and never
-  # split a pair. We keep only the first message (initial goal/plan).
-  defp trim_messages(messages) when length(messages) <= 41, do: messages
+  # Keep conversation manageable. When messages exceed the threshold,
+  # summarize older turns into a compact recap using a cheap LLM call.
+  # This preserves context far better than just dropping messages.
+  @compact_threshold 40
+  @compact_keep_recent 20
+
+  defp trim_messages(messages) when length(messages) <= @compact_threshold, do: messages
 
   defp trim_messages(messages) do
     [first | rest] = messages
-    # Keep last 38 messages (19 pairs of assistant+user)
-    keep = min(38, length(rest))
+
+    # Split into old (to compact) and recent (to keep verbatim)
+    keep = min(@compact_keep_recent, length(rest))
     keep = keep - rem(keep, 2)
-    [first | Enum.take(rest, -keep)]
+    split_at = length(rest) - keep
+    {old, recent} = Enum.split(rest, split_at)
+
+    # Summarize the old messages
+    summary = compact_messages(old)
+
+    # Rebuild: first message + summary + recent messages
+    [first, %{role: "user", content: "[Conversation summary of earlier steps]\n\n#{summary}"}] ++ recent
   end
+
+  defp compact_messages(messages) do
+    # Extract a readable summary from old tool exchanges
+    text =
+      messages
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn
+        [%{role: "assistant", content: content}, %{role: "user"} = user_msg] ->
+          # Extract tool name and result
+          tool_name = extract_tool_name(content)
+          result = extract_result_text(user_msg)
+          "- [#{tool_name}] → #{String.slice(result, 0, 150)}"
+
+        [%{role: "assistant", content: content}] ->
+          text = if is_binary(content), do: content, else: "[tool call]"
+          "- Agent: #{String.slice(text, 0, 150)}"
+
+        [%{role: "user", content: content}] ->
+          text = if is_binary(content), do: content, else: "[system]"
+          "- System: #{String.slice(text, 0, 150)}"
+
+        _ ->
+          nil
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    # If the summary itself is manageable, just use it directly
+    # No need for an LLM call — structured extraction is cheaper and faster
+    if byte_size(text) > 10_000 do
+      "[#{length(messages)} earlier messages truncated]\n" <>
+        (text |> String.slice(0, 8_000))
+    else
+      text
+    end
+  end
+
+  defp extract_tool_name(content) when is_list(content) do
+    Enum.find_value(content, "unknown", fn
+      %{type: "tool_use", name: name} -> name
+      %{"type" => "tool_use", "name" => name} -> name
+      _ -> nil
+    end)
+  end
+  defp extract_tool_name(_), do: "text"
+
+  defp extract_result_text(%{content: content}) when is_list(content) do
+    Enum.find_value(content, "", fn
+      %{content: text} when is_binary(text) -> text
+      %{"content" => text} when is_binary(text) -> text
+      %{content: blocks} when is_list(blocks) ->
+        Enum.find_value(blocks, "", fn
+          %{type: "text", text: t} -> t
+          %{"type" => "text", "text" => t} -> t
+          _ -> nil
+        end)
+      _ -> nil
+    end)
+  end
+  defp extract_result_text(%{content: text}) when is_binary(text), do: text
+  defp extract_result_text(_), do: ""
 
   defp summarize_input(%{name: "shell", input: %{"command" => cmd}}) do
     String.slice(cmd, 0, 100)
@@ -409,6 +539,12 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"
   end
+
+  # Save state periodically (only for top-level runs, not sub-agents)
+  defp maybe_save(%{depth: 0, run_id: run_id, step: step} = state) when not is_nil(run_id) do
+    if Penbot.State.should_save?(step), do: Penbot.State.save(run_id, state)
+  end
+  defp maybe_save(_state), do: :ok
 
   defp depth_prefix(0), do: ""
   defp depth_prefix(depth), do: String.duplicate("│ ", depth)

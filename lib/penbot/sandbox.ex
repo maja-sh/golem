@@ -224,7 +224,7 @@ defmodule Penbot.Sandbox do
       try do
         port =
           Port.open({:spawn_executable, podman}, [
-            {:args, ["exec", "-i", container, "/bin/bash"]},
+            {:args, ["exec", "-i", "-u", "root", container, "/bin/bash"]},
             :binary,
             :use_stdio,
             :exit_status,
