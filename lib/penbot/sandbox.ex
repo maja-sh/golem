@@ -114,10 +114,11 @@ defmodule Penbot.Sandbox do
     System.cmd("podman", ["stop", "-t", "2", container], stderr_to_stdout: true)
     System.cmd("podman", ["rm", "-f", container], stderr_to_stdout: true)
 
-    # Recreate from image
+    # Recreate from image with persistent volume
     case System.cmd("podman", [
            "run", "-d",
            "--name", container,
+           "-v", "penbot-data:/home/agent",
            "#{container}:latest"
          ], stderr_to_stdout: true) do
       {_, 0} ->

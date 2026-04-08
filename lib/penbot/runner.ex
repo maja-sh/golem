@@ -131,6 +131,7 @@ defmodule Penbot.Runner do
           depth: depth,
           prefix: prefix,
           history: [],
+          costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
           run_id: run_id
         }
 
@@ -173,7 +174,8 @@ defmodule Penbot.Runner do
       max_steps: @sub_agent_max_steps,
       depth: depth,
       prefix: prefix,
-      history: []
+      history: [],
+      costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0}
     }
 
     result = loop(state, system)
@@ -238,7 +240,8 @@ defmodule Penbot.Runner do
   defp loop(state, system) do
     step = state.step + 1
     p = state.prefix
-    Logger.info("#{p}--- Step #{step}/#{state.max_steps} ---")
+    costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
+    Logger.info("#{p}--- Step #{step}/#{state.max_steps} | $#{format_cost(costs)} ---")
 
     model = Application.get_env(:penbot, :executor_model)
     max_tokens = Application.get_env(:penbot, :executor_max_tokens, 8000)
@@ -257,6 +260,7 @@ defmodule Penbot.Runner do
          ) do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
         if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
+        costs = accumulate_costs(costs, response.usage, model)
 
         if length(tool_calls) > 1 do
           Logger.info("#{p}  #{length(tool_calls)} tool calls in this turn")
@@ -265,33 +269,33 @@ defmodule Penbot.Runner do
         # Execute all tool calls, stopping early on done/think_replan
         case execute_tool_calls(tool_calls, state.depth) do
           {:done, summary, executed} ->
-            # Build messages for the tools that ran before done
             messages = append_multi_tool_exchange(messages, response, executed)
-            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
+            state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
+            Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
             maybe_save(state)
             {:ok, summary}
 
           {:think_replan, reasoning, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
-            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
-            # Use the last tool_call (the think one) for replan
+            state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
             last_tc = List.last(executed) |> elem(0)
             handle_replan(state, system, step, last_tc, reasoning)
 
           {:continue, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
-            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
+            state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
             maybe_save(state)
             loop(state, system)
         end
 
-      {:ok, %{text: text, tool_use: []}} ->
+      {:ok, %{text: text, tool_use: []} = response} ->
         Logger.info("#{p}  Agent (no tool): #{text}")
+        costs = accumulate_costs(costs, response.usage, model)
         messages = state.messages ++ [
           %{role: "assistant", content: text},
           %{role: "user", content: "Continue executing the plan. Use a tool for your next action, or use `done` if the goal is achieved."}
         ]
-        state = %{state | messages: messages, step: step}
+        state = %{state | messages: messages, step: step, costs: costs}
         loop(state, system)
 
       {:error, reason} ->
@@ -516,7 +520,31 @@ defmodule Penbot.Runner do
   end
   defp maybe_save(_state), do: :ok
 
+  # --- Cost Tracking ---
+
+  # Pricing per million tokens (as of 2025)
+  @default_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
+
+  defp accumulate_costs(costs, usage, _model) do
+    %{
+      input: costs.input + Map.get(usage, :input_tokens, 0),
+      output: costs.output + Map.get(usage, :output_tokens, 0),
+      cache_read: costs.cache_read + Map.get(usage, :cache_read, 0),
+      cache_create: costs.cache_create + Map.get(usage, :cache_create, 0)
+    }
+  end
+
+  defp format_cost(costs) do
+    p = @default_pricing
+    dollars =
+      costs.input / 1_000_000 * p.input +
+      costs.output / 1_000_000 * p.output +
+      costs.cache_read / 1_000_000 * p.cache_read +
+      costs.cache_create / 1_000_000 * p.cache_create
+
+    :erlang.float_to_binary(dollars, decimals: 4)
+  end
+
   defp depth_prefix(0), do: ""
   defp depth_prefix(depth), do: String.duplicate("│ ", depth)
-
 end

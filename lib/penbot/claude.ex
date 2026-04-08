@@ -112,6 +112,7 @@ defmodule Penbot.Claude do
   defp parse_response(body) do
     content = Map.get(body, "content", [])
     stop_reason = Map.get(body, "stop_reason", "end_turn")
+    usage = Map.get(body, "usage", %{})
 
     thinking =
       content
@@ -146,7 +147,13 @@ defmodule Penbot.Claude do
       thinking: thinking,
       text: text,
       tool_use: tool_use,
-      stop_reason: stop_reason
+      stop_reason: stop_reason,
+      usage: %{
+        input_tokens: Map.get(usage, "input_tokens", 0),
+        output_tokens: Map.get(usage, "output_tokens", 0),
+        cache_read: Map.get(usage, "cache_read_input_tokens", 0),
+        cache_create: Map.get(usage, "cache_creation_input_tokens", 0)
+      }
     }
   end
 
