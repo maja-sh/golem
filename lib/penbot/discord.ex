@@ -29,26 +29,40 @@ defmodule Penbot.Discord do
   def ask(question, run_id) do
     channel_id = channel_id!()
 
-    # Format the question with run context
-    formatted = "🔧 **Forge** [run `#{run_id}`]\n\n#{question}\n\n_Reply in this channel to continue the run._"
+    # Wait for bot to be connected (up to 10 seconds)
+    if not wait_for_ready(10) do
+      Logger.error("Discord: bot not connected after 10s")
+      {:error, :not_connected}
+    else
+      formatted = "🔧 **Forge** [run `#{run_id}`]\n\n#{question}\n\n_Reply in this channel to continue the run._"
 
-    case Nostrum.Api.Message.create(channel_id, content: formatted) do
-      {:ok, _msg} ->
-        Logger.info("Discord: asked question, waiting for reply...")
-        # Register this process as waiting for a reply
-        :persistent_term.put(@waiter_key, {self(), run_id, channel_id})
+      case Nostrum.Api.Message.create(channel_id, content: formatted) do
+        {:ok, _msg} ->
+          Logger.info("Discord: asked question, waiting for reply...")
+          :persistent_term.put(@waiter_key, {self(), run_id, channel_id})
 
-        # Block until we receive a reply
-        receive do
-          {:discord_reply, text} ->
-            :persistent_term.put(@waiter_key, nil)
-            Logger.info("Discord: got reply: #{String.slice(text, 0, 200)}")
-            {:ok, text}
-        end
+          receive do
+            {:discord_reply, text} ->
+              :persistent_term.put(@waiter_key, nil)
+              Logger.info("Discord: got reply: #{String.slice(text, 0, 200)}")
+              {:ok, text}
+          end
 
-      {:error, reason} ->
-        Logger.error("Discord: failed to send message: #{inspect(reason)}")
-        {:error, reason}
+        {:error, reason} ->
+          Logger.error("Discord: failed to send message: #{inspect(reason)}")
+          {:error, reason}
+      end
+    end
+  end
+
+  defp wait_for_ready(0), do: false
+  defp wait_for_ready(seconds) do
+    case Nostrum.Cache.Me.get() do
+      nil ->
+        Process.sleep(1_000)
+        wait_for_ready(seconds - 1)
+      _me ->
+        true
     end
   end
 
