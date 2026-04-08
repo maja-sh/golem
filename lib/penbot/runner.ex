@@ -31,44 +31,7 @@ defmodule Penbot.Runner do
     Logger.info("#{prefix}Goal: #{goal}")
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
-    # Phase 1: Create a plan
-    plan =
-      case opts[:plan] do
-        nil ->
-          Logger.info("#{prefix}Planning with Opus...")
-
-          case create_plan(goal) do
-            {:ok, plan} ->
-              Logger.info("#{prefix}Plan:\n#{plan}")
-              plan
-
-            {:error, reason} ->
-              Logger.error("#{prefix}Planning failed: #{inspect(reason)}")
-              return_error(reason)
-          end
-
-        plan ->
-          Logger.info("#{prefix}Using provided plan:\n#{plan}")
-          plan
-      end
-
-    # Phase 2: Execute
-    state = %{
-      goal: goal,
-      plan: plan,
-      messages: [],
-      step: 0,
-      max_steps: max_steps,
-      depth: depth,
-      prefix: prefix,
-      history: []
-    }
-
-    system = Penbot.Prompt.executor_system()
-    initial = Penbot.Prompt.initial_message(goal, plan)
-    state = %{state | messages: [%{role: "user", content: initial}]}
-
-    result = loop(state, system)
+    result = do_run(goal, opts, max_steps, depth, prefix)
 
     case result do
       {:ok, %{success: true} = s} ->
@@ -84,6 +47,44 @@ defmodule Penbot.Runner do
     end
 
     result
+  end
+
+  defp do_run(goal, opts, max_steps, depth, prefix) do
+    plan_result =
+      case opts[:plan] do
+        nil ->
+          Logger.info("#{prefix}Planning with Opus...")
+          create_plan(goal)
+
+        plan ->
+          {:ok, plan}
+      end
+
+    case plan_result do
+      {:ok, plan} ->
+        Logger.info("#{prefix}Plan:\n#{plan}")
+
+        state = %{
+          goal: goal,
+          plan: plan,
+          messages: [],
+          step: 0,
+          max_steps: max_steps,
+          depth: depth,
+          prefix: prefix,
+          history: []
+        }
+
+        system = Penbot.Prompt.executor_system()
+        initial = Penbot.Prompt.initial_message(goal, plan)
+        state = %{state | messages: [%{role: "user", content: initial}]}
+
+        loop(state, system)
+
+      {:error, reason} ->
+        Logger.error("#{prefix}Planning failed: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -407,7 +408,4 @@ defmodule Penbot.Runner do
   defp depth_prefix(0), do: ""
   defp depth_prefix(depth), do: String.duplicate("│ ", depth)
 
-  defp return_error(reason) do
-    {:error, reason}
-  end
 end

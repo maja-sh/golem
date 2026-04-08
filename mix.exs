@@ -21,7 +21,8 @@ defmodule Penbot.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:dotenv, "~> 3.0", only: [:dev, :test]}
     ]
   end
 end
