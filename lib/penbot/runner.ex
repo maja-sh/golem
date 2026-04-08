@@ -263,23 +263,41 @@ defmodule Penbot.Runner do
 
     llm_start = System.monotonic_time(:millisecond)
 
-    case Penbot.Claude.call(messages,
-           model: model,
-           max_tokens: max_tokens,
-           system: system,
-           tools: tools,
-           thinking_budget: thinking_budget
-         ) do
+    # Stream text to TUI for top-level runs
+    on_text =
+      if state.depth == 0 do
+        Penbot.TUI.stream_start()
+        fn chunk -> Penbot.TUI.stream_text(chunk) end
+      else
+        nil
+      end
+
+    call_opts = [
+      model: model,
+      max_tokens: max_tokens,
+      system: system,
+      tools: tools,
+      thinking_budget: thinking_budget
+    ]
+
+    result =
+      if on_text do
+        Penbot.Claude.call_stream(messages, Keyword.put(call_opts, :on_text, on_text))
+      else
+        Penbot.Claude.call(messages, call_opts)
+      end
+
+    if on_text, do: Penbot.TUI.stream_end()
+
+    case result do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
         llm_elapsed = System.monotonic_time(:millisecond) - llm_start
         output_tokens = Map.get(response.usage, :output_tokens, 0)
 
-        if response.text do
-          Logger.info("#{p}  Agent: #{response.text}")
-          if state.depth == 0, do: Penbot.TUI.agent_text(response.text)
-        end
+        # Text was already streamed — just log it
+        if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
 
-        # Show LLM call timing inline if no text was shown
+        # Show timing if no text was streamed
         if is_nil(response.text) and state.depth == 0 do
           Penbot.TUI.agent_text("(#{Penbot.TUI.format_elapsed(llm_elapsed)} · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
         end

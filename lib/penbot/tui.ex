@@ -29,6 +29,28 @@ defmodule Penbot.TUI do
     GenServer.call(__MODULE__, {:print, [[], [:cyan, "● ", :reset, text]]})
   end
 
+  @doc """
+  Start streaming text — prints the ● prefix and prepares for character-by-character output.
+  """
+  def stream_start do
+    GenServer.call(__MODULE__, {:stream_start})
+  end
+
+  @doc """
+  Write a chunk of streamed text directly to the terminal.
+  Called from the streaming callback — bypasses GenServer for low latency.
+  """
+  def stream_text(chunk) do
+    IO.write(chunk)
+  end
+
+  @doc """
+  End streaming — prints a newline.
+  """
+  def stream_end do
+    IO.write("\n")
+  end
+
   def tool_call(name, detail) do
     GenServer.cast(__MODULE__, {:update, action: "#{name} #{detail}"})
   end
@@ -157,6 +179,12 @@ defmodule Penbot.TUI do
       verb: Enum.random(@forge_verbs),
       ticker: ticker
     }}
+  end
+
+  def handle_call({:stream_start}, _from, state) do
+    state = erase_status(state)
+    IO.write(IO.ANSI.format([:cyan, "\n● ", :reset]))
+    {:reply, :ok, state}
   end
 
   def handle_call({:print, lines}, _from, state) do
