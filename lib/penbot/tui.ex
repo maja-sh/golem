@@ -203,31 +203,20 @@ defmodule Penbot.TUI do
 
   # --- Status Bar Renderer ---
 
-  defp render_statusbar(%{step: step, max_steps: max, cost: cost, action: action}) do
-    bar_width = 20
-    pct = if max > 0, do: min(step / max, 1.0), else: 0
-    filled = round(pct * bar_width)
-    empty = bar_width - filled
-
-    line = [
-      Owl.Data.tag(String.duplicate("█", filled), :green),
-      Owl.Data.tag(String.duplicate("░", empty), :faint),
-      " ",
-      Owl.Data.tag("#{step}/#{max}", :white),
-      Owl.Data.tag(" │ ", :faint),
-      Owl.Data.tag(cost, :yellow)
-    ]
-
+  defp render_statusbar(%{cost: cost, action: action}) do
     if action do
-      line ++ [Owl.Data.tag(" │ ", :faint), Owl.Data.tag("⠋ #{trunc_text(action, 40)}", :magenta)]
+      [
+        Owl.Data.tag(cost, :yellow),
+        Owl.Data.tag(" │ ", :faint),
+        Owl.Data.tag("⠋ #{trunc_text(action, 60)}", :magenta)
+      ]
     else
-      line
+      [Owl.Data.tag(cost, :yellow)]
     end
   end
 
-  # Catch-all for any extra keys in state
   defp render_statusbar(state) do
-    render_statusbar(Map.take(state, [:step, :max_steps, :cost, :action]))
+    render_statusbar(Map.take(state, [:cost, :action]))
   end
 
   # --- Helpers ---
