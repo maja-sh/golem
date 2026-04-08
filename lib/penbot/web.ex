@@ -73,14 +73,14 @@ defmodule Penbot.Web do
          ) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
         content_type =
-          headers
-          |> Enum.find_value(fn
-            {"content-type", v} -> v
-            _ -> nil
-          end) || ""
+          case Map.get(headers, "content-type", []) do
+            [v | _] -> v
+            v when is_binary(v) -> v
+            _ -> ""
+          end
 
         text =
-          if String.contains?(content_type, "text/html") do
+          if is_binary(content_type) and String.contains?(content_type, "text/html") do
             strip_html(body)
           else
             to_string(body)
