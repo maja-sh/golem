@@ -25,27 +25,30 @@ defmodule Penbot.Runner do
   def run(goal, opts \\ []) do
     max_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
     depth = opts[:depth] || 0
+    prefix = depth_prefix(depth)
 
-    Logger.info("Starting run (depth=#{depth}) — goal: #{String.slice(goal, 0, 200)}")
+    Logger.info("#{prefix}========== RUN STARTED ==========")
+    Logger.info("#{prefix}Goal: #{goal}")
+    Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
     # Phase 1: Create a plan
     plan =
       case opts[:plan] do
         nil ->
-          Logger.info("Creating plan with Opus...")
+          Logger.info("#{prefix}Planning with Opus...")
 
           case create_plan(goal) do
             {:ok, plan} ->
-              Logger.info("Plan created:\n#{plan}")
+              Logger.info("#{prefix}Plan:\n#{plan}")
               plan
 
             {:error, reason} ->
-              Logger.error("Failed to create plan: #{inspect(reason)}")
+              Logger.error("#{prefix}Planning failed: #{inspect(reason)}")
               return_error(reason)
           end
 
         plan ->
-          Logger.info("Using provided plan:\n#{plan}")
+          Logger.info("#{prefix}Using provided plan:\n#{plan}")
           plan
       end
 
@@ -57,16 +60,30 @@ defmodule Penbot.Runner do
       step: 0,
       max_steps: max_steps,
       depth: depth,
+      prefix: prefix,
       history: []
     }
 
-    # Build initial messages
     system = Penbot.Prompt.executor_system()
     initial = Penbot.Prompt.initial_message(goal, plan)
-    messages = [%{role: "user", content: initial}]
-    state = %{state | messages: messages}
+    state = %{state | messages: [%{role: "user", content: initial}]}
 
-    loop(state, system)
+    result = loop(state, system)
+
+    case result do
+      {:ok, %{success: true} = s} ->
+        Logger.info("#{prefix}========== RUN SUCCEEDED ==========")
+        Logger.info("#{prefix}#{s.summary}")
+
+      {:ok, %{success: false} = s} ->
+        Logger.info("#{prefix}========== RUN FAILED ==========")
+        Logger.info("#{prefix}#{s.summary}")
+
+      {:error, reason} ->
+        Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
+    end
+
+    result
   end
 
   @doc """
@@ -75,7 +92,9 @@ defmodule Penbot.Runner do
   """
   def run_sub_agent(goal, context, parent_depth) do
     depth = parent_depth + 1
-    Logger.info("=== Sub-agent spawned (depth=#{depth}) — #{String.slice(goal, 0, 200)} ===")
+    prefix = depth_prefix(depth)
+    Logger.info("#{prefix}---------- SUB-AGENT SPAWNED ----------")
+    Logger.info("#{prefix}Goal: #{String.slice(goal, 0, 500)}")
 
     system = Penbot.Prompt.sub_agent_system()
 
@@ -93,11 +112,12 @@ defmodule Penbot.Runner do
       step: 0,
       max_steps: @sub_agent_max_steps,
       depth: depth,
+      prefix: prefix,
       history: []
     }
 
     result = loop(state, system)
-    Logger.info("=== Sub-agent finished (depth=#{depth}) ===")
+    Logger.info("#{prefix}---------- SUB-AGENT FINISHED ----------")
     result
   end
 
@@ -149,14 +169,15 @@ defmodule Penbot.Runner do
 
   # --- Main Loop ---
 
-  defp loop(%{step: step, max_steps: max} = _state, _system) when step >= max do
-    Logger.warning("Hit max steps (#{max}). Stopping.")
+  defp loop(%{step: step, max_steps: max, prefix: prefix} = _state, _system) when step >= max do
+    Logger.warning("#{prefix}Hit max steps (#{max}). Stopping.")
     {:error, :max_steps_reached}
   end
 
   defp loop(state, system) do
     step = state.step + 1
-    Logger.info("--- Step #{step} ---")
+    p = state.prefix
+    Logger.info("#{p}--- Step #{step}/#{state.max_steps} ---")
 
     model = Application.get_env(:penbot, :executor_model)
     max_tokens = Application.get_env(:penbot, :executor_max_tokens, 4096)
@@ -172,13 +193,11 @@ defmodule Penbot.Runner do
            tools: tools
          ) do
       {:ok, %{tool_use: [tool_call | _]} = response} ->
-        # Log any text the model produced alongside the tool call
-        if response.text, do: Logger.info("  Agent: #{response.text}")
+        if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
 
         # Execute the tool (pass depth for sub-agent spawning)
         case Penbot.ToolHandler.execute(tool_call, state.depth) do
           {:done, summary} ->
-            Logger.info("Goal #{if summary.success, do: "achieved", else: "failed"}: #{summary.summary}")
             {:ok, summary}
 
           {:think, reasoning} ->
@@ -209,8 +228,7 @@ defmodule Penbot.Runner do
         end
 
       {:ok, %{text: text, tool_use: []}} ->
-        # Model responded with text but no tool call — nudge it
-        Logger.info("  Agent (no tool): #{text}")
+        Logger.info("#{p}  Agent (no tool): #{text}")
         messages = state.messages ++ [
           %{role: "assistant", content: text},
           %{role: "user", content: "Continue executing the plan. Use a tool for your next action, or use `done` if the goal is achieved."}
@@ -219,7 +237,7 @@ defmodule Penbot.Runner do
         loop(state, system)
 
       {:error, reason} ->
-        Logger.error("Claude API error: #{inspect(reason)}")
+        Logger.error("#{p}  Claude API error: #{inspect(reason)}")
 
         # Retry once after a short delay
         if state[:retried] do
@@ -232,14 +250,14 @@ defmodule Penbot.Runner do
   end
 
   defp handle_replan(state, system, step, tool_call, reasoning) do
-    Logger.info("  Re-planning with Opus...")
+    Logger.info("#{state.prefix}  Re-planning with Opus...")
 
     # Take last 20 history entries for context
     recent = Enum.take(state.history, -20)
 
     case replan(state.goal, state.plan, reasoning, recent) do
       {:ok, new_plan} ->
-        Logger.info("  Revised plan:\n#{new_plan}")
+        Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
 
         # Add the think exchange to messages, then inject the new plan
         messages =
@@ -258,7 +276,7 @@ defmodule Penbot.Runner do
         loop(state, system)
 
       {:error, reason} ->
-        Logger.error("  Re-planning failed: #{inspect(reason)}")
+        Logger.error("#{state.prefix}  Re-planning failed: #{inspect(reason)}")
         # Continue with old plan
         messages =
           append_tool_exchange(
@@ -385,6 +403,9 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"
   end
+
+  defp depth_prefix(0), do: ""
+  defp depth_prefix(depth), do: String.duplicate("│ ", depth)
 
   defp return_error(reason) do
     {:error, reason}

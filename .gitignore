@@ -28,3 +28,6 @@ penbot-*.tar
 # Environment variables
 .env
 
+# Agent logs
+/logs/
+
