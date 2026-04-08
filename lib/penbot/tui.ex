@@ -182,10 +182,10 @@ defmodule Penbot.TUI do
   end
 
   def handle_call({:stream_start}, _from, state) do
-    state = erase_status(state)
-    IO.write(IO.ANSI.format([:cyan, "● ", :reset]))
-    state = draw_status(state)
-    {:reply, :ok, %{state | streaming: true, stream_buffer: ""}}
+    # Put the bullet prefix into the stream buffer — it'll be flushed
+    # on the next tick along with the first text chunks, above the status area.
+    prefix = IO.ANSI.format([:cyan, "● ", :reset]) |> IO.chardata_to_string()
+    {:reply, :ok, %{state | streaming: true, stream_buffer: prefix}}
   end
 
   def handle_call(:stream_end, _from, state) do
