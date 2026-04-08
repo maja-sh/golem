@@ -26,7 +26,7 @@ defmodule Penbot.TUI do
 
   def agent_text(nil), do: :ok
   def agent_text(text) do
-    GenServer.call(__MODULE__, {:print, [[], [:cyan, "● ", :reset, text]]})
+    GenServer.call(__MODULE__, {:print, [[:cyan, "● ", :reset, text]]})
   end
 
   @doc """
@@ -183,7 +183,7 @@ defmodule Penbot.TUI do
 
   def handle_call({:stream_start}, _from, state) do
     state = erase_status(state)
-    IO.write(IO.ANSI.format([:cyan, "\n● ", :reset]))
+    IO.write(IO.ANSI.format([:cyan, "● ", :reset]))
     state = draw_status(state)
     {:reply, :ok, %{state | streaming: true, stream_buffer: ""}}
   end
