@@ -30,6 +30,54 @@ defmodule Penbot.Tools do
         },
         required: ["path"]
       }),
+      tool("edit_file", "Make a targeted edit to a file. Finds old_string and replaces it with new_string. The old_string must match exactly (including whitespace/indentation). For creating new files, use write_file instead.", %{
+        type: "object",
+        properties: %{
+          path: %{type: "string", description: "Absolute file path"},
+          old_string: %{type: "string", description: "Exact string to find in the file"},
+          new_string: %{type: "string", description: "Replacement string"}
+        },
+        required: ["path", "old_string", "new_string"]
+      }),
+      tool("list_directory", "List the contents of a directory with file types and sizes.", %{
+        type: "object",
+        properties: %{
+          path: %{type: "string", description: "Absolute directory path"}
+        },
+        required: ["path"]
+      }),
+      tool("glob", "Find files matching a glob pattern. Returns matching file paths.", %{
+        type: "object",
+        properties: %{
+          pattern: %{type: "string", description: "Glob pattern (e.g. **/*.py, src/**/*.ts, *.json)"},
+          path: %{type: "string", description: "Directory to search in (default: current working directory)"}
+        },
+        required: ["pattern"]
+      }),
+      tool("grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers.", %{
+        type: "object",
+        properties: %{
+          pattern: %{type: "string", description: "Regex pattern to search for"},
+          path: %{type: "string", description: "File or directory to search in (default: current working directory)"},
+          glob: %{type: "string", description: "Only search files matching this glob (e.g. *.py)"},
+          context: %{type: "integer", description: "Number of context lines before and after each match (default: 0)"}
+        },
+        required: ["pattern"]
+      }),
+      tool("web_search", "Search the web for information. Returns synthesized answers with source citations.", %{
+        type: "object",
+        properties: %{
+          query: %{type: "string", description: "Search query"}
+        },
+        required: ["query"]
+      }),
+      tool("web_fetch", "Fetch the content of a URL and return it as text. Useful for reading documentation, APIs, READMEs.", %{
+        type: "object",
+        properties: %{
+          url: %{type: "string", description: "URL to fetch"}
+        },
+        required: ["url"]
+      }),
       tool("think", "Pause and reason deeply about the current situation. Use this when you're stuck, need to reconsider your approach, or face a complex decision. Your thinking will be used to revise the plan.", %{
         type: "object",
         properties: %{

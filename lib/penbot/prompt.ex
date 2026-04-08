@@ -22,7 +22,10 @@ defmodule Penbot.Prompt do
     - If you realize the plan is wrong or incomplete, use the `think` tool to reason about what to do differently. The system will revise the plan based on your thinking.
     - When you've achieved the goal (or determined it's impossible), use the `done` tool.
     - Keep shell commands focused. Prefer multiple small commands over one giant pipeline.
-    - For file creation, use `write_file` rather than shell heredocs or echo redirection.
+    - For file creation, use `write_file`. For targeted edits to existing files, use `edit_file` — it's much more efficient than rewriting the whole file.
+    - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
+    - Use `web_search` when you need to look up documentation, error messages, or how to do something. Use `web_fetch` to read a specific URL.
+    - Use `screenshot` to see GUI applications. Use `gui_click`, `gui_type`, `gui_key`, `gui_scroll` to interact with them.
     - When installing packages, use appropriate package managers (apt, pip, npm, etc.) and handle missing repos gracefully.
 
     ## Output style
@@ -38,7 +41,7 @@ defmodule Penbot.Prompt do
     """
     You are a planning agent. Your job is to create and revise actionable plans for an autonomous agent that works inside a Linux container.
 
-    The agent has these tools: shell (run commands), write_file, read_file, think, done.
+    The agent has these tools: shell (run commands), write_file, read_file, edit_file (targeted string replacement), glob (find files by pattern), grep (search file contents), list_directory, web_search, web_fetch, screenshot, gui_click, gui_type, gui_key, gui_scroll, think, done.
 
     ## Creating plans
 

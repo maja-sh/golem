@@ -44,6 +44,110 @@ defmodule Penbot.ToolHandler do
     end
   end
 
+  def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}) do
+    Logger.info("  [edit_file] #{path}")
+
+    case Penbot.Sandbox.read_file(path) do
+      {:ok, content} ->
+        case String.split(content, old, parts: 2) do
+          [_before, _after] ->
+            updated = String.replace(content, old, new, global: false)
+
+            case Penbot.Sandbox.write_file(path, updated) do
+              :ok -> {:continue, "Edit applied to #{path}"}
+              {:error, reason} -> {:continue, "[error] Failed to write: #{inspect(reason)}"}
+            end
+
+          [_no_match] ->
+            {:continue, "[error] old_string not found in #{path}. Make sure it matches exactly, including whitespace and indentation."}
+        end
+
+      {:error, reason} ->
+        {:continue, "[error] Failed to read #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "list_directory", input: %{"path" => path}}) do
+    Logger.info("  [list_directory] #{path}")
+
+    case Penbot.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
+      {:ok, %{output: output, exit_code: 0}} -> {:continue, truncate(output, 50_000)}
+      {:ok, %{output: output}} -> {:continue, "[error] #{output}"}
+      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "glob", input: input}) do
+    pattern = Map.fetch!(input, "pattern")
+    path = Map.get(input, "path", ".")
+    Logger.info("  [glob] #{pattern} in #{path}")
+
+    # Use find with -path for glob matching, or shell globstar
+    cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | head -200 | sort"
+
+    case Penbot.Sandbox.exec(cmd, timeout: 15_000) do
+      {:ok, %{output: output, exit_code: _}} ->
+        if output == "" do
+          {:continue, "No files matched pattern '#{pattern}' in #{path}"}
+        else
+          count = output |> String.split("\n") |> length()
+          {:continue, "Found #{count} files:\n#{truncate(output, 50_000)}"}
+        end
+
+      {:error, reason} ->
+        {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "grep", input: input}) do
+    pattern = Map.fetch!(input, "pattern")
+    path = Map.get(input, "path", ".")
+    file_glob = Map.get(input, "glob")
+    context = Map.get(input, "context", 0)
+    Logger.info("  [grep] '#{pattern}' in #{path}")
+
+    glob_flag = if file_glob, do: " --include='#{file_glob}'", else: ""
+    context_flag = if context > 0, do: " -C #{context}", else: ""
+
+    cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | head -500"
+
+    case Penbot.Sandbox.exec(cmd, timeout: 15_000) do
+      {:ok, %{output: output, exit_code: 0}} ->
+        {:continue, truncate(output, 50_000)}
+
+      {:ok, %{output: "", exit_code: 1}} ->
+        {:continue, "No matches found for '#{pattern}' in #{path}"}
+
+      {:ok, %{output: output}} ->
+        if output == "" do
+          {:continue, "No matches found for '#{pattern}' in #{path}"}
+        else
+          {:continue, truncate(output, 50_000)}
+        end
+
+      {:error, reason} ->
+        {:continue, "[error] #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "web_search", input: %{"query" => query}}) do
+    Logger.info("  [web_search] #{query}")
+
+    case Penbot.Web.search(query) do
+      {:ok, result} -> {:continue, truncate(result, 50_000)}
+      {:error, reason} -> {:continue, "[error] Web search failed: #{inspect(reason)}"}
+    end
+  end
+
+  def execute(%{name: "web_fetch", input: %{"url" => url}}) do
+    Logger.info("  [web_fetch] #{url}")
+
+    case Penbot.Web.fetch(url) do
+      {:ok, content} -> {:continue, truncate(content, 50_000)}
+      {:error, reason} -> {:continue, "[error] Web fetch failed: #{inspect(reason)}"}
+    end
+  end
+
   def execute(%{name: "think", input: %{"reasoning" => reasoning}}) do
     Logger.info("  [think] #{String.slice(reasoning, 0, 200)}")
     # The reasoning is captured in the conversation history.
@@ -121,6 +225,8 @@ defmodule Penbot.ToolHandler do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
+
+  defp escape(str), do: "'#{String.replace(str, "'", "'\\''")}'"
 
   defp truncate(text, max) when byte_size(text) > max do
     "[truncated to #{max} bytes]\n..." <>

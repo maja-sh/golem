@@ -336,9 +336,14 @@ defmodule Penbot.Runner do
     path
   end
 
-  defp summarize_input(%{name: "read_file", input: %{"path" => path}}) do
-    path
-  end
+  defp summarize_input(%{name: "read_file", input: %{"path" => path}}), do: path
+  defp summarize_input(%{name: "edit_file", input: %{"path" => path}}), do: path
+  defp summarize_input(%{name: "list_directory", input: %{"path" => path}}), do: path
+  defp summarize_input(%{name: "glob", input: %{"pattern" => p}}), do: p
+  defp summarize_input(%{name: "grep", input: %{"pattern" => p}}), do: p
+  defp summarize_input(%{name: "web_search", input: %{"query" => q}}), do: String.slice(q, 0, 100)
+  defp summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
+  defp summarize_input(%{name: "screenshot", input: _}), do: "display"
 
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"
