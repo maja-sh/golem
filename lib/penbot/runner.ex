@@ -37,24 +37,24 @@ defmodule Penbot.Runner do
 
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
-    case result do
-      {:ok, %{success: true} = s} ->
-        Logger.info("#{prefix}========== RUN SUCCEEDED ==========")
-        Logger.info("#{prefix}#{s.summary}")
+    if depth == 0 do
+      case result do
+        {:ok, %{success: success} = s} -> Penbot.TUI.run_complete(success, s.summary)
+        {:error, :max_steps_reached} -> Penbot.TUI.run_paused(run_id)
+        {:error, reason} -> Penbot.TUI.run_error(reason)
+      end
 
-      {:ok, %{success: false} = s} ->
-        Logger.info("#{prefix}========== RUN FAILED ==========")
-        Logger.info("#{prefix}#{s.summary}")
-
-      {:error, :max_steps_reached} ->
-        Logger.warning("#{prefix}========== RUN PAUSED (max steps) ==========")
-        Logger.warning("#{prefix}Resume with: Penbot.resume(\"#{run_id}\")")
-
-      {:error, reason} ->
-        Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
+      Penbot.TUI.stop()
     end
 
-    if depth == 0, do: Penbot.TUI.stop()
+    # Always log to file
+    case result do
+      {:ok, %{success: true} = s} -> Logger.info("#{prefix}RUN SUCCEEDED: #{s.summary}")
+      {:ok, %{success: false} = s} -> Logger.info("#{prefix}RUN FAILED: #{s.summary}")
+      {:error, :max_steps_reached} -> Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
+      {:error, reason} -> Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
+    end
+
     result
   end
 
@@ -115,6 +115,7 @@ defmodule Penbot.Runner do
     plan_result =
       case opts[:plan] do
         nil ->
+          if depth == 0, do: Penbot.TUI.planning()
           Logger.info("#{prefix}Planning with Opus...")
           create_plan(goal)
 
@@ -124,6 +125,7 @@ defmodule Penbot.Runner do
 
     case plan_result do
       {:ok, plan} ->
+        if depth == 0, do: Penbot.TUI.plan_created(plan)
         Logger.info("#{prefix}Plan:\n#{plan}")
 
         state = %{
@@ -249,7 +251,7 @@ defmodule Penbot.Runner do
     costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
     cost_str = "$#{format_cost(costs)}"
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
-    if state.depth == 0, do: Penbot.TUI.update_status(step, state.max_steps, cost_str)
+    if state.depth == 0, do: Penbot.TUI.step_header(step, state.max_steps, cost_str)
 
     model = Application.get_env(:penbot, :executor_model)
     max_tokens = Application.get_env(:penbot, :executor_max_tokens, 8000)
@@ -267,7 +269,10 @@ defmodule Penbot.Runner do
            thinking_budget: thinking_budget
          ) do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
-        if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
+        if response.text do
+          Logger.info("#{p}  Agent: #{response.text}")
+          if state.depth == 0, do: Penbot.TUI.agent_text(response.text)
+        end
         costs = accumulate_costs(costs, response.usage, model)
 
         if length(tool_calls) > 1 do
@@ -323,19 +328,28 @@ defmodule Penbot.Runner do
   end
 
   defp execute_tool_calls([tc | rest], depth, executed) do
-    Penbot.TUI.update_action(tc.name, summarize_input(tc))
+    detail = summarize_input(tc)
+    Penbot.TUI.tool_call(tc.name, detail)
 
     case Penbot.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
+        Penbot.TUI.tool_result("Done: #{summary.summary}")
         {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
 
       {:think_replan, reasoning} ->
+        Penbot.TUI.tool_result("Re-planning...")
         {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
 
       {:continue, result} ->
+        if String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code") do
+          Penbot.TUI.tool_error(result)
+        else
+          Penbot.TUI.tool_result(result)
+        end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
 
       {:continue_with_image, %{text: text, base64: base64}} ->
+        Penbot.TUI.tool_result(text)
         execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
     end
   end
@@ -387,6 +401,7 @@ defmodule Penbot.Runner do
 
   defp handle_replan(state, system, step, _tool_call, reasoning) do
     Logger.info("#{state.prefix}  Re-planning with Opus...")
+    if state.depth == 0, do: Penbot.TUI.planning("Re-planning with Opus...")
 
     # Take last 20 history entries for context
     recent = Enum.take(state.history, -20)
