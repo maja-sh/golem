@@ -107,10 +107,11 @@ defmodule Penbot.Tools do
         },
         required: ["url"]
       }),
-      tool("think", "Pause and reason deeply about the current situation. Use this when you're stuck, need to reconsider your approach, or face a complex decision. Your thinking will be used to revise the plan.", %{
+      tool("think", "Pause and reason about the current situation. Use this to synthesize findings, reflect on progress, or work through a complex decision. Set request_replan=true when you've gathered enough information and need the plan revised (e.g. after a research phase). Without replan, your reasoning is just captured in the conversation for context.", %{
         type: "object",
         properties: %{
-          reasoning: %{type: "string", description: "Your detailed analysis of the situation, what's working, what isn't, and what to try next"}
+          reasoning: %{type: "string", description: "Your detailed analysis — what you've learned, what's working, what isn't, what to do next"},
+          request_replan: %{type: "boolean", description: "Set to true to trigger a full plan revision based on your reasoning. Use after research phases or when the current plan is fundamentally wrong. Default: false."}
         },
         required: ["reasoning"]
       }),

@@ -151,11 +151,16 @@ defmodule Penbot.ToolHandler do
     end
   end
 
-  def execute(%{name: "think", input: %{"reasoning" => reasoning}}, _depth) do
-    Logger.info("  [think] #{String.slice(reasoning, 0, 200)}")
-    # The reasoning is captured in the conversation history.
-    # Signal the runner to consider re-planning.
-    {:think, reasoning}
+  def execute(%{name: "think", input: input}, _depth) do
+    reasoning = Map.fetch!(input, "reasoning")
+    replan = Map.get(input, "request_replan", false)
+    Logger.info("  [think#{if replan, do: " + replan", else: ""}] #{String.slice(reasoning, 0, 200)}")
+
+    if replan do
+      {:think_replan, reasoning}
+    else
+      {:continue, "Reasoning noted. Continue with your next action."}
+    end
   end
 
   def execute(%{name: "screenshot", input: _input}, _depth) do

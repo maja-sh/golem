@@ -200,7 +200,7 @@ defmodule Penbot.Runner do
           {:done, summary} ->
             {:ok, summary}
 
-          {:think, reasoning} ->
+          {:think_replan, reasoning} ->
             # Re-plan with Opus
             handle_replan(state, system, step, tool_call, reasoning)
 
