@@ -241,7 +241,8 @@ defmodule Penbot.Runner do
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} ---")
 
     model = Application.get_env(:penbot, :executor_model)
-    max_tokens = Application.get_env(:penbot, :executor_max_tokens, 4096)
+    max_tokens = Application.get_env(:penbot, :executor_max_tokens, 8000)
+    thinking_budget = Application.get_env(:penbot, :thinking_budget, 10_000)
     tools = Penbot.Tools.for_depth(state.depth)
 
     # Trim messages if conversation is getting long
@@ -251,38 +252,35 @@ defmodule Penbot.Runner do
            model: model,
            max_tokens: max_tokens,
            system: system,
-           tools: tools
+           tools: tools,
+           thinking_budget: thinking_budget
          ) do
-      {:ok, %{tool_use: [tool_call | _]} = response} ->
+      {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
         if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
 
-        # Execute the tool (pass depth for sub-agent spawning)
-        case Penbot.ToolHandler.execute(tool_call, state.depth) do
-          {:done, summary} ->
+        if length(tool_calls) > 1 do
+          Logger.info("#{p}  #{length(tool_calls)} tool calls in this turn")
+        end
+
+        # Execute all tool calls, stopping early on done/think_replan
+        case execute_tool_calls(tool_calls, state.depth) do
+          {:done, summary, executed} ->
+            # Build messages for the tools that ran before done
+            messages = append_multi_tool_exchange(messages, response, executed)
+            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
+            maybe_save(state)
             {:ok, summary}
 
-          {:think_replan, reasoning} ->
-            # Re-plan with Opus
-            handle_replan(state, system, step, tool_call, reasoning)
+          {:think_replan, reasoning, executed} ->
+            messages = append_multi_tool_exchange(messages, response, executed)
+            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
+            # Use the last tool_call (the think one) for replan
+            last_tc = List.last(executed) |> elem(0)
+            handle_replan(state, system, step, last_tc, reasoning)
 
-          {:continue, result} ->
-            messages = append_tool_exchange(messages, response, tool_call, result)
-
-            input_summary = summarize_input(tool_call)
-            result_summary = String.slice(result, 0, 200)
-            history = state.history ++ [{tool_call.name, input_summary, result_summary}]
-
-            state = %{state | messages: messages, step: step, history: history}
-            maybe_save(state)
-            loop(state, system)
-
-          {:continue_with_image, %{text: text, base64: base64}} ->
-            messages = append_tool_exchange_with_image(messages, response, tool_call, text, base64)
-
-            input_summary = summarize_input(tool_call)
-            history = state.history ++ [{tool_call.name, input_summary, "[screenshot]"}]
-
-            state = %{state | messages: messages, step: step, history: history}
+          {:continue, executed} ->
+            messages = append_multi_tool_exchange(messages, response, executed)
+            state = %{state | messages: messages, step: step, history: update_history(state.history, executed)}
             maybe_save(state)
             loop(state, system)
         end
@@ -298,38 +296,94 @@ defmodule Penbot.Runner do
 
       {:error, reason} ->
         Logger.error("#{p}  Claude API error: #{inspect(reason)}")
-
-        # Retry once after a short delay
-        if Map.get(state, :retried, false) do
-          {:error, reason}
-        else
-          Process.sleep(5_000)
-          loop(Map.put(state, :retried, true), system)
-        end
+        {:error, reason}
     end
   end
 
-  defp handle_replan(state, system, step, tool_call, reasoning) do
+  # Execute multiple tool calls sequentially. Stops early on :done or :think_replan.
+  # Returns {action, list_of_{tool_call, result}} where action is :continue, {:done, summary}, or {:think_replan, reasoning}
+  defp execute_tool_calls(tool_calls, depth) do
+    execute_tool_calls(tool_calls, depth, [])
+  end
+
+  defp execute_tool_calls([], _depth, executed) do
+    {:continue, Enum.reverse(executed)}
+  end
+
+  defp execute_tool_calls([tc | rest], depth, executed) do
+    case Penbot.ToolHandler.execute(tc, depth) do
+      {:done, summary} ->
+        {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
+
+      {:think_replan, reasoning} ->
+        {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
+
+      {:continue, result} ->
+        execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
+
+      {:continue_with_image, %{text: text, base64: base64}} ->
+        execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
+    end
+  end
+
+  # Build assistant + user messages for multiple tool calls in one turn
+  defp append_multi_tool_exchange(messages, response, executed) do
+    # Assistant message: text (if any) + all tool_use blocks
+    assistant_content =
+      (if response.text, do: [%{type: "text", text: response.text}], else: []) ++
+        Enum.map(executed, fn {tc, _result} ->
+          %{type: "tool_use", id: tc.id, name: tc.name, input: tc.input}
+        end)
+
+    # User message: all tool_result blocks
+    tool_results =
+      Enum.map(executed, fn {tc, result} ->
+        content =
+          case result do
+            {:text, text} -> text
+            {:image, text, base64} ->
+              [
+                %{type: "text", text: text},
+                %{type: "image", source: %{type: "base64", media_type: "image/png", data: base64}}
+              ]
+          end
+
+        %{type: "tool_result", tool_use_id: tc.id, content: content}
+      end)
+
+    messages ++ [
+      %{role: "assistant", content: assistant_content},
+      %{role: "user", content: tool_results}
+    ]
+  end
+
+  defp update_history(history, executed) do
+    new_entries =
+      Enum.map(executed, fn {tc, result} ->
+        input_summary = summarize_input(tc)
+        result_summary = case result do
+          {:text, text} -> String.slice(text, 0, 200)
+          {:image, _, _} -> "[screenshot]"
+        end
+        {tc.name, input_summary, result_summary}
+      end)
+
+    history ++ new_entries
+  end
+
+  defp handle_replan(state, system, step, _tool_call, reasoning) do
     Logger.info("#{state.prefix}  Re-planning with Opus...")
 
     # Take last 20 history entries for context
     recent = Enum.take(state.history, -20)
 
+    # State already has the tool exchange messages appended from execute_tool_calls
     case replan(state.goal, state.plan, reasoning, recent) do
       {:ok, new_plan} ->
         Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
 
-        # Add the think exchange to messages, then inject the new plan
         messages =
-          append_tool_exchange(
-            state.messages,
-            %{text: nil, tool_use: [tool_call], thinking: nil, stop_reason: "tool_use"},
-            tool_call,
-            "Plan has been revised. See updated plan below."
-          )
-
-        messages =
-          messages ++
+          state.messages ++
             [%{role: "user", content: "## Revised Plan\n\n#{new_plan}\n\nContinue executing from where you left off."}]
 
         state = %{state | messages: messages, plan: new_plan, step: step}
@@ -337,14 +391,10 @@ defmodule Penbot.Runner do
 
       {:error, reason} ->
         Logger.error("#{state.prefix}  Re-planning failed: #{inspect(reason)}")
-        # Continue with old plan
+
         messages =
-          append_tool_exchange(
-            state.messages,
-            %{text: nil, tool_use: [tool_call], thinking: nil, stop_reason: "tool_use"},
-            tool_call,
-            "Re-planning failed. Continue with the current plan."
-          )
+          state.messages ++
+            [%{role: "user", content: "Re-planning failed. Continue with the current plan."}]
 
         state = %{state | messages: messages, step: step}
         loop(state, system)
@@ -352,86 +402,6 @@ defmodule Penbot.Runner do
   end
 
   # --- Message Management ---
-
-  # Build the assistant message content blocks and tool result for Claude's
-  # tool_use conversation format
-  defp append_tool_exchange(messages, response, tool_call, result) do
-    # Assistant message with content blocks (text + tool_use)
-    assistant_content =
-      []
-      |> maybe_add_text(response.text)
-      |> Kernel.++([
-        %{
-          type: "tool_use",
-          id: tool_call.id,
-          name: tool_call.name,
-          input: tool_call.input
-        }
-      ])
-
-    # User message with tool_result
-    tool_result = %{
-      role: "user",
-      content: [
-        %{
-          type: "tool_result",
-          tool_use_id: tool_call.id,
-          content: result
-        }
-      ]
-    }
-
-    messages ++
-      [
-        %{role: "assistant", content: assistant_content},
-        tool_result
-      ]
-  end
-
-  # Same as append_tool_exchange but includes an image in the tool result
-  defp append_tool_exchange_with_image(messages, response, tool_call, text, base64) do
-    assistant_content =
-      []
-      |> maybe_add_text(response.text)
-      |> Kernel.++([
-        %{
-          type: "tool_use",
-          id: tool_call.id,
-          name: tool_call.name,
-          input: tool_call.input
-        }
-      ])
-
-    tool_result = %{
-      role: "user",
-      content: [
-        %{
-          type: "tool_result",
-          tool_use_id: tool_call.id,
-          content: [
-            %{type: "text", text: text},
-            %{
-              type: "image",
-              source: %{
-                type: "base64",
-                media_type: "image/png",
-                data: base64
-              }
-            }
-          ]
-        }
-      ]
-    }
-
-    messages ++
-      [
-        %{role: "assistant", content: assistant_content},
-        tool_result
-      ]
-  end
-
-  defp maybe_add_text(blocks, nil), do: blocks
-  defp maybe_add_text(blocks, text), do: blocks ++ [%{type: "text", text: text}]
 
   # Keep conversation manageable. When messages exceed the threshold,
   # summarize older turns into a compact recap using a cheap LLM call.
