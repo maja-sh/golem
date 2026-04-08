@@ -240,6 +240,8 @@ defmodule Penbot.Runner do
   defp loop(state, system) do
     step = state.step + 1
     p = state.prefix
+    # Make run_id available to tool handlers (for ask_user Discord messages)
+    if run_id = Map.get(state, :run_id), do: Process.put(:penbot_run_id, run_id)
     costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | $#{format_cost(costs)} ---")
 
@@ -509,6 +511,7 @@ defmodule Penbot.Runner do
   defp summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
   defp summarize_input(%{name: "screenshot", input: _}), do: "display"
   defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
+  defp summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
 
   defp summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"

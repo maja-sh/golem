@@ -163,6 +163,22 @@ defmodule Penbot.ToolHandler do
     end
   end
 
+  def execute(%{name: "ask_user", input: %{"question" => question}}, _depth) do
+    Logger.info("  [ask_user] #{String.slice(question, 0, 200)}")
+
+    # Get run_id from the process dictionary (set by the runner)
+    run_id = Process.get(:penbot_run_id, "unknown")
+
+    case Penbot.Discord.ask(question, run_id) do
+      {:ok, reply} ->
+        {:continue, "User replied: #{reply}"}
+
+      {:error, reason} ->
+        Logger.error("  [ask_user] Discord error: #{inspect(reason)}")
+        {:continue, "[error] Could not reach the user via Discord. Make your best judgment and continue."}
+    end
+  end
+
   def execute(%{name: "screenshot", input: _input}, _depth) do
     Logger.info("  [screenshot]")
 

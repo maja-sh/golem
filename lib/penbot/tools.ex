@@ -8,15 +8,16 @@ defmodule Penbot.Tools do
   @doc """
   Returns tool definitions for the given nesting depth.
   Sub-agent tool is excluded when at max depth.
+  ask_user is only available when Discord is connected.
   """
   def for_depth(depth \\ 0) do
     base = base_tools()
 
-    if depth < @max_agent_depth do
-      base ++ [sub_agent_tool()]
-    else
-      base
-    end
+    extras =
+      (if depth < @max_agent_depth, do: [sub_agent_tool()], else: []) ++
+        (if discord_available?(), do: [ask_user_tool()], else: [])
+
+    base ++ extras
   end
 
   @doc """
@@ -32,6 +33,16 @@ defmodule Penbot.Tools do
         context: %{type: "string", description: "Any relevant context the sub-agent needs (file paths, decisions made so far, constraints)"}
       },
       required: ["goal"]
+    })
+  end
+
+  defp ask_user_tool do
+    tool("ask_user", "Ask the human operator a question via Discord and wait for their response. Use this when you face a decision that significantly affects the outcome — e.g. choosing between product ideas, picking a tech stack, or confirming a risky action. The question is sent via Discord and the run pauses until they reply. Don't use this for trivial decisions you can make yourself.", %{
+      type: "object",
+      properties: %{
+        question: %{type: "string", description: "The question to ask. Be specific — present options if applicable, include your recommendation and reasoning."}
+      },
+      required: ["question"]
     })
   end
 
@@ -159,6 +170,10 @@ defmodule Penbot.Tools do
         required: ["success", "summary"]
       })
     ]
+  end
+
+  defp discord_available? do
+    System.get_env("DISCORD_TOKEN") != nil
   end
 
   defp tool(name, description, input_schema) do

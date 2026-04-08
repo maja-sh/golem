@@ -5,12 +5,27 @@ defmodule Penbot.Application do
   def start(_type, _args) do
     setup_file_logger()
 
+    token = System.get_env("DISCORD_TOKEN")
+
+    if token do
+      Application.put_env(:nostrum, :token, token)
+    end
+
     children = [
       Penbot.Sandbox
     ]
 
     opts = [strategy: :one_for_one, name: Penbot.Supervisor]
-    Supervisor.start_link(children, opts)
+    {:ok, pid} = Supervisor.start_link(children, opts)
+
+    # Start Discord if token is available
+    if token do
+      Penbot.Discord.init_waiter()
+      Application.ensure_all_started(:nostrum)
+      Supervisor.start_child(Penbot.Supervisor, Penbot.Discord)
+    end
+
+    {:ok, pid}
   end
 
   defp setup_file_logger do
