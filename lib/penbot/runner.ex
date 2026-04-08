@@ -241,11 +241,11 @@ defmodule Penbot.Runner do
         Logger.error("#{p}  Claude API error: #{inspect(reason)}")
 
         # Retry once after a short delay
-        if state[:retried] do
+        if Map.get(state, :retried, false) do
           {:error, reason}
         else
           Process.sleep(5_000)
-          loop(%{state | retried: true}, system)
+          loop(Map.put(state, :retried, true), system)
         end
     end
   end
@@ -374,13 +374,18 @@ defmodule Penbot.Runner do
   defp maybe_add_text(blocks, nil), do: blocks
   defp maybe_add_text(blocks, text), do: blocks ++ [%{type: "text", text: text}]
 
-  # Keep conversation manageable — trim middle turns when too long
-  defp trim_messages(messages) when length(messages) <= 40, do: messages
+  # Keep conversation manageable — trim middle turns when too long.
+  # Messages come in pairs (assistant tool_use + user tool_result),
+  # so we must always keep an even number from the tail and never
+  # split a pair. We keep only the first message (initial goal/plan).
+  defp trim_messages(messages) when length(messages) <= 41, do: messages
 
   defp trim_messages(messages) do
-    # Keep first 2 messages (initial context) and last 36
-    {head, tail} = Enum.split(messages, 2)
-    head ++ Enum.take(tail, -36)
+    [first | rest] = messages
+    # Keep last 38 messages (19 pairs of assistant+user)
+    keep = min(38, length(rest))
+    keep = keep - rem(keep, 2)
+    [first | Enum.take(rest, -keep)]
   end
 
   defp summarize_input(%{name: "shell", input: %{"command" => cmd}}) do
