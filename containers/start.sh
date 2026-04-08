@@ -22,6 +22,7 @@ fi
 echo "Creating container $CONTAINER_NAME with persistent volume..."
 podman run -d \
   --name "$CONTAINER_NAME" \
+  --privileged \
   -v penbot-data:/home/agent \
   "$IMAGE"
 

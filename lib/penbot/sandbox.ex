@@ -118,6 +118,7 @@ defmodule Penbot.Sandbox do
     case System.cmd("podman", [
            "run", "-d",
            "--name", container,
+           "--privileged",
            "-v", "penbot-data:/home/agent",
            "#{container}:latest"
          ], stderr_to_stdout: true) do
