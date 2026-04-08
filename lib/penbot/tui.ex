@@ -41,14 +41,15 @@ defmodule Penbot.TUI do
   Called from the streaming callback — bypasses GenServer for low latency.
   """
   def stream_text(chunk) do
-    IO.write(chunk)
+    :io.put_chars(chunk)
   end
 
   @doc """
-  End streaming — prints a newline.
+  End streaming — prints a newline and redraws the status area.
   """
   def stream_end do
     IO.write("\n")
+    GenServer.call(__MODULE__, :redraw_status)
   end
 
   def tool_call(name, detail) do
@@ -147,7 +148,7 @@ defmodule Penbot.TUI do
   # --- GenServer ---
 
   @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-  @spinner_interval 500
+  @spinner_interval 200
 
   @forge_verbs [
     "Forging", "Hammering", "Smelting", "Tempering", "Quenching",
@@ -184,6 +185,11 @@ defmodule Penbot.TUI do
   def handle_call({:stream_start}, _from, state) do
     state = erase_status(state)
     IO.write(IO.ANSI.format([:cyan, "\n● ", :reset]))
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:redraw_status, _from, state) do
+    state = draw_status(state)
     {:reply, :ok, state}
   end
 

@@ -202,10 +202,14 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "update_progress", input: %{"items" => items}}, _depth) do
     parsed =
       Enum.map(items, fn item ->
-        %{
-          text: Map.get(item, "text", ""),
-          status: String.to_atom(Map.get(item, "status", "pending"))
-        }
+        status =
+          case Map.get(item, "status", "pending") do
+            s when s in ["completed", "complete", "done"] -> :completed
+            s when s in ["in_progress", "in-progress", "working", "active"] -> :in_progress
+            _ -> :pending
+          end
+
+        %{text: Map.get(item, "text", ""), status: status}
       end)
 
     completed = Enum.count(parsed, &(&1.status == :completed))
