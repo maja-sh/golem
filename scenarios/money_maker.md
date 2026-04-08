@@ -35,6 +35,19 @@ Research the current landscape of small, profitable software products (micro-Saa
 - Generate ideas from your general knowledge without searching first
 - Pick the first idea that sounds good — research at least 5-7 different niches
 - Move to Phase 2 until you have concrete evidence (real URLs, real pricing data, real user complaints)
+- Suggest anything in these saturated categories (every LLM suggests these — they're NOT gaps):
+  - Uptime/status page monitoring (Statuspage, BetterUptime, dozens more)
+  - URL shorteners
+  - Invoice/billing tools (Stripe already does this)
+  - Webhook debugging/relay (ngrok, RequestBin alternatives exist)
+  - Social media schedulers
+  - Link-in-bio pages
+  - Habit trackers
+  - Bookmark managers
+  - Email signature generators
+  - QR code generators
+  - Generic "API for X" where X already has 5+ providers
+- The idea needs to be SPECIFIC and UNIQUE — not a category, but a particular pain point that you found real people complaining about. "PDF invoicing" is a category. "Converting French CERFA tax forms to structured JSON for accounting software" is a specific pain point.
 
 ### Phase 2: Validate and Decide
 
@@ -45,7 +58,9 @@ After researching, you need to validate your top 2-3 ideas before committing.
 - The actual pricing of competitors
 - How people currently solve the problem (workarounds, spreadsheets, manual processes)
 
-Use `think` (without replan) to synthesize your findings. Evaluate each opportunity against ALL of these criteria:
+Use `think` (without replan) to synthesize your findings. Then use `ask_user` to present your top 2-3 candidates to the human operator with your analysis and recommendation. Let them pick or redirect you before you commit to building anything.
+
+Evaluate each opportunity against ALL of these criteria:
 - **Market gap**: Is there a REAL underserved need? Cite your evidence.
 - **Revenue potential**: What are realistic monthly revenue scenarios? (pessimistic / realistic / optimistic)
 - **Scope**: Can it be built as an MVP in under 1000 lines of code? No external services beyond a database and maybe email.
