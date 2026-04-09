@@ -54,7 +54,7 @@ defmodule Penbot.ToolHandler do
         end
       content ->
         Logger.info("  [read_file] cache hit for #{path}")
-        {:continue, truncate(content, 50_000)}
+        {:continue, "[cached — you've already read/written this file]\n#{truncate(content, 50_000)}"}
     end
   end
 

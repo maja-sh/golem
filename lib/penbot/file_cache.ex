@@ -6,6 +6,7 @@ defmodule Penbot.FileCache do
   """
 
   use Agent
+  require Logger
 
   def start_link(_opts) do
     Agent.start_link(fn -> %{} end, name: __MODULE__)
@@ -22,7 +23,6 @@ defmodule Penbot.FileCache do
         case container_hash(path) do
           {:ok, ^hash} -> content
           _ ->
-            # File changed externally, invalidate
             Agent.update(__MODULE__, &Map.delete(&1, path))
             nil
         end
@@ -40,7 +40,6 @@ defmodule Penbot.FileCache do
   @doc """
   Find lines near a target string in cached content.
   Returns context to help the agent fix a failed edit.
-  Does NOT verify hash — caller should have already read/verified.
   """
   def find_context(path, target, context_lines \\ 3) do
     case Agent.get(__MODULE__, &Map.get(&1, path)) do
@@ -51,7 +50,6 @@ defmodule Penbot.FileCache do
 
   defp do_find_context(content, target, context_lines) do
     lines = String.split(content, "\n")
-    # Use first line of target for matching
     target_first = target |> String.split("\n") |> List.first("") |> String.trim()
     target_lower = String.downcase(String.slice(target_first, 0, 100))
 
