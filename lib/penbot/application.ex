@@ -13,6 +13,7 @@ defmodule Penbot.Application do
 
     children = [
       Penbot.Sandbox,
+      Penbot.FileCache,
       Penbot.TUI
     ]
 

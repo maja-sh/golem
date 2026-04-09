@@ -33,7 +33,9 @@ defmodule Penbot.ToolHandler do
     Logger.info("  [write_file] #{path} (#{byte_size(content)} bytes)")
 
     case Penbot.Sandbox.write_file(path, content) do
-      :ok -> {:continue, "File written to #{path}"}
+      :ok ->
+        Penbot.FileCache.put(path, content)
+        {:continue, "File written to #{path}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
     end
   end
@@ -41,32 +43,62 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "read_file", input: %{"path" => path}}, _depth) do
     Logger.info("  [read_file] #{path}")
 
-    case Penbot.Sandbox.read_file(path) do
-      {:ok, content} -> {:continue, truncate(content, 50_000)}
-      {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+    # Check cache first (verifies hash against container)
+    case Penbot.FileCache.get(path) do
+      nil ->
+        case Penbot.Sandbox.read_file(path) do
+          {:ok, content} ->
+            Penbot.FileCache.put(path, content)
+            {:continue, truncate(content, 50_000)}
+          {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
+        end
+      content ->
+        Logger.info("  [read_file] cache hit for #{path}")
+        {:continue, truncate(content, 50_000)}
     end
   end
 
   def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}, _depth) do
     Logger.info("  [edit_file] #{path}")
 
-    case Penbot.Sandbox.read_file(path) do
-      {:ok, content} ->
+    # Try cache first, fall back to reading from container
+    content =
+      case Penbot.FileCache.get(path) do
+        nil ->
+          case Penbot.Sandbox.read_file(path) do
+            {:ok, c} -> c
+            {:error, reason} -> {:error, reason}
+          end
+        c -> c
+      end
+
+    case content do
+      {:error, reason} ->
+        {:continue, "[error] Failed to read #{path}: #{inspect(reason)}"}
+
+      content ->
         case String.split(content, old, parts: 2) do
           [_before, _after] ->
             updated = String.replace(content, old, new, global: false)
 
             case Penbot.Sandbox.write_file(path, updated) do
-              :ok -> {:continue, "Edit applied to #{path}"}
-              {:error, reason} -> {:continue, "[error] Failed to write: #{inspect(reason)}"}
+              :ok ->
+                Penbot.FileCache.put(path, updated)
+                {:continue, "Edit applied to #{path}"}
+              {:error, reason} ->
+                {:continue, "[error] Failed to write: #{inspect(reason)}"}
             end
 
           [_no_match] ->
-            {:continue, "[error] old_string not found in #{path}. Make sure it matches exactly, including whitespace and indentation."}
-        end
+            # Show context from the file to help the agent fix the edit
+            hint =
+              case Penbot.FileCache.find_context(path, old) do
+                nil -> ""
+                ctx -> "\n\nClosest match in file:\n#{ctx}"
+              end
 
-      {:error, reason} ->
-        {:continue, "[error] Failed to read #{path}: #{inspect(reason)}"}
+            {:continue, "[error] old_string not found in #{path}. Make sure it matches exactly, including whitespace and indentation.#{hint}"}
+        end
     end
   end
 
