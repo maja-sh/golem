@@ -287,9 +287,15 @@ defmodule Penbot.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
+    # Move up to start of status area
     IO.write("\e[#{n}A")
-    for _ <- 1..n, do: IO.write("\e[2K\n")
-    IO.write("\e[#{n}A")
+    # Clear each line without adding newlines to scroll buffer
+    for i <- 1..n do
+      IO.write("\e[2K")
+      if i < n, do: IO.write("\e[1B")
+    end
+    # Move back to start
+    IO.write("\e[#{n - 1}A\r")
     %{state | status_lines: 0}
   end
 
