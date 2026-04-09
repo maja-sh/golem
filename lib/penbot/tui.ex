@@ -76,7 +76,7 @@ defmodule Penbot.TUI do
   def show_diff(path, old_content, new_content) do
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
-      GenServer.call(__MODULE__, {:print_raw, diff_lines})
+      GenServer.call(__MODULE__, {:print_raw, diff_lines ++ [[]]})
     end
   end
 
