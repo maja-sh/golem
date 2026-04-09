@@ -19,6 +19,12 @@ defmodule Golem.TUI do
 
   def init_display(run_id, goal) do
     Application.ensure_all_started(:owl)
+
+    # Ensure LiveScreen is running — it may have crashed on boot
+    unless Process.whereis(Owl.LiveScreen) do
+      Owl.LiveScreen.start_link(name: Owl.LiveScreen)
+    end
+
     Logger.configure(level: :warning)
 
     puts([Owl.Data.tag("● ", :cyan), Owl.Data.tag("Forge ", [:bright, :white]), Owl.Data.tag(run_id, :faint)])
