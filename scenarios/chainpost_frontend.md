@@ -1,4 +1,4 @@
-# Cryptogram Frontend: Tauri + React Desktop Client
+# ChainPost Frontend: Tauri + React Desktop Client
 
 **Difficulty:** Hard
 **Expected steps:** 150-300
@@ -7,13 +7,13 @@
 
 ## Goal
 
-Build a desktop client for the Cryptogram blockchain microblogging platform using Tauri 2 + React. The client connects to a Cryptogram node's API and provides a Twitter-like experience for creating accounts, posting, following users, and browsing feeds.
+Build a desktop client for the ChainPost blockchain microblogging platform using Tauri 2 + React. The client connects to a ChainPost node's API and provides a Twitter-like experience for creating accounts, posting, following users, and browsing feeds.
 
 ### Environment
 
 You have root access to a Ubuntu 24.04 container. Install Node.js 20+ (already available), Rust (install via rustup), and Tauri prerequisites. Firefox is available on DISPLAY=:99 for visual testing.
 
-Put everything in `/home/agent/cryptogram-client/`.
+Put everything in `/home/agent/chainpost-client/`.
 
 ---
 
@@ -38,7 +38,7 @@ Put everything in `/home/agent/cryptogram-client/`.
 │  └──────────────┬─────────────────────┘  │
 │                 │                         │
 │                 ▼                         │
-│        Cryptogram Node API               │
+│        ChainPost Node API               │
 │        (localhost:3030)                   │
 └─────────────────────────────────────────┘
 ```
@@ -238,12 +238,10 @@ Use the `browse` tool to open the Tauri dev server in Firefox on the virtual dis
 
 ---
 
-## Reference Code
+## Notes
 
-The operator's previous frontend is at `/Users/hbackman/workspace2/cryptogram-client`. Key files:
-- `src/store/auth.js` — Auth state with mnemonic/keypair management
-- `src/screens/` — Screen layouts (Vue, but the UX patterns apply)
-- `src/components/post/Post.vue` — Post card design
-- `src-tauri/src/lib.rs` — Tauri crypto commands
-
-This rebuild uses React instead of Vue, but the UX flow should be similar.
+The previous client ("cryptogram-client") used Vue 3 + Tauri. This rebuild uses React + Tauri 2. The UX flow should be similar:
+- BIP39 mnemonic for account creation/recovery
+- Ed25519 signing in the Tauri Rust backend
+- Pinia-style state management → React Context
+- Axios HTTP client → fetch

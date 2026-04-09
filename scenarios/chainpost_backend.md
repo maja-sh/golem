@@ -1,4 +1,4 @@
-# Cryptogram Backend: Blockchain Microblogging Platform
+# ChainPost Backend: Blockchain Microblogging Platform
 
 **Difficulty:** Very Hard
 **Expected steps:** 200-400
@@ -9,13 +9,13 @@
 
 Build the backend for a decentralized microblogging platform powered by a proof-of-work blockchain. Every action (post, user registration, follow, etc.) is a signed transaction included in mined blocks. There is no central authority — any node can join the P2P network and participate.
 
-The operator has a previous attempt at `/Users/hbackman/workspace2/cryptogram` — use it for reference on design decisions, but this is a fresh rebuild with improved architecture.
+This is a fresh build of a project previously called "cryptogram." The architecture has been redesigned with transactions-in-blocks, Heed-only indexing, and a proper sync protocol.
 
 ### Environment
 
 You have root access to a Ubuntu 24.04 container. Rust is NOT pre-installed — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y` as the first build step. You'll also need build-essential and pkg-config for native deps.
 
-Put everything in `/home/agent/cryptogram/`.
+Put everything in `/home/agent/chainpost/`.
 
 ---
 
@@ -135,8 +135,8 @@ When a block is added, the indexer processes each transaction and updates the re
 
 ### Protocols
 1. **Gossipsub** — broadcast new blocks and new transactions
-   - Topic: `cryptogram/blocks/1.0.0` — new mined blocks
-   - Topic: `cryptogram/txs/1.0.0` — new transactions (pre-mining)
+   - Topic: `chainpost/blocks/1.0.0` — new mined blocks
+   - Topic: `chainpost/txs/1.0.0` — new transactions (pre-mining)
 
 2. **Request-Response** — chain sync
    - `ChainLength` request → returns current chain height
@@ -229,7 +229,7 @@ This requires no ML — just graph traversal and scoring at query time.
 ## Project Structure
 
 ```
-cryptogram/
+chainpost/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs              # CLI args, node startup
@@ -395,13 +395,11 @@ tracing-subscriber = "0.3"
 
 ---
 
-## Reference Code
+## Notes
 
-The operator's previous attempt is at `/home/agent/../../Users/hbackman/workspace2/cryptogram`. Key files to look at for design inspiration:
-- `src/blockchain/block.rs` — Block structure and PoW
-- `src/blockchain/chain.rs` — Chain validation
-- `src/blockchain/store.rs` — Heed storage
-- `src/p2p/service.rs` — libp2p event loop
-- `src/api/` — Warp API (we'll use axum instead)
-
-Do NOT copy code directly — this is a fresh implementation with a different architecture (transactions in blocks, Heed-only indexing, proper sync protocol).
+This is a from-scratch implementation. The previous attempt ("cryptogram") used:
+- One block per action (we use transactions-in-blocks instead)
+- Heed + SQLite for indexing (we use Heed-only with pointer indexes)
+- No chain sync protocol (we implement proper sync)
+- Warp for API (we use axum)
+- Single-threaded mining that blocked P2P (we use spawn_blocking)
