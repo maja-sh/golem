@@ -357,9 +357,13 @@ defmodule Penbot.Runner do
     {:continue, Enum.reverse(executed)}
   end
 
+  @silent_tools ~w(update_progress)
+
   defp execute_tool_calls([tc | rest], depth, executed) do
     detail = summarize_input(tc)
-    Penbot.TUI.tool_call(tc.name, detail)
+    silent = tc.name in @silent_tools
+
+    if not silent, do: Penbot.TUI.tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
 
@@ -376,16 +380,18 @@ defmodule Penbot.Runner do
 
       {:continue, result} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        if String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code") do
-          Penbot.TUI.tool_error(tc.name, detail, result)
-        else
-          Penbot.TUI.tool_result(tc.name, detail, result, elapsed, nil)
+        if not silent do
+          if String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code") do
+            Penbot.TUI.tool_error(tc.name, detail, result)
+          else
+            Penbot.TUI.tool_result(tc.name, detail, result, elapsed, nil)
+          end
         end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        Penbot.TUI.tool_result(tc.name, detail, text, elapsed, nil)
+        if not silent, do: Penbot.TUI.tool_result(tc.name, detail, text, elapsed, nil)
         execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
     end
   end
