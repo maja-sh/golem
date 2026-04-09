@@ -43,6 +43,9 @@ defmodule Golem.State do
       depth: state.depth,
       history: encode_history(state.history),
       messages: state.messages,
+      costs: Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
+      errors: Map.get(state, :errors, []),
+      agents_md: Map.get(state, :agents_md),
       saved_at: DateTime.utc_now() |> DateTime.to_iso8601()
     }
 
@@ -69,7 +72,10 @@ defmodule Golem.State do
           max_steps: data["max_steps"],
           depth: data["depth"],
           history: decode_history(data["history"]),
-          messages: atomize_messages(data["messages"])
+          messages: atomize_messages(data["messages"]),
+          costs: decode_costs(data["costs"]),
+          errors: data["errors"] || [],
+          agents_md: data["agents_md"]
         }
 
         {:ok, state}
@@ -124,6 +130,16 @@ defmodule Golem.State do
     Enum.map(history || [], fn entry ->
       {entry["tool"], entry["input"], entry["result"]}
     end)
+  end
+
+  defp decode_costs(nil), do: %{input: 0, output: 0, cache_read: 0, cache_create: 0}
+  defp decode_costs(costs) do
+    %{
+      input: Map.get(costs, "input", 0),
+      output: Map.get(costs, "output", 0),
+      cache_read: Map.get(costs, "cache_read", 0),
+      cache_create: Map.get(costs, "cache_create", 0)
+    }
   end
 
   # Ensure message keys are atoms (role, content) when loaded from JSON
