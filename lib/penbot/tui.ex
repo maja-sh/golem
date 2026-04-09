@@ -453,16 +453,21 @@ defmodule Penbot.TUI do
 
   # --- Syntax Highlighting ---
 
+  defp highlight_line("", _lang), do: ""
   defp highlight_line(line, nil), do: line
   defp highlight_line(line, lang) do
     case bat_path() do
       nil -> line
       bat ->
-        case System.cmd(bat, [
-               "--color=always", "--style=plain", "--language=#{lang}",
-               "--paging=never", "-"
-             ], input: line, stderr_to_stdout: true) do
-          {highlighted, 0} -> String.trim_trailing(highlighted)
+        try do
+          case System.cmd(bat, [
+                 "--color=always", "--style=plain", "--language=#{lang}",
+                 "--paging=never", "-"
+               ], input: line, stderr_to_stdout: true) do
+            {highlighted, 0} -> String.trim_trailing(highlighted)
+            _ -> line
+          end
+        rescue
           _ -> line
         end
     end
