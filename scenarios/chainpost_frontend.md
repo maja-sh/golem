@@ -9,11 +9,9 @@
 
 Build a desktop client for the ChainPost blockchain microblogging platform using Tauri 2 + React. The client connects to a ChainPost node's API and provides a Twitter-like experience for creating accounts, posting, following users, and browsing feeds.
 
-### Environment
+### Setup
 
-You have root access to a Ubuntu 24.04 container. Install Node.js 20+ (already available), Rust (install via rustup), and Tauri prerequisites. Firefox is available on DISPLAY=:99 for visual testing.
-
-Put everything in `/home/agent/chainpost-client/`.
+Put everything in `/home/agent/chainpost-client/`. Install Rust and Tauri prerequisites as the first step. Node.js is already available. Firefox is on DISPLAY=:99 for visual testing with the `browse` tool.
 
 ---
 

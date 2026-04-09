@@ -24,11 +24,9 @@ Browse these for design inspiration, but do NOT copy code directly — the archi
 - axum for API (reference uses Warp)
 - Non-blocking mining via spawn_blocking (reference blocks the P2P loop)
 
-### Environment
+### Setup
 
-You have root access to a Ubuntu 24.04 container. Rust is NOT pre-installed — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y` as the first build step. You'll also need build-essential and pkg-config for native deps. Remember to add `source $HOME/.cargo/env` to `~/.bashrc` after installing Rust.
-
-Put everything in `/home/agent/chainpost/`.
+Put everything in `/home/agent/chainpost/`. Install Rust and build-essential as the first step.
 
 ---
 
