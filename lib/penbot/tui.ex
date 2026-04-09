@@ -74,13 +74,15 @@ defmodule Penbot.TUI do
   end
 
   def show_diff(path, old_content, new_content) do
-    # Count changed lines from the diff output
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
+      added = added_lines(diff_lines)
+      removed = removed_lines(diff_lines)
       summary = [[:faint, "    #{Path.basename(path)}: ",
-        :green, "+#{added_lines(diff_lines)}", :faint, " / ",
-        :red, "-#{removed_lines(diff_lines)}", :faint, " lines", :reset]]
-      GenServer.call(__MODULE__, {:print_raw, summary ++ diff_lines})
+        :green, "+#{added}", :faint, " / ",
+        :red, "-#{removed}", :faint, " lines", :reset]]
+      # Print diff without redrawing status (tool_result follows immediately)
+      GenServer.call(__MODULE__, {:print_no_status, summary ++ diff_lines})
     end
   end
 
@@ -172,7 +174,7 @@ defmodule Penbot.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil, streaming: false, stream_buffer: ""
+      ticker: nil, streaming: false, stream_buffer: "", printing: false
     }}
   end
 
@@ -209,19 +211,35 @@ defmodule Penbot.TUI do
     {:reply, :ok, %{state | streaming: false, stream_buffer: ""}}
   end
 
-  def handle_call({:print_raw, lines}, _from, state) do
+  def handle_call({:print_no_status, lines}, _from, state) do
+    # Print without redrawing status — used when more output follows immediately
     state = erase_status(state)
     Enum.each(lines, fn
+      [] -> IO.puts("")
       [raw] when is_binary(raw) -> IO.puts(raw)
       tokens -> print_line(tokens)
     end)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:print_raw, lines}, _from, state) do
+    state = erase_status(state)
+    state = %{state | printing: true}
+    Enum.each(lines, fn
+      [] -> IO.puts("")
+      [raw] when is_binary(raw) -> IO.puts(raw)
+      tokens -> print_line(tokens)
+    end)
+    state = %{state | printing: false}
     state = draw_status(state)
     {:reply, :ok, state}
   end
 
   def handle_call({:print, lines}, _from, state) do
     state = erase_status(state)
+    state = %{state | printing: true}
     Enum.each(lines, &print_line/1)
+    state = %{state | printing: false}
     state = draw_status(state)
     {:reply, :ok, state}
   end
@@ -251,8 +269,12 @@ defmodule Penbot.TUI do
   end
 
   @impl true
+  def handle_info(:tick, %{active: true, printing: true} = state) do
+    # Skip tick while printing to avoid corrupting output
+    {:noreply, state}
+  end
+
   def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
-    # Overwrite in place — no erase/redraw gap (prevents flicker)
     state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
     overwrite_status(state)
     {:noreply, state}
