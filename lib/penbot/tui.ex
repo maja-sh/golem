@@ -74,11 +74,7 @@ defmodule Penbot.TUI do
   end
 
   def show_diff(path, old_content, new_content) do
-    old_count = old_content |> String.split("\n") |> length()
-    new_count = new_content |> String.split("\n") |> length()
-    added = max(0, new_count - old_count)
-    removed = max(0, old_count - new_count)
-    # Count changed lines more precisely from the diff
+    # Count changed lines from the diff output
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
       summary = [[:faint, "    #{Path.basename(path)}: ",
