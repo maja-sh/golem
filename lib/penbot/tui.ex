@@ -76,7 +76,7 @@ defmodule Penbot.TUI do
   def show_diff(path, old_content, new_content) do
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
-      GenServer.call(__MODULE__, {:print, diff_lines})
+      GenServer.call(__MODULE__, {:print_raw, diff_lines})
     end
   end
 
@@ -202,6 +202,16 @@ defmodule Penbot.TUI do
     IO.write("\n")
     state = draw_status(state)
     {:reply, :ok, %{state | streaming: false, stream_buffer: ""}}
+  end
+
+  def handle_call({:print_raw, lines}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, fn
+      [raw] when is_binary(raw) -> IO.puts(raw)
+      tokens -> print_line(tokens)
+    end)
+    state = draw_status(state)
+    {:reply, :ok, state}
   end
 
   def handle_call({:print, lines}, _from, state) do
@@ -390,7 +400,7 @@ defmodule Penbot.TUI do
   defp tool_label("ask_user", _), do: "Asking user..."
   defp tool_label(name, _), do: name
 
-  defp build_diff(_path, old, new) do
+  defp build_diff(path, old, new) do
     old_lines = String.split(old, "\n")
     new_lines = String.split(new, "\n")
 
@@ -407,11 +417,12 @@ defmodule Penbot.TUI do
       |> Enum.find({length(old_lines), nil}, fn {{a, b}, _} -> a != b end)
       |> then(fn {_, idx} -> {idx || 0, nil} end)
 
-    # Extract changed regions with context
     ctx = 2
     start = max(0, prefix_len - ctx)
     old_end = min(length(old_lines), length(old_lines) - suffix_len + ctx)
     new_end = min(length(new_lines), length(new_lines) - suffix_len + ctx)
+
+    lang = lang_from_path(path)
 
     removed =
       old_lines
@@ -419,9 +430,9 @@ defmodule Penbot.TUI do
       |> Enum.with_index(start + 1)
       |> Enum.map(fn {line, num} ->
         if num > prefix_len and num <= length(old_lines) - suffix_len do
-          [:red, "    - #{num}: #{trunc(line, 80)}", :reset]
+          "    \e[31m- #{num}: #{highlight_line(line, lang)}\e[0m"
         else
-          [:faint, "      #{num}: #{trunc(line, 80)}", :reset]
+          "    \e[2m  #{num}: #{highlight_line(line, lang)}\e[0m"
         end
       end)
 
@@ -431,14 +442,69 @@ defmodule Penbot.TUI do
       |> Enum.with_index(start + 1)
       |> Enum.map(fn {line, num} ->
         if num > prefix_len and num <= length(new_lines) - suffix_len do
-          [:green, "    + #{num}: #{trunc(line, 80)}", :reset]
+          "    \e[32m+ #{num}: #{highlight_line(line, lang)}\e[0m"
         else
-          [:faint, "      #{num}: #{trunc(line, 80)}", :reset]
+          "    \e[2m  #{num}: #{highlight_line(line, lang)}\e[0m"
         end
       end)
 
-    # Cap total lines shown
-    (removed ++ added) |> Enum.take(20)
+    # Return as raw strings (already ANSI-formatted)
+    (removed ++ added) |> Enum.take(20) |> Enum.map(&[&1])
+  end
+
+  # --- Syntax Highlighting ---
+
+  defp highlight_line(line, nil), do: line
+  defp highlight_line(line, lang) do
+    case bat_path() do
+      nil -> line
+      bat ->
+        case System.cmd(bat, [
+               "--color=always", "--style=plain", "--language=#{lang}",
+               "--paging=never", "-"
+             ], input: line, stderr_to_stdout: true) do
+          {highlighted, 0} -> String.trim_trailing(highlighted)
+          _ -> line
+        end
+    end
+  end
+
+  defp bat_path do
+    case :persistent_term.get(:bat_path, :not_checked) do
+      :not_checked ->
+        path = System.find_executable("bat")
+        :persistent_term.put(:bat_path, path)
+        path
+      path -> path
+    end
+  end
+
+  defp lang_from_path(path) do
+    case Path.extname(path) do
+      ".ex" -> "elixir"
+      ".exs" -> "elixir"
+      ".php" -> "php"
+      ".py" -> "python"
+      ".js" -> "javascript"
+      ".ts" -> "typescript"
+      ".tsx" -> "tsx"
+      ".jsx" -> "jsx"
+      ".rb" -> "ruby"
+      ".rs" -> "rust"
+      ".go" -> "go"
+      ".sh" -> "bash"
+      ".bash" -> "bash"
+      ".json" -> "json"
+      ".yaml" -> "yaml"
+      ".yml" -> "yaml"
+      ".toml" -> "toml"
+      ".html" -> "html"
+      ".css" -> "css"
+      ".sql" -> "sql"
+      ".md" -> "markdown"
+      ".xml" -> "xml"
+      _ -> nil
+    end
   end
 
   defp result_oneliner(text) when is_binary(text) do

@@ -67,6 +67,13 @@ See `config/config.exs`. Key settings:
 Set in `.env` (loaded by dotenv):
 - `ANTHROPIC_API_KEY` — Required
 - `PERPLEXITY_API_KEY` — Required for web_search
+- `DISCORD_TOKEN` — Required for ask_user tool
+- `DISCORD_CHANNEL_ID` — Required for ask_user tool
+
+## System Dependencies
+
+- `podman` — Container runtime (required)
+- `bat` — Syntax highlighting in diffs (optional, falls back to plain text). Install: `brew install bat`
 
 ## Scenarios
 
