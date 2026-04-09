@@ -154,12 +154,12 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "think", input: input}, _depth) do
     reasoning = Map.fetch!(input, "reasoning")
     replan = Map.get(input, "request_replan", false)
-    Logger.info("  [think#{if replan, do: " + replan", else: ""}] #{String.slice(reasoning, 0, 200)}")
+    Logger.info("  [think#{if replan, do: " + replan", else: ""}] #{String.slice(reasoning, 0, 500)}")
 
     if replan do
       {:think_replan, reasoning}
     else
-      {:continue, "Reasoning noted. Continue with your next action."}
+      {:continue, reasoning}
     end
   end
 
