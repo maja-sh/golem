@@ -297,9 +297,9 @@ defmodule Penbot.Runner do
         # Text was already streamed — just log it
         if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
 
-        # Show timing if no text was streamed
-        if is_nil(response.text) and state.depth == 0 do
-          Penbot.TUI.agent_text("(#{Penbot.TUI.format_elapsed(llm_elapsed)} · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
+        # Log timing to file (TUI shows it via tool results)
+        if is_nil(response.text) do
+          Logger.info("#{p}  (#{Penbot.TUI.format_elapsed(llm_elapsed)} · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
         end
 
         costs = accumulate_costs(costs, response.usage, model)
