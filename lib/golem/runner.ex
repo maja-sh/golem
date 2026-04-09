@@ -676,7 +676,7 @@ defmodule Golem.Runner do
     if large_writes != [] do
       files = Enum.join(large_writes, ", ")
       messages ++ [
-        %{role: "user", content: "[System] You just wrote #{length(large_writes)} large file(s): #{files}. Before running or moving on, read the file(s) back and briefly verify the code is correct — check for obvious bugs, missing imports, and incomplete functions."}
+        %{role: "user", content: "[System] You just wrote large file(s): #{files}. Use the `think` tool to silently review the code for obvious bugs, missing imports, and incomplete functions. Do NOT print the review — just think through it internally and fix any issues you find."}
       ]
     else
       messages
