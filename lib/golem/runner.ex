@@ -499,12 +499,26 @@ defmodule Golem.Runner do
     split_at = length(rest) - keep
     {old, recent} = Enum.split(rest, split_at)
 
+    # Ensure recent starts with an assistant message (not a user/tool_result)
+    # Drop leading user messages that would be orphaned tool_results
+    recent = drop_leading_user_messages(recent)
+
     # Summarize the old messages
     summary = compact_messages(old)
 
-    # Rebuild: first message + summary + recent messages
-    [first, %{role: "user", content: "[Conversation summary of earlier steps]\n\n#{summary}"}] ++ recent
+    # Rebuild: first message + assistant ack + summary + recent messages
+    # The assistant message prevents consecutive user messages (goal + summary)
+    [
+      first,
+      %{role: "assistant", content: "I'll continue working on this goal."},
+      %{role: "user", content: "[Conversation summary of earlier steps]\n\n#{summary}\n\nContinue from where you left off."}
+    ] ++ recent
   end
+
+  defp drop_leading_user_messages([%{role: "user"} | rest]) do
+    drop_leading_user_messages(rest)
+  end
+  defp drop_leading_user_messages(messages), do: messages
 
   defp compact_messages(messages) do
     # Extract a readable summary from old tool exchanges
