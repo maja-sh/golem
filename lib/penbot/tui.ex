@@ -62,7 +62,7 @@ defmodule Penbot.TUI do
       [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset, :faint, " (#{elapsed})", :reset]
     ]
     lines = if summary != "", do: lines ++ [[:faint, "  └ #{summary}", :reset]], else: lines
-    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil, last_output: :tool]})
   end
 
   def tool_error(name, detail, error_text) do
@@ -70,7 +70,7 @@ defmodule Penbot.TUI do
       [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
       [:faint, :red, "  └ #{trunc(error_text, 100)}", :reset]
     ]
-    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil, last_output: :tool]})
   end
 
   def show_diff(path, old_content, new_content) do
@@ -194,10 +194,10 @@ defmodule Penbot.TUI do
   end
 
   def handle_call({:stream_start}, _from, state) do
-    # Put the bullet prefix into the stream buffer — it'll be flushed
-    # on the next tick along with the first text chunks, above the status area.
+    # Add blank line if the last output was a tool result (visual separation)
+    gap = if Map.get(state, :last_output) == :tool, do: "\n", else: ""
     prefix = IO.ANSI.format([:cyan, "● ", :reset]) |> IO.chardata_to_string()
-    {:reply, :ok, %{state | streaming: true, stream_buffer: prefix}}
+    {:reply, :ok, %{state | streaming: true, stream_buffer: gap <> prefix}}
   end
 
   def handle_call(:stream_end, _from, state) do
