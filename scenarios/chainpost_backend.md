@@ -11,9 +11,22 @@ Build the backend for a decentralized microblogging platform powered by a proof-
 
 This is a fresh build of a project previously called "cryptogram." The architecture has been redesigned with transactions-in-blocks, Heed-only indexing, and a proper sync protocol.
 
+### Reference Code
+
+The operator's previous attempt is available in the container for reference:
+- `/home/agent/cryptogram/` — Rust backend (blockchain, P2P, API)
+- `/home/agent/cryptogram-client/` — Vue 3 + Tauri frontend
+
+Browse these for design inspiration, but do NOT copy code directly — the architecture is different. Key differences from the reference:
+- Transactions in blocks (reference uses one block per action)
+- Heed-only indexing with pointer databases (reference uses Heed + SQLite)
+- Proper chain sync protocol (reference has none)
+- axum for API (reference uses Warp)
+- Non-blocking mining via spawn_blocking (reference blocks the P2P loop)
+
 ### Environment
 
-You have root access to a Ubuntu 24.04 container. Rust is NOT pre-installed — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y` as the first build step. You'll also need build-essential and pkg-config for native deps.
+You have root access to a Ubuntu 24.04 container. Rust is NOT pre-installed — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y` as the first build step. You'll also need build-essential and pkg-config for native deps. Remember to add `source $HOME/.cargo/env` to `~/.bashrc` after installing Rust.
 
 Put everything in `/home/agent/chainpost/`.
 
