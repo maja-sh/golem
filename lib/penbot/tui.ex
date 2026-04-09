@@ -350,8 +350,7 @@ defmodule Penbot.TUI do
       :faint, " · ", :yellow, state.cost, :reset
     ] ++ action_part
 
-    # Single blank line separates scrolling output from the status
-    [[]] ++ progress_lines ++ [bottom]
+    progress_lines ++ [bottom]
   end
 
   # --- Helpers ---
