@@ -74,9 +74,17 @@ defmodule Penbot.TUI do
   end
 
   def show_diff(path, old_content, new_content) do
+    old_count = old_content |> String.split("\n") |> length()
+    new_count = new_content |> String.split("\n") |> length()
+    added = max(0, new_count - old_count)
+    removed = max(0, old_count - new_count)
+    # Count changed lines more precisely from the diff
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
-      GenServer.call(__MODULE__, {:print_raw, diff_lines ++ [[]]})
+      summary = [[:faint, "    #{Path.basename(path)}: ",
+        :green, "+#{added_lines(diff_lines)}", :faint, " / ",
+        :red, "-#{removed_lines(diff_lines)}", :faint, " lines", :reset]]
+      GenServer.call(__MODULE__, {:print_raw, summary ++ diff_lines ++ [[]]})
     end
   end
 
@@ -192,7 +200,7 @@ defmodule Penbot.TUI do
   def handle_call({:stream_start}, _from, state) do
     # Put the bullet prefix into the stream buffer — it'll be flushed
     # on the next tick along with the first text chunks, above the status area.
-    prefix = IO.ANSI.format([:cyan, "\n● ", :reset]) |> IO.chardata_to_string()
+    prefix = IO.ANSI.format([:cyan, "● ", :reset]) |> IO.chardata_to_string()
     {:reply, :ok, %{state | streaming: true, stream_buffer: prefix}}
   end
 
@@ -346,8 +354,7 @@ defmodule Penbot.TUI do
       :faint, " · ", :yellow, state.cost, :reset
     ] ++ action_part
 
-    # Blank line separates scrolling content from the sticky checklist
-    [[]] ++ progress_lines ++ [bottom]
+    progress_lines ++ [bottom]
   end
 
   # --- Helpers ---
@@ -509,6 +516,20 @@ defmodule Penbot.TUI do
       ".xml" -> "xml"
       _ -> nil
     end
+  end
+
+  defp added_lines(diff_lines) do
+    Enum.count(diff_lines, fn
+      [raw] when is_binary(raw) -> String.contains?(raw, "\e[32m+")
+      _ -> false
+    end)
+  end
+
+  defp removed_lines(diff_lines) do
+    Enum.count(diff_lines, fn
+      [raw] when is_binary(raw) -> String.contains?(raw, "\e[31m-")
+      _ -> false
+    end)
   end
 
   defp result_oneliner(text) when is_binary(text) do
