@@ -69,9 +69,6 @@ defmodule Mix.Tasks.Golem.Run do
         n -> Keyword.put(runner_opts, :max_steps, n)
       end
 
-    Mix.shell().info("Goal: #{goal}")
-    Mix.shell().info("Starting autonomous agent...\n")
-
     case Golem.run(goal, runner_opts) do
       {:ok, %{success: true, summary: summary}} ->
         Mix.shell().info("\n✓ Goal achieved: #{summary}")
