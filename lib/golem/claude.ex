@@ -1,4 +1,4 @@
-defmodule Penbot.Claude do
+defmodule Golem.Claude do
   @moduledoc """
   Claude API client. Supports tool use with extended thinking.
   """
@@ -21,8 +21,8 @@ defmodule Penbot.Claude do
   """
   def call(messages, opts \\ []) do
     api_key = api_key!()
-    model = opts[:model] || Application.get_env(:penbot, :executor_model)
-    max_tokens = opts[:max_tokens] || Application.get_env(:penbot, :executor_max_tokens)
+    model = opts[:model] || Application.get_env(:golem, :executor_model)
+    max_tokens = opts[:max_tokens] || Application.get_env(:golem, :executor_max_tokens)
     system = opts[:system]
     tools = opts[:tools]
     thinking_budget = opts[:thinking_budget]
@@ -51,8 +51,8 @@ defmodule Penbot.Claude do
   """
   def call_stream(messages, opts \\ []) do
     api_key = api_key!()
-    model = opts[:model] || Application.get_env(:penbot, :executor_model)
-    max_tokens = opts[:max_tokens] || Application.get_env(:penbot, :executor_max_tokens)
+    model = opts[:model] || Application.get_env(:golem, :executor_model)
+    max_tokens = opts[:max_tokens] || Application.get_env(:golem, :executor_max_tokens)
     system = opts[:system]
     tools = opts[:tools]
     thinking_budget = opts[:thinking_budget]

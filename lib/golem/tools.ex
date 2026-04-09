@@ -1,4 +1,4 @@
-defmodule Penbot.Tools do
+defmodule Golem.Tools do
   @moduledoc """
   Tool definitions for Claude's tool use API.
   """

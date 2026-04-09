@@ -1,4 +1,4 @@
-defmodule Penbot.StateTest do
+defmodule Golem.StateTest do
   use ExUnit.Case, async: false
 
   @test_dir "runs/_test"
@@ -11,13 +11,13 @@ defmodule Penbot.StateTest do
 
   describe "new_run_id" do
     test "generates unique IDs" do
-      id1 = Penbot.State.new_run_id()
-      id2 = Penbot.State.new_run_id()
+      id1 = Golem.State.new_run_id()
+      id2 = Golem.State.new_run_id()
       assert id1 != id2
     end
 
     test "contains timestamp" do
-      id = Penbot.State.new_run_id()
+      id = Golem.State.new_run_id()
       # Format: YYYYMMDD_HHMMSS_hex
       assert Regex.match?(~r/^\d{8}_\d{6}_[a-f0-9]+$/, id)
     end
@@ -25,10 +25,10 @@ defmodule Penbot.StateTest do
 
   describe "should_save?" do
     test "always returns true" do
-      assert Penbot.State.should_save?(0)
-      assert Penbot.State.should_save?(1)
-      assert Penbot.State.should_save?(5)
-      assert Penbot.State.should_save?(100)
+      assert Golem.State.should_save?(0)
+      assert Golem.State.should_save?(1)
+      assert Golem.State.should_save?(5)
+      assert Golem.State.should_save?(100)
     end
   end
 
@@ -49,9 +49,9 @@ defmodule Penbot.StateTest do
         ]
       }
 
-      assert :ok = Penbot.State.save(run_id, state)
+      assert :ok = Golem.State.save(run_id, state)
 
-      assert {:ok, loaded} = Penbot.State.load(run_id)
+      assert {:ok, loaded} = Golem.State.load(run_id)
       assert loaded.goal == "Test goal"
       assert loaded.plan == "## Phase 1\n- [ ] Do stuff"
       assert loaded.step == 42
@@ -62,7 +62,7 @@ defmodule Penbot.StateTest do
     end
 
     test "load returns error for nonexistent run" do
-      assert {:error, :enoent} = Penbot.State.load("nonexistent_run_id")
+      assert {:error, :enoent} = Golem.State.load("nonexistent_run_id")
     end
 
     test "messages preserve role and content" do
@@ -80,9 +80,9 @@ defmodule Penbot.StateTest do
       ]
 
       state = %{goal: "test", plan: "", step: 1, max_steps: 10, depth: 0, history: [], messages: messages}
-      Penbot.State.save(run_id, state)
+      Golem.State.save(run_id, state)
 
-      {:ok, loaded} = Penbot.State.load(run_id)
+      {:ok, loaded} = Golem.State.load(run_id)
       assert length(loaded.messages) == 3
 
       [msg1, msg2, msg3] = loaded.messages
@@ -99,15 +99,15 @@ defmodule Penbot.StateTest do
     test "lists saved runs" do
       run_id = "test_list_#{System.monotonic_time(:millisecond)}"
       state = %{goal: "List test", plan: "", step: 5, max_steps: 50, depth: 0, history: [], messages: []}
-      Penbot.State.save(run_id, state)
+      Golem.State.save(run_id, state)
 
-      runs = Penbot.State.list_runs()
+      runs = Golem.State.list_runs()
       assert Enum.any?(runs, &(&1.id == run_id))
     end
 
     test "returns empty list when no runs" do
       # This might not be empty if other tests left runs, but shouldn't crash
-      assert is_list(Penbot.State.list_runs())
+      assert is_list(Golem.State.list_runs())
     end
   end
 end

@@ -1,4 +1,4 @@
-defmodule Penbot.Runner do
+defmodule Golem.Runner do
   @moduledoc """
   Main autonomous execution loop.
 
@@ -23,9 +23,9 @@ defmodule Penbot.Runner do
   @sub_agent_max_steps 50
 
   def run(goal, opts \\ []) do
-    max_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
+    max_steps = opts[:max_steps] || Application.get_env(:golem, :max_steps, 200)
     depth = opts[:depth] || 0
-    run_id = opts[:run_id] || Penbot.State.new_run_id()
+    run_id = opts[:run_id] || Golem.State.new_run_id()
     prefix = depth_prefix(depth)
 
     Logger.info("#{prefix}========== RUN STARTED (#{run_id}) ==========")
@@ -33,18 +33,18 @@ defmodule Penbot.Runner do
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
 
     # Initialize TUI for top-level runs
-    if depth == 0, do: Penbot.TUI.init_display(run_id, goal)
+    if depth == 0, do: Golem.TUI.init_display(run_id, goal)
 
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
     if depth == 0 do
       case result do
-        {:ok, %{success: success} = s} -> Penbot.TUI.run_complete(success, s.summary)
-        {:error, :max_steps_reached} -> Penbot.TUI.run_paused(run_id)
-        {:error, reason} -> Penbot.TUI.run_error(reason)
+        {:ok, %{success: success} = s} -> Golem.TUI.run_complete(success, s.summary)
+        {:error, :max_steps_reached} -> Golem.TUI.run_paused(run_id)
+        {:error, reason} -> Golem.TUI.run_error(reason)
       end
 
-      Penbot.TUI.stop_display()
+      Golem.TUI.stop_display()
     end
 
     # Always log to file
@@ -62,9 +62,9 @@ defmodule Penbot.Runner do
   Resume a previously paused run.
   """
   def resume(run_id, opts \\ []) do
-    case Penbot.State.load(run_id) do
+    case Golem.State.load(run_id) do
       {:ok, saved} ->
-        extra_steps = opts[:max_steps] || Application.get_env(:penbot, :max_steps, 200)
+        extra_steps = opts[:max_steps] || Application.get_env(:golem, :max_steps, 200)
         new_max = saved.step + extra_steps
         prefix = depth_prefix(saved.depth)
 
@@ -72,8 +72,8 @@ defmodule Penbot.Runner do
         Logger.info("#{prefix}Continuing from step #{saved.step}, new max: #{new_max}")
 
         if saved.depth == 0 do
-          Penbot.TUI.init_display(run_id, saved.goal)
-          Penbot.TUI.planning("Resuming from step #{saved.step}...")
+          Golem.TUI.init_display(run_id, saved.goal)
+          Golem.TUI.planning("Resuming from step #{saved.step}...")
         end
 
         state = %{
@@ -89,16 +89,16 @@ defmodule Penbot.Runner do
           run_id: run_id
         }
 
-        system = Penbot.Prompt.executor_system()
+        system = Golem.Prompt.executor_system()
         result = loop(state, system)
 
         if saved.depth == 0 do
           case result do
-            {:ok, %{success: success} = s} -> Penbot.TUI.run_complete(success, s.summary)
-            {:error, :max_steps_reached} -> Penbot.TUI.run_paused(run_id)
-            {:error, reason} -> Penbot.TUI.run_error(reason)
+            {:ok, %{success: success} = s} -> Golem.TUI.run_complete(success, s.summary)
+            {:error, :max_steps_reached} -> Golem.TUI.run_paused(run_id)
+            {:error, reason} -> Golem.TUI.run_error(reason)
           end
-          Penbot.TUI.stop_display()
+          Golem.TUI.stop_display()
         end
 
         # Always log to file
@@ -121,7 +121,7 @@ defmodule Penbot.Runner do
     plan_result =
       case opts[:plan] do
         nil ->
-          if depth == 0, do: Penbot.TUI.planning()
+          if depth == 0, do: Golem.TUI.planning()
           Logger.info("#{prefix}Planning with Opus...")
           create_plan(goal)
 
@@ -131,7 +131,7 @@ defmodule Penbot.Runner do
 
     case plan_result do
       {:ok, plan} ->
-        if depth == 0, do: Penbot.TUI.plan_created(plan)
+        if depth == 0, do: Golem.TUI.plan_created(plan)
         Logger.info("#{prefix}Plan created (logged to file)")
 
         state = %{
@@ -147,8 +147,8 @@ defmodule Penbot.Runner do
           run_id: run_id
         }
 
-        system = Penbot.Prompt.executor_system()
-        initial = Penbot.Prompt.initial_message(goal, plan)
+        system = Golem.Prompt.executor_system()
+        initial = Golem.Prompt.initial_message(goal, plan)
         state = %{state | messages: [%{role: "user", content: initial}]}
 
         loop(state, system)
@@ -169,7 +169,7 @@ defmodule Penbot.Runner do
     Logger.info("#{prefix}---------- SUB-AGENT SPAWNED ----------")
     Logger.info("#{prefix}Goal: #{String.slice(goal, 0, 500)}")
 
-    system = Penbot.Prompt.sub_agent_system()
+    system = Golem.Prompt.sub_agent_system()
 
     initial_content =
       if context && context != "" do
@@ -198,18 +198,18 @@ defmodule Penbot.Runner do
   # --- Plan Creation ---
 
   defp create_plan(goal) do
-    model = Application.get_env(:penbot, :planner_model)
-    max_tokens = Application.get_env(:penbot, :planner_max_tokens, 4096)
-    thinking_budget = Application.get_env(:penbot, :thinking_budget, 10_000)
+    model = Application.get_env(:golem, :planner_model)
+    max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
+    thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
 
     messages = [
       %{role: "user", content: "Create a plan for this goal:\n\n#{goal}"}
     ]
 
-    case Penbot.Claude.call(messages,
+    case Golem.Claude.call(messages,
            model: model,
            max_tokens: max_tokens,
-           system: Penbot.Prompt.planner_system(),
+           system: Golem.Prompt.planner_system(),
            thinking_budget: thinking_budget
          ) do
       {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
@@ -219,20 +219,20 @@ defmodule Penbot.Runner do
   end
 
   defp replan(goal, current_plan, reasoning, recent_history) do
-    model = Application.get_env(:penbot, :planner_model)
-    max_tokens = Application.get_env(:penbot, :planner_max_tokens, 4096)
-    thinking_budget = Application.get_env(:penbot, :thinking_budget, 10_000)
+    model = Application.get_env(:golem, :planner_model)
+    max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
+    thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
 
-    message = Penbot.Prompt.replan_message(goal, current_plan, reasoning, recent_history)
+    message = Golem.Prompt.replan_message(goal, current_plan, reasoning, recent_history)
 
     messages = [
       %{role: "user", content: message}
     ]
 
-    case Penbot.Claude.call(messages,
+    case Golem.Claude.call(messages,
            model: model,
            max_tokens: max_tokens,
-           system: Penbot.Prompt.planner_system(),
+           system: Golem.Prompt.planner_system(),
            thinking_budget: thinking_budget
          ) do
       {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
@@ -245,7 +245,7 @@ defmodule Penbot.Runner do
 
   defp loop(%{step: step, max_steps: max, prefix: prefix} = state, _system) when step >= max do
     Logger.warning("#{prefix}Hit max steps (#{max}). Saving state...")
-    if run_id = Map.get(state, :run_id), do: Penbot.State.save(run_id, state)
+    if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
     {:error, :max_steps_reached}
   end
 
@@ -253,23 +253,23 @@ defmodule Penbot.Runner do
     step = state.step + 1
     p = state.prefix
     # Make run_id available to tool handlers (for ask_user Discord messages)
-    if run_id = Map.get(state, :run_id), do: Process.put(:penbot_run_id, run_id)
+    if run_id = Map.get(state, :run_id), do: Process.put(:golem_run_id, run_id)
     costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
     cost_str = "$#{format_cost(costs)}"
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
-    if state.depth == 0, do: Penbot.TUI.step_header(step, state.max_steps, cost_str)
+    if state.depth == 0, do: Golem.TUI.step_header(step, state.max_steps, cost_str)
 
-    model = Application.get_env(:penbot, :executor_model)
-    max_tokens = Application.get_env(:penbot, :executor_max_tokens, 8000)
-    thinking_budget = Application.get_env(:penbot, :thinking_budget, 10_000)
-    tools = Penbot.Tools.for_depth(state.depth)
+    model = Application.get_env(:golem, :executor_model)
+    max_tokens = Application.get_env(:golem, :executor_max_tokens, 8000)
+    thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
+    tools = Golem.Tools.for_depth(state.depth)
 
     # Trim messages if conversation is getting long
     messages = trim_messages(state.messages)
 
     llm_start = System.monotonic_time(:millisecond)
 
-    result = Penbot.Claude.call(messages,
+    result = Golem.Claude.call(messages,
       model: model,
       max_tokens: max_tokens,
       system: system,
@@ -284,17 +284,17 @@ defmodule Penbot.Runner do
 
         if response.text do
           Logger.info("#{p}  Agent: #{response.text}")
-          if state.depth == 0, do: Penbot.TUI.agent_text(response.text)
+          if state.depth == 0, do: Golem.TUI.agent_text(response.text)
         end
 
         if is_nil(response.text) and state.depth == 0 do
           count = length(tool_calls)
           if count > 1 do
-            Penbot.TUI.agent_text("Running #{count} actions (#{Penbot.TUI.format_elapsed(llm_elapsed)})")
+            Golem.TUI.agent_text("Running #{count} actions (#{Golem.TUI.format_elapsed(llm_elapsed)})")
           end
         end
 
-        Logger.info("#{p}  (#{Penbot.TUI.format_elapsed(llm_elapsed)} · #{length(tool_calls)} tools · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
+        Logger.info("#{p}  (#{Golem.TUI.format_elapsed(llm_elapsed)} · #{length(tool_calls)} tools · ↓ #{Golem.TUI.format_tokens(output_tokens)})")
 
         costs = accumulate_costs(costs, response.usage, model)
 
@@ -352,35 +352,35 @@ defmodule Penbot.Runner do
     detail = summarize_input(tc)
     silent = tc.name in @silent_tools
 
-    if not silent, do: Penbot.TUI.tool_call(tc.name, detail)
+    if not silent, do: Golem.TUI.tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
 
-    case Penbot.ToolHandler.execute(tc, depth) do
+    case Golem.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        Penbot.TUI.tool_result(tc.name, detail, summary.summary, elapsed, nil)
+        Golem.TUI.tool_result(tc.name, detail, summary.summary, elapsed, nil)
         {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
 
       {:think_replan, reasoning} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        Penbot.TUI.tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
+        Golem.TUI.tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
         {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
 
       {:continue, result} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if not silent do
           if String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code") do
-            Penbot.TUI.tool_error(tc.name, detail, result)
+            Golem.TUI.tool_error(tc.name, detail, result)
           else
-            Penbot.TUI.tool_result(tc.name, detail, result, elapsed, nil)
+            Golem.TUI.tool_result(tc.name, detail, result, elapsed, nil)
           end
         end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        if not silent, do: Penbot.TUI.tool_result(tc.name, detail, text, elapsed, nil)
+        if not silent, do: Golem.TUI.tool_result(tc.name, detail, text, elapsed, nil)
         execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
     end
   end
@@ -432,7 +432,7 @@ defmodule Penbot.Runner do
 
   defp handle_replan(state, system, step, _tool_call, reasoning) do
     Logger.info("#{state.prefix}  Re-planning with Opus...")
-    if state.depth == 0, do: Penbot.TUI.planning("Re-planning with Opus...")
+    if state.depth == 0, do: Golem.TUI.planning("Re-planning with Opus...")
 
     # Take last 20 history entries for context
     recent = Enum.take(state.history, -20)
@@ -575,7 +575,7 @@ defmodule Penbot.Runner do
 
   # Save state periodically (only for top-level runs, not sub-agents)
   defp maybe_save(%{depth: 0, run_id: run_id, step: step} = state) when not is_nil(run_id) do
-    if Penbot.State.should_save?(step), do: Penbot.State.save(run_id, state)
+    if Golem.State.should_save?(step), do: Golem.State.save(run_id, state)
   end
   defp maybe_save(_state), do: :ok
 

@@ -1,4 +1,4 @@
-defmodule Penbot.State do
+defmodule Golem.State do
   @moduledoc """
   Persists and loads run state for resume support.
   State is saved to runs/<run_id>/state.json.

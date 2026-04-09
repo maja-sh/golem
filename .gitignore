@@ -20,7 +20,7 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-penbot-*.tar
+golem-*.tar
 
 # Screenshots captured during runs
 /screenshots/

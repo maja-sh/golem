@@ -1,4 +1,4 @@
-defmodule Penbot.Web do
+defmodule Golem.Web do
   @moduledoc """
   Web search (via Perplexity) and URL fetching.
   """
@@ -69,7 +69,7 @@ defmodule Penbot.Web do
            receive_timeout: 30_000,
            redirect: true,
            max_redirects: 5,
-           headers: [{"user-agent", "Penbot/0.1 (autonomous agent)"}]
+           headers: [{"user-agent", "Golem/0.1 (autonomous agent)"}]
          ) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
         content_type =

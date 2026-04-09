@@ -1,4 +1,4 @@
-defmodule Penbot.ToolHandler do
+defmodule Golem.ToolHandler do
   @moduledoc """
   Dispatches tool calls to their implementations and formats results.
   """
@@ -14,7 +14,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "shell", input: %{"command" => command}}, _depth) do
     Logger.info("  [shell] #{String.slice(command, 0, 200)}")
 
-    case Penbot.Sandbox.exec(command) do
+    case Golem.Sandbox.exec(command) do
       {:ok, %{output: output, exit_code: 0}} ->
         {:continue, truncate(output, 50_000)}
 
@@ -32,9 +32,9 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
     Logger.info("  [write_file] #{path} (#{byte_size(content)} bytes)")
 
-    case Penbot.Sandbox.write_file(path, content) do
+    case Golem.Sandbox.write_file(path, content) do
       :ok ->
-        Penbot.FileCache.put(path, content)
+        Golem.FileCache.put(path, content)
         {:continue, "File written to #{path}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
     end
@@ -44,11 +44,11 @@ defmodule Penbot.ToolHandler do
     Logger.info("  [read_file] #{path}")
 
     # Check cache first (verifies hash against container)
-    case Penbot.FileCache.get(path) do
+    case Golem.FileCache.get(path) do
       nil ->
-        case Penbot.Sandbox.read_file(path) do
+        case Golem.Sandbox.read_file(path) do
           {:ok, content} ->
-            Penbot.FileCache.put(path, content)
+            Golem.FileCache.put(path, content)
             {:continue, truncate(content, 50_000)}
           {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
         end
@@ -63,9 +63,9 @@ defmodule Penbot.ToolHandler do
 
     # Try cache first, fall back to reading from container
     content =
-      case Penbot.FileCache.get(path) do
+      case Golem.FileCache.get(path) do
         nil ->
-          case Penbot.Sandbox.read_file(path) do
+          case Golem.Sandbox.read_file(path) do
             {:ok, c} -> c
             {:error, reason} -> {:error, reason}
           end
@@ -81,10 +81,10 @@ defmodule Penbot.ToolHandler do
           [_before, _after] ->
             updated = String.replace(content, old, new, global: false)
 
-            case Penbot.Sandbox.write_file(path, updated) do
+            case Golem.Sandbox.write_file(path, updated) do
               :ok ->
-                Penbot.FileCache.put(path, updated)
-                Penbot.TUI.show_diff(path, content, updated)
+                Golem.FileCache.put(path, updated)
+                Golem.TUI.show_diff(path, content, updated)
                 {:continue, "Edit applied to #{path}"}
               {:error, reason} ->
                 {:continue, "[error] Failed to write: #{inspect(reason)}"}
@@ -93,11 +93,11 @@ defmodule Penbot.ToolHandler do
           [_no_match] ->
             # Check if the edit was already applied (e.g. resume after crash)
             if String.contains?(content, new) do
-              Penbot.FileCache.put(path, content)
+              Golem.FileCache.put(path, content)
               {:continue, "Edit already applied to #{path} (no change needed)."}
             else
               hint =
-                case Penbot.FileCache.find_context(path, old) do
+                case Golem.FileCache.find_context(path, old) do
                   nil -> ""
                   ctx -> "\n\nClosest match in file:\n#{ctx}"
               end
@@ -111,7 +111,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "list_directory", input: %{"path" => path}}, _depth) do
     Logger.info("  [list_directory] #{path}")
 
-    case Penbot.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
+    case Golem.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
       {:ok, %{output: output, exit_code: 0}} -> {:continue, truncate(output, 50_000)}
       {:ok, %{output: output}} -> {:continue, "[error] #{output}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
@@ -126,7 +126,7 @@ defmodule Penbot.ToolHandler do
     # Use find with -path for glob matching, or shell globstar
     cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | head -200 | sort"
 
-    case Penbot.Sandbox.exec(cmd, timeout: 15_000) do
+    case Golem.Sandbox.exec(cmd, timeout: 15_000) do
       {:ok, %{output: output, exit_code: _}} ->
         if output == "" do
           {:continue, "No files matched pattern '#{pattern}' in #{path}"}
@@ -152,7 +152,7 @@ defmodule Penbot.ToolHandler do
 
     cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | head -500"
 
-    case Penbot.Sandbox.exec(cmd, timeout: 15_000) do
+    case Golem.Sandbox.exec(cmd, timeout: 15_000) do
       {:ok, %{output: output, exit_code: 0}} ->
         {:continue, truncate(output, 50_000)}
 
@@ -174,7 +174,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "web_search", input: %{"query" => query}}, _depth) do
     Logger.info("  [web_search] #{query}")
 
-    case Penbot.Web.search(query) do
+    case Golem.Web.search(query) do
       {:ok, result} -> {:continue, truncate(result, 50_000)}
       {:error, reason} -> {:continue, "[error] Web search failed: #{inspect(reason)}"}
     end
@@ -183,7 +183,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "web_fetch", input: %{"url" => url}}, _depth) do
     Logger.info("  [web_fetch] #{url}")
 
-    case Penbot.Web.fetch(url) do
+    case Golem.Web.fetch(url) do
       {:ok, content} -> {:continue, truncate(content, 50_000)}
       {:error, reason} -> {:continue, "[error] Web fetch failed: #{inspect(reason)}"}
     end
@@ -205,9 +205,9 @@ defmodule Penbot.ToolHandler do
     Logger.info("  [ask_user] #{String.slice(question, 0, 200)}")
 
     # Get run_id from the process dictionary (set by the runner)
-    run_id = Process.get(:penbot_run_id, "unknown")
+    run_id = Process.get(:golem_run_id, "unknown")
 
-    case Penbot.Discord.ask(question, run_id) do
+    case Golem.Discord.ask(question, run_id) do
       {:ok, reply} ->
         {:continue, "User replied: #{reply}"}
 
@@ -221,14 +221,14 @@ defmodule Penbot.ToolHandler do
     Logger.info("  [browse] #{url}")
 
     # Kill any existing Firefox, then open the URL
-    Penbot.Sandbox.exec("DISPLAY=:99 pkill -f firefox 2>/dev/null; sleep 0.5", timeout: 5_000)
-    Penbot.Sandbox.exec("DISPLAY=:99 firefox --no-remote '#{url}' &", timeout: 5_000)
+    Golem.Sandbox.exec("DISPLAY=:99 pkill -f firefox 2>/dev/null; sleep 0.5", timeout: 5_000)
+    Golem.Sandbox.exec("DISPLAY=:99 firefox --no-remote '#{url}' &", timeout: 5_000)
 
     # Wait for page to load
     Process.sleep(4_000)
 
     # Take screenshot
-    case Penbot.Screenshot.capture() do
+    case Golem.Screenshot.capture() do
       {:ok, %{path: path, base64: base64}} ->
         {:continue_with_image, %{text: "Browsed #{url} — screenshot saved to #{path}", base64: base64}}
 
@@ -254,14 +254,14 @@ defmodule Penbot.ToolHandler do
     total = length(parsed)
     Logger.info("  [update_progress] #{completed}/#{total} completed")
 
-    Penbot.TUI.set_progress(parsed)
+    Golem.TUI.set_progress(parsed)
     {:continue, "Progress updated (#{completed}/#{total} completed)."}
   end
 
   def execute(%{name: "screenshot", input: _input}, _depth) do
     Logger.info("  [screenshot]")
 
-    case Penbot.Screenshot.capture() do
+    case Golem.Screenshot.capture() do
       {:ok, %{path: path, base64: base64}} ->
         {:continue_with_image, %{text: "Screenshot saved to #{path}", base64: base64}}
 
@@ -273,7 +273,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}, _depth) do
     Logger.info("  [gui_click] #{x},#{y}")
 
-    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
+    case Golem.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Clicked at (#{x}, #{y})"}
       {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
@@ -285,7 +285,7 @@ defmodule Penbot.ToolHandler do
     # Use xdotool type with --clearmodifiers to avoid modifier key issues
     escaped = String.replace(text, "'", "'\\''")
 
-    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool type --clearmodifiers '#{escaped}'", timeout: 10_000) do
+    case Golem.Sandbox.exec("DISPLAY=:99 xdotool type --clearmodifiers '#{escaped}'", timeout: 10_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Typed text"}
       {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
@@ -295,7 +295,7 @@ defmodule Penbot.ToolHandler do
   def execute(%{name: "gui_key", input: %{"key" => key}}, _depth) do
     Logger.info("  [gui_key] #{key}")
 
-    case Penbot.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
+    case Golem.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Pressed #{key}"}
       {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
@@ -310,7 +310,7 @@ defmodule Penbot.ToolHandler do
 
     cmds = Enum.map_join(1..clicks, " && ", fn _ -> "DISPLAY=:99 xdotool click #{button}" end)
 
-    case Penbot.Sandbox.exec(cmds, timeout: 5_000) do
+    case Golem.Sandbox.exec(cmds, timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Scrolled #{direction} #{clicks} clicks"}
       {:ok, %{output: out}} -> {:continue, "[error] #{out}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
@@ -322,7 +322,7 @@ defmodule Penbot.ToolHandler do
     context = Map.get(input, "context", "")
     Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
-    case Penbot.Runner.run_sub_agent(goal, context, depth) do
+    case Golem.Runner.run_sub_agent(goal, context, depth) do
       {:ok, %{success: true, summary: summary}} ->
         {:continue, "Sub-agent completed successfully: #{summary}"}
 

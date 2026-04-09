@@ -1,17 +1,17 @@
-defmodule Penbot do
+defmodule Golem do
   @moduledoc """
   Autonomous agent that executes goals inside a sandboxed container.
 
   ## Usage
 
       # In IEx:
-      Penbot.run("Build a simple web server in Python that serves hello world on port 8080")
+      Golem.run("Build a simple web server in Python that serves hello world on port 8080")
 
       # With a pre-made plan:
-      Penbot.run("Escape this VM", plan: "## Phase 1\\n- [ ] Check kernel version\\n...")
+      Golem.run("Escape this VM", plan: "## Phase 1\\n- [ ] Check kernel version\\n...")
 
       # With options:
-      Penbot.run("Set up a Phoenix project", max_steps: 100)
+      Golem.run("Set up a Phoenix project", max_steps: 100)
   """
 
   @doc """
@@ -24,7 +24,7 @@ defmodule Penbot do
   Returns `{:ok, %{success: bool, summary: string}}` or `{:error, reason}`.
   """
   def run(goal, opts \\ []) do
-    Penbot.Runner.run(goal, opts)
+    Golem.Runner.run(goal, opts)
   end
 
   @doc """
@@ -34,24 +34,24 @@ defmodule Penbot do
   - `:max_steps` — number of additional steps to allow (default from config)
   """
   def resume(run_id, opts \\ []) do
-    Penbot.Runner.resume(run_id, opts)
+    Golem.Runner.resume(run_id, opts)
   end
 
   @doc """
   List all saved runs.
   """
   def runs do
-    Penbot.State.list_runs()
+    Golem.State.list_runs()
   end
 
   @doc """
   Export files from the container to a local directory.
 
-      Penbot.export("/home/agent/product", "output/product")
+      Golem.export("/home/agent/product", "output/product")
   """
   def export(container_path, local_path) do
     File.mkdir_p!(local_path)
-    container = Application.get_env(:penbot, :container, "penbot-vm")
+    container = Application.get_env(:golem, :container, "golem-vm")
 
     case System.cmd("podman", ["cp", "#{container}:#{container_path}/.", local_path],
            stderr_to_stdout: true

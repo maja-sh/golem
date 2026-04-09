@@ -1,4 +1,4 @@
-defmodule Penbot.Application do
+defmodule Golem.Application do
   use Application
 
   @impl true
@@ -12,29 +12,29 @@ defmodule Penbot.Application do
     end
 
     children = [
-      Penbot.Sandbox,
-      Penbot.FileCache
+      Golem.Sandbox,
+      Golem.FileCache
     ]
 
-    opts = [strategy: :one_for_one, name: Penbot.Supervisor]
+    opts = [strategy: :one_for_one, name: Golem.Supervisor]
     {:ok, pid} = Supervisor.start_link(children, opts)
 
     # Start Discord if token is available
     if token do
-      Penbot.Discord.init_waiter()
+      Golem.Discord.init_waiter()
       Application.ensure_all_started(:nostrum)
-      Supervisor.start_child(Penbot.Supervisor, Penbot.Discord)
+      Supervisor.start_child(Golem.Supervisor, Golem.Discord)
     end
 
     {:ok, pid}
   end
 
   defp setup_file_logger do
-    log_dir = Application.get_env(:penbot, :log_dir, "logs")
+    log_dir = Application.get_env(:golem, :log_dir, "logs")
     File.mkdir_p!(log_dir)
-    log_file = Path.join(log_dir, "penbot.log") |> String.to_charlist()
+    log_file = Path.join(log_dir, "golem.log") |> String.to_charlist()
 
-    :logger.add_handler(:penbot_file, :logger_std_h, %{
+    :logger.add_handler(:golem_file, :logger_std_h, %{
       config: %{
         file: log_file,
         max_no_bytes: :infinity,

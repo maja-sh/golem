@@ -1,12 +1,12 @@
-defmodule Mix.Tasks.Penbot.Resume do
+defmodule Mix.Tasks.Golem.Resume do
   @moduledoc """
   Resume a paused run.
 
   ## Usage
 
-      mix penbot.resume <run_id>
-      mix penbot.resume <run_id> --max-steps 200
-      mix penbot.resume --list
+      mix golem.resume <run_id>
+      mix golem.resume <run_id> --max-steps 200
+      mix golem.resume --list
   """
 
   use Mix.Task
@@ -29,8 +29,8 @@ defmodule Mix.Tasks.Penbot.Resume do
       run_id = List.first(rest)
 
       if is_nil(run_id) do
-        Mix.shell().error("Usage: mix penbot.resume <run_id>")
-        Mix.shell().error("       mix penbot.resume --list")
+        Mix.shell().error("Usage: mix golem.resume <run_id>")
+        Mix.shell().error("       mix golem.resume --list")
         exit({:shutdown, 1})
       end
 
@@ -38,7 +38,7 @@ defmodule Mix.Tasks.Penbot.Resume do
 
       Mix.shell().info("Resuming run #{run_id}...\n")
 
-      case Penbot.resume(run_id, runner_opts) do
+      case Golem.resume(run_id, runner_opts) do
         {:ok, %{success: true, summary: summary}} ->
           Mix.shell().info("\n✓ Goal achieved: #{summary}")
 
@@ -46,7 +46,7 @@ defmodule Mix.Tasks.Penbot.Resume do
           Mix.shell().info("\n✗ Goal not achieved: #{summary}")
 
         {:error, :max_steps_reached} ->
-          Mix.shell().info("\n⏸ Paused — resume with: mix penbot.resume #{run_id}")
+          Mix.shell().info("\n⏸ Paused — resume with: mix golem.resume #{run_id}")
 
         {:error, {:load_failed, reason}} ->
           Mix.shell().error("\n✗ Failed to load run: #{inspect(reason)}")
@@ -58,7 +58,7 @@ defmodule Mix.Tasks.Penbot.Resume do
   end
 
   defp list_runs do
-    runs = Penbot.runs()
+    runs = Golem.runs()
 
     if runs == [] do
       Mix.shell().info("No saved runs.")

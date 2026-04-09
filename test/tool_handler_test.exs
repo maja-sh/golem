@@ -1,4 +1,4 @@
-defmodule Penbot.ToolHandlerTest do
+defmodule Golem.ToolHandlerTest do
   use ExUnit.Case, async: false
 
   # These tests don't touch the sandbox — they test the logic
@@ -7,16 +7,16 @@ defmodule Penbot.ToolHandlerTest do
 
   describe "edit_file matching" do
     setup do
-      Agent.update(Penbot.FileCache, fn _ -> %{} end)
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
       :ok
     end
 
     test "detects already-applied edit" do
       # Simulate a file that already has the new content
-      Penbot.FileCache.put("/test/file.rs", "fn hello() {\n    println!(\"world\");\n}")
+      Golem.FileCache.put("/test/file.rs", "fn hello() {\n    println!(\"world\");\n}")
 
       # The old_string is gone but new_string is present
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "edit_file", input: %{
           "path" => "/test/file.rs",
           "old_string" => "fn hello() {\n    println!(\"hello\");\n}",
@@ -36,7 +36,7 @@ defmodule Penbot.ToolHandlerTest do
 
   describe "update_progress parsing" do
     setup do
-      Agent.update(Penbot.FileCache, fn _ -> %{} end)
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
       :ok
     end
 
@@ -47,7 +47,7 @@ defmodule Penbot.ToolHandlerTest do
         %{"text" => "Step 3", "status" => "pending"}
       ]
 
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "update_progress", input: %{"items" => items}},
         0
       )
@@ -66,7 +66,7 @@ defmodule Penbot.ToolHandlerTest do
         %{"text" => "Unknown", "status" => "whatever"}
       ]
 
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "update_progress", input: %{"items" => items}},
         0
       )
@@ -77,14 +77,14 @@ defmodule Penbot.ToolHandlerTest do
 
   describe "think tool routing" do
     setup do
-      Agent.update(Penbot.FileCache, fn _ -> %{} end)
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
       :ok
     end
 
     test "think without replan returns reasoning" do
       reasoning = "I should try a different approach because..."
 
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "think", input: %{"reasoning" => reasoning}},
         0
       )
@@ -95,7 +95,7 @@ defmodule Penbot.ToolHandlerTest do
     test "think with replan returns :think_replan" do
       reasoning = "After researching, I recommend building X"
 
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "think", input: %{"reasoning" => reasoning, "request_replan" => true}},
         0
       )
@@ -104,7 +104,7 @@ defmodule Penbot.ToolHandlerTest do
     end
 
     test "think defaults to no replan" do
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "think", input: %{"reasoning" => "some thought"}},
         0
       )
@@ -115,12 +115,12 @@ defmodule Penbot.ToolHandlerTest do
 
   describe "done tool" do
     setup do
-      Agent.update(Penbot.FileCache, fn _ -> %{} end)
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
       :ok
     end
 
     test "returns done with success" do
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "done", input: %{"success" => true, "summary" => "Built the thing"}},
         0
       )
@@ -129,7 +129,7 @@ defmodule Penbot.ToolHandlerTest do
     end
 
     test "returns done with failure" do
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "done", input: %{"success" => false, "summary" => "Couldn't do it"}},
         0
       )
@@ -138,7 +138,7 @@ defmodule Penbot.ToolHandlerTest do
     end
 
     test "defaults success to false" do
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "done", input: %{"summary" => "something"}},
         0
       )
@@ -149,12 +149,12 @@ defmodule Penbot.ToolHandlerTest do
 
   describe "unknown tool" do
     setup do
-      Agent.update(Penbot.FileCache, fn _ -> %{} end)
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
       :ok
     end
 
     test "returns error for unknown tool" do
-      result = Penbot.ToolHandler.execute(
+      result = Golem.ToolHandler.execute(
         %{name: "nonexistent_tool", input: %{}},
         0
       )

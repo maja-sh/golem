@@ -1,9 +1,9 @@
-defmodule Penbot.MixProject do
+defmodule Golem.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :penbot,
+      app: :golem,
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
@@ -14,7 +14,7 @@ defmodule Penbot.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {Penbot.Application, []}
+      mod: {Golem.Application, []}
     ]
   end
 

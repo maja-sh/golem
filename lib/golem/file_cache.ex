@@ -1,4 +1,4 @@
-defmodule Penbot.FileCache do
+defmodule Golem.FileCache do
   @moduledoc """
   In-memory cache of file contents from the container.
   Stores content + hash. On cache hit, verifies hash against
@@ -80,7 +80,7 @@ defmodule Penbot.FileCache do
   end
 
   defp container_hash(path) do
-    case Penbot.Sandbox.exec("md5sum #{escape(path)} 2>/dev/null | cut -d' ' -f1", timeout: 5_000) do
+    case Golem.Sandbox.exec("md5sum #{escape(path)} 2>/dev/null | cut -d' ' -f1", timeout: 5_000) do
       {:ok, %{exit_code: 0, output: hash}} -> {:ok, String.trim(hash)}
       _ -> :error
     end

@@ -1,4 +1,4 @@
-defmodule Penbot.TUI do
+defmodule Golem.TUI do
   @moduledoc """
   Terminal UI using Owl.LiveScreen for a fixed status area at the bottom
   and Owl.IO.puts for scrolling output above it. No manual ANSI cursor
@@ -31,7 +31,7 @@ defmodule Penbot.TUI do
       started_at: System.monotonic_time(:second)
     }
 
-    :persistent_term.put(:penbot_tui_status, initial_state)
+    :persistent_term.put(:golem_tui_status, initial_state)
 
     Owl.LiveScreen.add_block(:status,
       state: initial_state,
@@ -40,18 +40,18 @@ defmodule Penbot.TUI do
 
     # Start ticker for spinner animation — updates the status block state
     ticker_pid = spawn_link(fn -> ticker_loop() end)
-    :persistent_term.put(:penbot_tui_ticker, ticker_pid)
-    :persistent_term.put(:penbot_tui_active, true)
+    :persistent_term.put(:golem_tui_ticker, ticker_pid)
+    :persistent_term.put(:golem_tui_active, true)
   end
 
   def stop_display do
-    if pid = :persistent_term.get(:penbot_tui_ticker, nil) do
+    if pid = :persistent_term.get(:golem_tui_ticker, nil) do
       Process.exit(pid, :shutdown)
     end
-    :persistent_term.put(:penbot_tui_active, false)
+    :persistent_term.put(:golem_tui_active, false)
 
     try do
-      status = :persistent_term.get(:penbot_tui_status, %{})
+      status = :persistent_term.get(:golem_tui_status, %{})
       started_at = Map.get(status, :started_at, 0)
       cost = Map.get(status, :cost, "$0.0000")
       verb = Map.get(status, :verb, "Forging")
@@ -157,7 +157,7 @@ defmodule Penbot.TUI do
   def run_paused(run_id) do
     puts("")
     puts([Owl.Data.tag("⏸ ", :yellow), Owl.Data.tag("Paused ", :yellow),
-          Owl.Data.tag("— resume: ", :faint), Owl.Data.tag("mix penbot.resume #{run_id}", :white)])
+          Owl.Data.tag("— resume: ", :faint), Owl.Data.tag("mix golem.resume #{run_id}", :white)])
   end
 
   def run_error(reason) do
@@ -222,9 +222,9 @@ defmodule Penbot.TUI do
   defp update_status(changes) do
     try do
       # Store latest state in persistent_term for the ticker to read
-      current = :persistent_term.get(:penbot_tui_status, %{})
+      current = :persistent_term.get(:golem_tui_status, %{})
       new_state = Map.merge(current, changes)
-      :persistent_term.put(:penbot_tui_status, new_state)
+      :persistent_term.put(:golem_tui_status, new_state)
       # Update the Owl block with the full state including spinner
       Owl.LiveScreen.update(:status, new_state)
     catch
@@ -235,11 +235,11 @@ defmodule Penbot.TUI do
   defp ticker_loop do
     Process.sleep(@spinner_interval)
     try do
-      current = :persistent_term.get(:penbot_tui_status, %{})
+      current = :persistent_term.get(:golem_tui_status, %{})
       idx = Map.get(current, :spinner_idx, 0)
       new_idx = rem(idx + 1, length(@spinner_frames))
       new_state = Map.put(current, :spinner_idx, new_idx)
-      :persistent_term.put(:penbot_tui_status, new_state)
+      :persistent_term.put(:golem_tui_status, new_state)
       Owl.LiveScreen.update(:status, new_state)
     catch
       _, _ -> :ok

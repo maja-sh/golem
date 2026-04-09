@@ -1,9 +1,9 @@
 #!/bin/bash
-# Start the penbot-vm container with persistent storage.
+# Start the golem-vm container with persistent storage.
 # Agent's home directory survives container restarts.
 
-CONTAINER_NAME="${1:-penbot-vm}"
-IMAGE="${2:-penbot-vm:latest}"
+CONTAINER_NAME="${1:-golem-vm}"
+IMAGE="${2:-golem-vm:latest}"
 
 # Check if container already exists
 if podman container exists "$CONTAINER_NAME" 2>/dev/null; then
@@ -23,8 +23,8 @@ echo "Creating container $CONTAINER_NAME with persistent volume..."
 podman run -d \
   --name "$CONTAINER_NAME" \
   --privileged \
-  -v penbot-data:/home/agent \
+  -v golem-data:/home/agent \
   "$IMAGE"
 
 echo "Container $CONTAINER_NAME started."
-echo "Data persisted in volume: penbot-data"
+echo "Data persisted in volume: golem-data"

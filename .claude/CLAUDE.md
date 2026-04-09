@@ -1,4 +1,4 @@
-# Penbot
+# Golem
 
 Autonomous agent that takes a goal, plans with Claude Opus, and executes with Claude Sonnet inside a sandboxed podman container.
 
@@ -6,21 +6,21 @@ Autonomous agent that takes a goal, plans with Claude Opus, and executes with Cl
 
 ```bash
 # Build and start the container
-podman build -t penbot-vm:latest -f containers/Dockerfile containers/
+podman build -t golem-vm:latest -f containers/Dockerfile containers/
 ./containers/start.sh
 
 # Run a scenario
-mix penbot.run --scenario smoke_maze
+mix golem.run --scenario smoke_maze
 
 # Run with a custom goal
-mix penbot.run "Build a REST API in Python"
+mix golem.run "Build a REST API in Python"
 
 # Resume a paused run
-mix penbot.resume --list
-mix penbot.resume <run_id>
+mix golem.resume --list
+mix golem.resume <run_id>
 
 # Export files from container
-mix penbot.export /home/agent/product ./output/product
+mix golem.export /home/agent/product ./output/product
 ```
 
 ## Architecture
@@ -31,15 +31,15 @@ Goal → Opus (plan) → Sonnet (execute in loop) → Done
                     podman container (shell, files, GUI)
 ```
 
-- **Runner** (`lib/penbot/runner.ex`) — Main loop. Plans with Opus, executes with Sonnet, handles re-planning, multi-tool turns, context compaction, state persistence.
-- **Claude** (`lib/penbot/claude.ex`) — API client with prompt caching, extended thinking, exponential backoff retry.
-- **Sandbox** (`lib/penbot/sandbox.ex`) — GenServer wrapping `podman exec` with sentinel-based output parsing.
-- **Tools** (`lib/penbot/tools.ex`) — Tool definitions for Claude's tool use API. `for_depth/1` controls sub-agent nesting.
-- **ToolHandler** (`lib/penbot/tool_handler.ex`) — Dispatches tool calls to implementations.
-- **Prompt** (`lib/penbot/prompt.ex`) — System prompts for executor, planner, and sub-agents.
-- **State** (`lib/penbot/state.ex`) — Save/load run state for resume support.
-- **Screenshot** (`lib/penbot/screenshot.ex`) — Captures Xvfb display, saves to host, returns base64 for Claude.
-- **Web** (`lib/penbot/web.ex`) — Perplexity search and URL fetching.
+- **Runner** (`lib/golem/runner.ex`) — Main loop. Plans with Opus, executes with Sonnet, handles re-planning, multi-tool turns, context compaction, state persistence.
+- **Claude** (`lib/golem/claude.ex`) — API client with prompt caching, extended thinking, exponential backoff retry.
+- **Sandbox** (`lib/golem/sandbox.ex`) — GenServer wrapping `podman exec` with sentinel-based output parsing.
+- **Tools** (`lib/golem/tools.ex`) — Tool definitions for Claude's tool use API. `for_depth/1` controls sub-agent nesting.
+- **ToolHandler** (`lib/golem/tool_handler.ex`) — Dispatches tool calls to implementations.
+- **Prompt** (`lib/golem/prompt.ex`) — System prompts for executor, planner, and sub-agents.
+- **State** (`lib/golem/state.ex`) — Save/load run state for resume support.
+- **Screenshot** (`lib/golem/screenshot.ex`) — Captures Xvfb display, saves to host, returns base64 for Claude.
+- **Web** (`lib/golem/web.ex`) — Perplexity search and URL fetching.
 
 ## Tools (16)
 
@@ -50,9 +50,9 @@ shell, write_file, read_file, edit_file, list_directory, glob, grep, web_search,
 - **Dual model**: Opus plans, Sonnet executes. `think(request_replan: true)` triggers Opus re-plan.
 - **Multi-tool turns**: All tool_use blocks in a response are executed, not just the first.
 - **Context compaction**: Old messages are summarized into a structured recap at 40 messages instead of being dropped.
-- **State persistence**: Saved every 10 steps and on max_steps. Resume with `Penbot.resume(id)`.
+- **State persistence**: Saved every 10 steps and on max_steps. Resume with `Golem.resume(id)`.
 - **Sub-agents**: Isolated context, 50-step cap, depth capped at 3.
-- **Container**: Agent runs as root. Xvfb on :99 for GUI. Volume `penbot-data` for persistence.
+- **Container**: Agent runs as root. Xvfb on :99 for GUI. Volume `golem-data` for persistence.
 
 ## Config
 
@@ -88,8 +88,8 @@ Test scenarios in `scenarios/`. Run with `--scenario <name>`:
 
 - Elixir 1.19, OTP 27
 - Uses podman (not docker)
-- Container image: `penbot-vm:latest`
-- Container name: `penbot-vm`
-- Logs: `logs/penbot.log`
+- Container image: `golem-vm:latest`
+- Container name: `golem-vm`
+- Logs: `logs/golem.log`
 - Screenshots: `screenshots/`
 - Run state: `runs/<id>/state.json`

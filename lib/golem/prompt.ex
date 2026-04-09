@@ -1,4 +1,4 @@
-defmodule Penbot.Prompt do
+defmodule Golem.Prompt do
   @moduledoc """
   Builds system prompts and initial messages for the planner and executor.
   """

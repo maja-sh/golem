@@ -1,4 +1,4 @@
-defmodule Penbot.Screenshot do
+defmodule Golem.Screenshot do
   @moduledoc """
   Captures screenshots from the container's virtual display.
   Saves to a local directory and returns base64-encoded image data for Claude.
@@ -20,7 +20,7 @@ defmodule Penbot.Screenshot do
     local_path = Path.join(screenshot_dir, filename)
 
     # Capture screenshot inside the container
-    case Penbot.Sandbox.exec("scrot -z #{container_path}", timeout: 10_000) do
+    case Golem.Sandbox.exec("scrot -z #{container_path}", timeout: 10_000) do
       {:ok, %{exit_code: 0}} ->
         # Copy from container to host
         copy_to_host(container_path, local_path)
@@ -35,7 +35,7 @@ defmodule Penbot.Screenshot do
   end
 
   defp copy_to_host(container_path, local_path) do
-    container = Application.get_env(:penbot, :container, "penbot-vm")
+    container = Application.get_env(:golem, :container, "golem-vm")
 
     case System.cmd("podman", ["cp", "#{container}:#{container_path}", local_path],
            stderr_to_stdout: true
@@ -58,6 +58,6 @@ defmodule Penbot.Screenshot do
   end
 
   defp screenshot_dir do
-    Application.get_env(:penbot, :screenshot_dir, "screenshots")
+    Application.get_env(:golem, :screenshot_dir, "screenshots")
   end
 end

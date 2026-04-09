@@ -1,11 +1,11 @@
-defmodule Mix.Tasks.Penbot.Export do
+defmodule Mix.Tasks.Golem.Export do
   @moduledoc """
   Export files from the container to local filesystem.
 
   ## Usage
 
-      mix penbot.export /home/agent/product ./output/product
-      mix penbot.export /home/agent/product
+      mix golem.export /home/agent/product ./output/product
+      mix golem.export /home/agent/product
   """
 
   use Mix.Task
@@ -26,7 +26,7 @@ defmodule Mix.Tasks.Penbot.Export do
         do_export(container_path, Path.join("output", basename))
 
       _ ->
-        Mix.shell().error("Usage: mix penbot.export <container_path> [local_path]")
+        Mix.shell().error("Usage: mix golem.export <container_path> [local_path]")
         exit({:shutdown, 1})
     end
   end
@@ -35,7 +35,7 @@ defmodule Mix.Tasks.Penbot.Export do
     Mix.Task.run("app.start")
     Mix.shell().info("Exporting #{container_path} → #{local_path}")
 
-    case Penbot.export(container_path, local_path) do
+    case Golem.export(container_path, local_path) do
       {:ok, path} ->
         Mix.shell().info("✓ Exported to #{path}")
 

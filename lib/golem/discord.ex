@@ -1,4 +1,4 @@
-defmodule Penbot.Discord do
+defmodule Golem.Discord do
   @moduledoc """
   Minimal Discord integration via Nostrum.
   Sends messages to a configured channel and waits for replies.
@@ -8,7 +8,7 @@ defmodule Penbot.Discord do
   use Nostrum.Consumer
   require Logger
 
-  @waiter_key :penbot_discord_waiter
+  @waiter_key :golem_discord_waiter
 
   def init_waiter do
     :persistent_term.put(@waiter_key, nil)

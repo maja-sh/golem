@@ -1,4 +1,4 @@
-defmodule Penbot.Sandbox do
+defmodule Golem.Sandbox do
   @moduledoc """
   Manages shell access to a podman container via an interactive bash port.
 
@@ -69,7 +69,7 @@ defmodule Penbot.Sandbox do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    container = Application.get_env(:penbot, :container, "penbot-vm")
+    container = Application.get_env(:golem, :container, "golem-vm")
     Logger.info("Sandbox initialized, container: #{container}")
     {:ok, %{port: nil, container: container, buffer: "", mode: :idle}}
   end
@@ -119,7 +119,7 @@ defmodule Penbot.Sandbox do
            "run", "-d",
            "--name", container,
            "--privileged",
-           "-v", "penbot-data:/home/agent",
+           "-v", "golem-data:/home/agent",
            "#{container}:latest"
          ], stderr_to_stdout: true) do
       {_, 0} ->
@@ -285,7 +285,7 @@ defmodule Penbot.Sandbox do
 
   defp do_write_file(container, container_path, content) do
     tmp_dir = System.tmp_dir!()
-    tmp_name = "penbot_#{:crypto.strong_rand_bytes(8) |> Base.encode16()}"
+    tmp_name = "golem_#{:crypto.strong_rand_bytes(8) |> Base.encode16()}"
     tmp_path = Path.join(tmp_dir, tmp_name)
 
     try do
@@ -304,5 +304,5 @@ defmodule Penbot.Sandbox do
 
   defp escape(path), do: "'#{String.replace(path, "'", "'\\''")}'"
 
-  defp default_timeout, do: Application.get_env(:penbot, :command_timeout, 60_000)
+  defp default_timeout, do: Application.get_env(:golem, :command_timeout, 60_000)
 end

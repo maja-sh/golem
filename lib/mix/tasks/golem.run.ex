@@ -1,13 +1,13 @@
-defmodule Mix.Tasks.Penbot.Run do
+defmodule Mix.Tasks.Golem.Run do
   @moduledoc """
   Run the autonomous agent with a goal.
 
   ## Usage
 
-      mix penbot.run "Build a web scraper in Python"
-      mix penbot.run --scenario smoke_maze
-      mix penbot.run --plan plan.md "Build a web scraper in Python"
-      mix penbot.run --max-steps 50 "Set up a Phoenix project"
+      mix golem.run "Build a web scraper in Python"
+      mix golem.run --scenario smoke_maze
+      mix golem.run --plan plan.md "Build a web scraper in Python"
+      mix golem.run --max-steps 50 "Set up a Phoenix project"
   """
 
   use Mix.Task
@@ -40,8 +40,8 @@ defmodule Mix.Tasks.Penbot.Run do
       end
 
     if goal == "" do
-      Mix.shell().error("Usage: mix penbot.run \"your goal here\"")
-      Mix.shell().error("       mix penbot.run --scenario smoke_maze")
+      Mix.shell().error("Usage: mix golem.run \"your goal here\"")
+      Mix.shell().error("       mix golem.run --scenario smoke_maze")
       exit({:shutdown, 1})
     end
 
@@ -72,7 +72,7 @@ defmodule Mix.Tasks.Penbot.Run do
     Mix.shell().info("Goal: #{goal}")
     Mix.shell().info("Starting autonomous agent...\n")
 
-    case Penbot.run(goal, runner_opts) do
+    case Golem.run(goal, runner_opts) do
       {:ok, %{success: true, summary: summary}} ->
         Mix.shell().info("\n✓ Goal achieved: #{summary}")
 
