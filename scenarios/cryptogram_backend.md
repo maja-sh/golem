@@ -260,16 +260,71 @@ cryptogram/
 
 ---
 
+## Code Quality Requirements
+
+This codebase must be production-quality. The operator will maintain it.
+
+### Readability
+- **Clear naming**: function and variable names should read like English. `validate_transaction_signature` not `val_tx_sig`. `is_username_taken` not `check_un`.
+- **Small functions**: each function does one thing. If a function is over 40 lines, split it.
+- **Module-level docs**: every module (`mod.rs`, top of each file) has a doc comment explaining what it does and how it fits into the architecture.
+- **Public API docs**: every pub function has a `///` doc comment.
+- **No magic numbers**: constants have names. `const MAX_POST_LENGTH: usize = 300;`
+- **Error handling**: use `thiserror` for typed errors. No `.unwrap()` in non-test code. Every error case should be handled or propagated with `?` and a meaningful error type.
+- **No dead code**: don't leave commented-out code or unused functions.
+
+### Testing Strategy
+
+Tests are critical. Write them as you go, not as an afterthought.
+
+**Unit tests** (in each module):
+- `block.rs`: block creation, hashing, PoW validation, invalid block rejection
+- `transaction.rs`: all tx types, signing, signature verification, validation rules (invalid username, too-long post, double registration, etc.)
+- `chain.rs`: genesis, adding valid blocks, rejecting invalid blocks, fork handling
+- `mempool.rs`: add/remove txs, duplicate rejection, ordering
+- `store.rs`: write/read blocks, index queries, user lookup, follow graph, pagination
+
+**Integration tests** (`tests/` directory):
+- `test_blockchain.rs`: full flow — create chain, build transactions, mine blocks, query state
+- `test_api.rs`: spin up axum server, test every endpoint with real HTTP requests (use `reqwest`). Cover happy paths AND error cases (invalid tx, missing user, etc.)
+- `test_e2e.rs`: full end-to-end test:
+  1. Start a node (chain + mempool + API, no P2P needed)
+  2. Register two users via API
+  3. User A follows User B
+  4. User B creates a post
+  5. Mine a block (trigger mining directly, don't wait)
+  6. Verify User A's feed contains User B's post
+  7. User A replies to User B's post
+  8. Mine again
+  9. Verify the reply appears on the post detail endpoint
+  10. Verify follower/following counts are correct
+  11. User A unfollows User B
+  12. Mine again
+  13. Verify feed no longer contains User B's posts
+
+**P2P tests** (`test_p2p.rs`):
+- Start two nodes on different ports
+- Submit a transaction on node 1
+- Mine on node 1
+- Verify node 2 received the block via gossipsub
+- Start a third node, verify it syncs the full chain
+
+Run `cargo test` at the end of each phase. All tests must pass before moving to the next phase.
+
+---
+
 ## Build Phases
 
 ### Phase 1: Core Blockchain
-- [ ] Set up Cargo project with dependencies
+- [ ] Set up Cargo project with dependencies (including thiserror, anyhow for errors)
+- [ ] Define error types for blockchain, storage, API, P2P
 - [ ] Implement Block and Transaction structs with serialization
 - [ ] Implement SHA-256 hashing and PoW mining
 - [ ] Implement Ed25519 signing and verification
-- [ ] Implement transaction validation rules
-- [ ] Implement Chain (add block, validate chain)
-- [ ] Write blockchain tests
+- [ ] Implement transaction validation rules (all tx types)
+- [ ] Implement Chain (add block, validate chain, genesis)
+- [ ] Write unit tests for block, transaction, and chain
+- [ ] Run `cargo test` — all must pass
 
 ### Phase 2: Storage
 - [ ] Set up Heed with multiple databases
@@ -277,35 +332,43 @@ cryptogram/
 - [ ] Implement transaction indexing
 - [ ] Implement user index (username → pubkey, profiles)
 - [ ] Implement follow graph (following/followers)
-- [ ] Implement post index (user → posts)
-- [ ] Write storage tests
+- [ ] Implement post index (user → posts, with pagination)
+- [ ] Write unit tests for all storage operations
+- [ ] Run `cargo test` — all must pass
 
-### Phase 3: P2P Networking
+### Phase 3: Mempool & Mining
+- [ ] Implement mempool (add, drain, duplicate rejection)
+- [ ] Implement mining task (separate tokio task with spawn_blocking for PoW)
+- [ ] Connect mining to mempool and chain
+- [ ] Write unit tests for mempool
+- [ ] Run `cargo test` — all must pass
+
+### Phase 4: API
+- [ ] Set up axum server with CORS
+- [ ] Implement transaction submission endpoint
+- [ ] Implement user endpoints (profile, search)
+- [ ] Implement post endpoints (detail, replies)
+- [ ] Implement feed endpoints (chronological + discover)
+- [ ] Implement node status endpoint
+- [ ] Write integration tests: spin up server, test every endpoint with reqwest
+- [ ] Run `cargo test` — all must pass
+
+### Phase 5: P2P Networking
 - [ ] Set up libp2p with gossipsub + mDNS + request-response
 - [ ] Implement block and transaction broadcasting
 - [ ] Implement chain sync protocol
 - [ ] Handle peer discovery and connection
-- [ ] Write P2P tests (at least message serialization)
+- [ ] Write P2P tests (message serialization, two-node sync)
+- [ ] Run `cargo test` — all must pass
 
-### Phase 4: Mining
-- [ ] Implement mempool
-- [ ] Implement mining task (separate tokio task)
-- [ ] Connect mining to mempool and chain
-- [ ] Broadcast mined blocks to network
-
-### Phase 5: API
-- [ ] Set up axum server
-- [ ] Implement transaction submission endpoint
-- [ ] Implement user endpoints
-- [ ] Implement post endpoints
-- [ ] Implement feed endpoints (chronological + discover)
-- [ ] Implement node status endpoint
-
-### Phase 6: Integration & Testing
-- [ ] Run multi-node test (start 2 nodes, submit tx on one, verify on other)
-- [ ] Test chain sync (start node after blocks exist, verify it catches up)
-- [ ] Test feed and discover algorithm
-- [ ] Write README with architecture overview and usage
+### Phase 6: End-to-End Tests
+- [ ] Write E2E test: full user flow (register → follow → post → feed → reply → unfollow)
+- [ ] Write E2E test: multi-node sync
+- [ ] Write E2E test: chain sync on late-joining node
+- [ ] Run full `cargo test` — everything must pass
+- [ ] Run `cargo clippy` — fix all warnings
+- [ ] Run `cargo fmt` — format all code
+- [ ] Write README with architecture, usage, and test instructions
 
 ---
 
