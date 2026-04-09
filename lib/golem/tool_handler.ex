@@ -96,13 +96,14 @@ defmodule Golem.ToolHandler do
               Golem.FileCache.put(path, content)
               {:continue, "Edit already applied to #{path} (no change needed)."}
             else
+              line_count = content |> String.split("\n") |> length()
               hint =
-                case Golem.FileCache.find_context(path, old) do
-                  nil -> ""
-                  ctx -> "\n\nClosest match in file:\n#{ctx}"
+                case Golem.FileCache.find_context(path, old, 5) do
+                  nil -> "\n\nThe file has #{line_count} lines. Use read_file to see the actual content before retrying."
+                  ctx -> "\n\nFile has #{line_count} lines. Closest match:\n#{ctx}\n\nDo NOT retry with the same old_string. Read the file first to see the exact content."
               end
 
-            {:continue, "[error] old_string not found in #{path}. Make sure it matches exactly, including whitespace and indentation.#{hint}"}
+            {:continue, "[error] old_string not found in #{path}.#{hint}"}
             end
         end
     end
