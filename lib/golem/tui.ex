@@ -91,8 +91,7 @@ defmodule Golem.TUI do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
     GenServer.call(__MODULE__, {:print, [
-      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset],
-      []
+      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset]
     ]})
   end
 
