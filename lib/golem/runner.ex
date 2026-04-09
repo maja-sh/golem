@@ -88,6 +88,8 @@ defmodule Golem.Runner do
           costs: Map.get(saved, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
           errors: Map.get(saved, :errors, []),
           agents_md: Map.get(saved, :agents_md),
+          phase_costs: Map.get(saved, :phase_costs, []),
+          last_completed: Map.get(saved, :last_completed, 0),
           run_id: run_id
         }
 
