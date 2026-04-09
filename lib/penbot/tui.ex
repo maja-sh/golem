@@ -1,76 +1,115 @@
 defmodule Penbot.TUI do
   @moduledoc """
-  Terminal UI with scrolling output and a fixed status area.
-
-  Before printing any new line, the status area is erased.
-  After printing, the status area is redrawn at the bottom.
-  This keeps the status pinned at the bottom without cursor tricks.
+  Terminal UI using Owl.LiveScreen for a fixed status area at the bottom
+  and Owl.IO.puts for scrolling output above it. No manual ANSI cursor
+  manipulation — Owl handles everything.
   """
 
-  use GenServer
   require Logger
 
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
+  @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  @spinner_interval 200
+
+  @forge_verbs [
+    "Forging", "Hammering", "Smelting", "Tempering", "Quenching",
+    "Annealing", "Casting", "Welding", "Shaping", "Refining"
+  ]
 
   # --- Public API ---
 
   def init_display(run_id, goal) do
-    GenServer.call(__MODULE__, {:init, run_id, goal})
+    Application.ensure_all_started(:owl)
+    Logger.configure(level: :warning)
+
+    puts([Owl.Data.tag("● ", :cyan), Owl.Data.tag("Forge ", [:bright, :white]), Owl.Data.tag(run_id, :faint)])
+    puts([Owl.Data.tag("  #{goal}", :faint)])
+    puts("")
+
+    initial_state = %{
+      progress: [], cost: "$0.0000", action: nil,
+      spinner_idx: 0, verb: Enum.random(@forge_verbs),
+      started_at: System.monotonic_time(:second)
+    }
+
+    :persistent_term.put(:penbot_tui_status, initial_state)
+
+    Owl.LiveScreen.add_block(:status,
+      state: initial_state,
+      render: &render_status/1
+    )
+
+    # Start ticker for spinner animation — updates the status block state
+    ticker_pid = spawn_link(fn -> ticker_loop() end)
+    :persistent_term.put(:penbot_tui_ticker, ticker_pid)
+    :persistent_term.put(:penbot_tui_active, true)
   end
 
-  def step_header(step, max_steps, cost_str) do
-    GenServer.cast(__MODULE__, {:update, cost: cost_str, step: step, max_steps: max_steps})
+  def stop_display do
+    if pid = :persistent_term.get(:penbot_tui_ticker, nil) do
+      Process.exit(pid, :shutdown)
+    end
+    :persistent_term.put(:penbot_tui_active, false)
+
+    try do
+      status = :persistent_term.get(:penbot_tui_status, %{})
+      started_at = Map.get(status, :started_at, 0)
+      cost = Map.get(status, :cost, "$0.0000")
+      verb = Map.get(status, :verb, "Forging")
+      elapsed = format_duration(System.monotonic_time(:second) - started_at)
+      Owl.LiveScreen.flush()
+      IO.puts(IO.ANSI.format([:faint, " #{verb} took #{elapsed} · #{cost}", :reset]))
+    catch
+      _, _ -> :ok
+    end
+
+    Logger.configure(level: :info)
+  end
+
+  def planning(label \\ "Planning...") do
+    puts([Owl.Data.tag("+ ", :yellow), Owl.Data.tag(label, :yellow)])
+  end
+
+  def plan_created(plan) do
+    phases = Regex.scan(~r/^## /m, plan) |> length()
+    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
+    puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Plan created ", :green),
+          Owl.Data.tag("(#{phases} phases, #{steps} steps)", :faint)])
+    puts("")
+  end
+
+  def step_header(_step, _max_steps, cost_str) do
+    update_status(%{cost: cost_str, action: nil})
   end
 
   def agent_text(nil), do: :ok
   def agent_text(text) do
-    GenServer.call(__MODULE__, {:print, [[:cyan, "● ", :reset, text]]})
-  end
-
-  @doc """
-  Start streaming text — prints the ● prefix and prepares for character-by-character output.
-  """
-  def stream_start do
-    GenServer.call(__MODULE__, {:stream_start})
-  end
-
-  @doc """
-  Buffer a chunk of streamed text. Flushed to terminal on next tick
-  so the status area stays visible.
-  """
-  def stream_text(chunk) do
-    GenServer.cast(__MODULE__, {:stream_chunk, chunk})
-  end
-
-  @doc """
-  End streaming — flush remaining buffer and redraw status.
-  """
-  def stream_end do
-    GenServer.call(__MODULE__, :stream_end)
+    puts("")
+    puts([Owl.Data.tag("● ", :cyan), Owl.Data.tag(text, :white)])
   end
 
   def tool_call(name, detail) do
-    GenServer.cast(__MODULE__, {:update, action: "#{name} #{detail}"})
+    update_status(%{action: "#{name} #{detail}"})
   end
 
   def tool_result(name, detail, result, elapsed_ms, _tokens) do
     elapsed = format_elapsed(elapsed_ms)
     summary = result_oneliner(result)
-    lines = [
-      [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset, :faint, " (#{elapsed})", :reset]
-    ]
-    lines = if summary != "", do: lines ++ [[:faint, "  └ #{summary}", :reset]], else: lines
-    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil, last_output: :tool]})
+
+    puts([Owl.Data.tag("  #{tool_icon(name)} ", :faint),
+          Owl.Data.tag(tool_label(name, detail), :white),
+          Owl.Data.tag(" (#{elapsed})", :faint)])
+
+    if summary != "" do
+      puts([Owl.Data.tag("  └ #{summary}", :faint)])
+    end
+
+    update_status(%{action: nil})
   end
 
   def tool_error(name, detail, error_text) do
-    lines = [
-      [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
-      [:faint, :red, "  └ #{trunc(error_text, 100)}", :reset]
-    ]
-    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil, last_output: :tool]})
+    puts([Owl.Data.tag("  ✗ ", :red), Owl.Data.tag(tool_label(name, detail), :red)])
+    puts([Owl.Data.tag("  └ #{trunc(error_text, 100)}", [:faint, :red])])
+    update_status(%{action: nil})
   end
 
   def show_diff(path, old_content, new_content) do
@@ -78,75 +117,57 @@ defmodule Penbot.TUI do
     if diff_lines != [] do
       added = added_lines(diff_lines)
       removed = removed_lines(diff_lines)
-      summary = [[:faint, "    #{Path.basename(path)}: ",
-        :green, "+#{added}", :faint, " / ",
-        :red, "-#{removed}", :faint, " lines", :reset]]
-      # Print diff without redrawing status (tool_result follows immediately)
-      GenServer.call(__MODULE__, {:print_no_status, summary ++ diff_lines})
+      puts([Owl.Data.tag("    #{Path.basename(path)}: ", :faint),
+            Owl.Data.tag("+#{added}", :green), Owl.Data.tag(" / ", :faint),
+            Owl.Data.tag("-#{removed}", :red), Owl.Data.tag(" lines", :faint)])
+      Enum.each(diff_lines, fn line -> IO.puts(line) end)
     end
   end
 
   def set_progress(items) do
-    GenServer.call(__MODULE__, {:set_progress, items})
-  end
-
-  def planning(label \\ "Planning...") do
-    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
-  end
-
-  def plan_created(plan) do
-    phases = Regex.scan(~r/^## /m, plan) |> length()
-    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
-    GenServer.call(__MODULE__, {:print, [
-      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset],
-      []
-    ]})
-  end
-
-  def replan_start, do: planning("Re-planning with Opus...")
-
-  def replan_done do
-    GenServer.call(__MODULE__, {:print, [[:green, "✓ Plan revised", :reset]]})
+    update_status(%{progress: items})
   end
 
   def sub_agent_start(goal) do
-    GenServer.call(__MODULE__, {:print, [
-      [:magenta, "  ● Sub-agent: ", :reset, :faint, trunc(goal, 70), :reset]
-    ]})
+    puts([Owl.Data.tag("  ● ", :magenta), Owl.Data.tag("Sub-agent: ", :magenta),
+          Owl.Data.tag(trunc(goal, 70), :faint)])
   end
 
   def sub_agent_result(_goal, steps, success) do
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
-    GenServer.call(__MODULE__, {:print, [
-      [color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset]
-    ]})
+    puts([Owl.Data.tag("  #{icon} ", color), Owl.Data.tag("Sub-agent done ", color),
+          Owl.Data.tag("· #{steps} steps", :faint)])
   end
 
-  def run_complete(success, summary) do
-    lines = [[]] ++
-      if success do
-        [[:green, :bright, "✓ Goal achieved", :reset]]
-      else
-        [[:red, :bright, "✗ Goal not achieved", :reset]]
-      end ++ [[:faint, "  #{trunc(summary, 120)}", :reset]]
+  def replan_start, do: planning("Re-planning with Opus...")
+  def replan_done, do: puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Plan revised", :green)])
 
-    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
+  def run_complete(success, summary) do
+    update_status(%{action: nil})
+    puts("")
+    if success do
+      puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Goal achieved", [:bright, :green])])
+    else
+      puts([Owl.Data.tag("✗ ", :red), Owl.Data.tag("Goal not achieved", [:bright, :red])])
+    end
+    puts([Owl.Data.tag("  #{trunc(summary, 120)}", :faint)])
   end
 
   def run_paused(run_id) do
-    GenServer.call(__MODULE__, {:print, [
-      [],
-      [:yellow, "⏸ Paused", :reset, :faint, " — resume: ", :reset, "mix penbot.resume #{run_id}"]
-    ]})
+    puts("")
+    puts([Owl.Data.tag("⏸ ", :yellow), Owl.Data.tag("Paused ", :yellow),
+          Owl.Data.tag("— resume: ", :faint), Owl.Data.tag("mix penbot.resume #{run_id}", :white)])
   end
 
   def run_error(reason) do
-    GenServer.call(__MODULE__, {:print, [[:red, "✗ Error: #{inspect(reason)}", :reset]]})
+    puts("")
+    puts([Owl.Data.tag("✗ Error: #{inspect(reason)}", :red)])
   end
 
-  def stop_display do
-    GenServer.call(__MODULE__, :stop)
-  end
+  # Stubs for streaming (disabled — using non-streaming calls)
+  def stream_start, do: :ok
+  def stream_text(_chunk), do: :ok
+  def stream_end, do: :ok
 
   # Public helpers
   def format_elapsed(nil), do: "..."
@@ -158,233 +179,72 @@ defmodule Penbot.TUI do
   def format_tokens(n) when n < 1000, do: "#{n} tokens"
   def format_tokens(n), do: "#{Float.round(n / 1000, 1)}k tokens"
 
-  # --- GenServer ---
+  # --- Status Block Renderer ---
 
-  @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-  @spinner_interval 200
+  defp render_status(%{progress: progress, cost: cost, action: action,
+                       spinner_idx: idx, verb: verb, started_at: started_at}) do
+    spinner = Enum.at(@spinner_frames, idx)
+    elapsed = format_duration(System.monotonic_time(:second) - (started_at || 0))
 
-  @forge_verbs [
-    "Forging", "Hammering", "Smelting", "Tempering", "Quenching",
-    "Annealing", "Casting", "Welding", "Shaping", "Refining"
-  ]
-
-  @impl true
-  def init(_opts) do
-    {:ok, %{
-      active: false, cost: "$0.0000", step: 0, max_steps: 0,
-      progress: [], action: nil, status_lines: 0,
-      started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil, streaming: false, stream_buffer: "", printing: false
-    }}
-  end
-
-  @impl true
-  def handle_call({:init, run_id, goal}, _from, state) do
-    Logger.configure(level: :warning)
-    IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
-    IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
-    IO.puts("")
-
-    {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
-
-    {:reply, :ok, %{state |
-      active: true, status_lines: 0,
-      started_at: System.monotonic_time(:second),
-      verb: Enum.random(@forge_verbs),
-      ticker: ticker
-    }}
-  end
-
-  def handle_call({:stream_start}, _from, state) do
-    # Add blank line if the last output was a tool result (visual separation)
-    gap = if Map.get(state, :last_output) == :tool, do: "\n", else: ""
-    prefix = IO.ANSI.format([:cyan, "● ", :reset]) |> IO.chardata_to_string()
-    {:reply, :ok, %{state | streaming: true, stream_buffer: gap <> prefix}}
-  end
-
-  def handle_call(:stream_end, _from, state) do
-    # Flush any remaining buffer
-    state = flush_stream_buffer(state)
-    state = erase_status(state)
-    IO.write("\n")
-    state = draw_status(state)
-    {:reply, :ok, %{state | streaming: false, stream_buffer: ""}}
-  end
-
-  def handle_call({:print_no_status, lines}, _from, state) do
-    # Print without redrawing status — used when more output follows immediately
-    state = erase_status(state)
-    Enum.each(lines, fn
-      [] -> IO.puts("")
-      [raw] when is_binary(raw) -> IO.puts(raw)
-      tokens -> print_line(tokens)
-    end)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:print_raw, lines}, _from, state) do
-    state = erase_status(state)
-    state = %{state | printing: true}
-    Enum.each(lines, fn
-      [] -> IO.puts("")
-      [raw] when is_binary(raw) -> IO.puts(raw)
-      tokens -> print_line(tokens)
-    end)
-    state = %{state | printing: false}
-    state = draw_status(state)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:print, lines}, _from, state) do
-    state = erase_status(state)
-    state = %{state | printing: true}
-    Enum.each(lines, &print_line/1)
-    state = %{state | printing: false}
-    state = draw_status(state)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:print_and_update, lines, updates}, _from, state) do
-    state = erase_status(state)
-    Enum.each(lines, &print_line/1)
-    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
-    state = draw_status(state)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:set_progress, items}, _from, state) do
-    state = erase_status(state)
-    state = %{state | progress: items}
-    state = draw_status(state)
-    {:reply, :ok, state}
-  end
-
-  def handle_call(:stop, _from, state) do
-    if state.ticker, do: :timer.cancel(state.ticker)
-    state = erase_status(state)
-    elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
-    IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
-    Logger.configure(level: :info)
-    {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
-  end
-
-  @impl true
-  def handle_info(:tick, %{active: true, printing: true} = state) do
-    # Skip tick while printing to avoid corrupting output
-    {:noreply, state}
-  end
-
-  def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
-    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
-    overwrite_status(state)
-    {:noreply, state}
-  end
-
-  def handle_info(:tick, %{active: true, streaming: true} = state) do
-    # During streaming, flush buffered text and draw status below it
-    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
-    state = flush_stream_buffer(state)
-    {:noreply, state}
-  end
-
-  def handle_info(:tick, %{active: true} = state) do
-    {:noreply, %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}}
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
-
-  @impl true
-  def handle_cast({:stream_chunk, chunk}, state) do
-    {:noreply, %{state | stream_buffer: (state.stream_buffer || "") <> chunk}}
-  end
-
-  def handle_cast({:update, updates}, state) do
-    state = erase_status(state)
-    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
-    state = draw_status(state)
-    {:noreply, state}
-  end
-
-  # --- Status Area ---
-
-  defp erase_status(%{status_lines: 0} = state), do: state
-  defp erase_status(%{status_lines: n} = state) do
-    # Move up to start of status area
-    IO.write("\e[#{n}A")
-    # Clear each line without adding newlines to scroll buffer
-    for i <- 1..n do
-      IO.write("\e[2K")
-      if i < n, do: IO.write("\e[1B")
-    end
-    # Move back to start
-    IO.write("\e[#{n - 1}A\r")
-    %{state | status_lines: 0}
-  end
-
-  defp draw_status(%{active: false} = state), do: state
-  defp draw_status(state) do
-    lines = build_status_lines(state)
-    Enum.each(lines, fn line ->
-      IO.write("\e[2K")
-      IO.puts(IO.ANSI.format(line))
-    end)
-    %{state | status_lines: length(lines)}
-  end
-
-  # Overwrite status in place — move to start of status area, redraw each line.
-  # No erase step, so no flicker.
-  defp overwrite_status(%{status_lines: 0}), do: :ok
-  defp overwrite_status(%{status_lines: n} = state) do
-    IO.write("\e[#{n}A")
-    lines = build_status_lines(state)
-    Enum.each(lines, fn line ->
-      IO.write("\e[2K")
-      IO.puts(IO.ANSI.format(line))
-    end)
-  end
-
-  # Flush buffered stream text, then redraw status below it
-  defp flush_stream_buffer(%{stream_buffer: ""} = state) do
-    overwrite_status(state)
-    state
-  end
-  defp flush_stream_buffer(%{stream_buffer: buf} = state) do
-    state = erase_status(state)
-    IO.write(buf)
-    state = %{state | stream_buffer: ""}
-    draw_status(state)
-  end
-
-  defp build_status_lines(state) do
-    progress_lines =
-      Enum.map(state.progress, fn item ->
+    prog =
+      Enum.map(progress, fn item ->
         {icon, color} = case item.status do
           :completed -> {"✓", :green}
           :in_progress -> {"→", :yellow}
           :pending -> {"·", :faint}
         end
         style = if item.status == :pending, do: :faint, else: :white
-        [:faint, " [", color, icon, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
+        [Owl.Data.tag(" [", :faint), Owl.Data.tag(icon, color), Owl.Data.tag("] ", :faint),
+         Owl.Data.tag(trunc(item.text, 55), style)]
       end)
 
-    # Bottom line: spinner + verb + elapsed + cost + action
-    spinner = Enum.at(@spinner_frames, state.spinner_idx)
-    elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
-    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
+    action_part = if action, do: [Owl.Data.tag(" · ", :faint), Owl.Data.tag(trunc(action, 40), :magenta)], else: []
 
     bottom = [
-      :cyan, " #{spinner} ", :reset,
-      :white, "#{state.verb} for #{elapsed}", :reset,
-      :faint, " · ", :yellow, state.cost, :reset
+      Owl.Data.tag(" #{spinner} ", :cyan),
+      Owl.Data.tag("#{verb} for #{elapsed}", :white),
+      Owl.Data.tag(" · ", :faint),
+      Owl.Data.tag(cost, :yellow)
     ] ++ action_part
 
-    progress_lines ++ [bottom]
+    (prog ++ [bottom])
+    |> Enum.intersperse("\n")
+    |> List.flatten()
   end
+
+  defp render_status(_), do: ""
 
   # --- Helpers ---
 
-  defp print_line([]), do: IO.puts("")
-  defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
+  defp puts(data), do: Owl.IO.puts(data)
+
+  defp update_status(changes) do
+    try do
+      # Store latest state in persistent_term for the ticker to read
+      current = :persistent_term.get(:penbot_tui_status, %{})
+      new_state = Map.merge(current, changes)
+      :persistent_term.put(:penbot_tui_status, new_state)
+      # Update the Owl block with the full state including spinner
+      Owl.LiveScreen.update(:status, new_state)
+    catch
+      _, _ -> :ok
+    end
+  end
+
+  defp ticker_loop do
+    Process.sleep(@spinner_interval)
+    try do
+      current = :persistent_term.get(:penbot_tui_status, %{})
+      idx = Map.get(current, :spinner_idx, 0)
+      new_idx = rem(idx + 1, length(@spinner_frames))
+      new_state = Map.put(current, :spinner_idx, new_idx)
+      :persistent_term.put(:penbot_tui_status, new_state)
+      Owl.LiveScreen.update(:status, new_state)
+    catch
+      _, _ -> :ok
+    end
+    ticker_loop()
+  end
 
   defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
   defp format_duration(seconds) do
@@ -412,6 +272,7 @@ defmodule Penbot.TUI do
   defp tool_icon("done"), do: "✓"
   defp tool_icon("sub_agent"), do: "●"
   defp tool_icon("ask_user"), do: "?"
+  defp tool_icon("browse"), do: "🌐"
   defp tool_icon(_), do: "▶"
 
   defp tool_label("shell", cmd), do: trunc(cmd, 60)
@@ -428,13 +289,13 @@ defmodule Penbot.TUI do
   defp tool_label("done", _), do: "Done"
   defp tool_label("think", _), do: "Thinking..."
   defp tool_label("ask_user", _), do: "Asking user..."
+  defp tool_label("browse", url), do: "Browse #{trunc(url, 60)}"
   defp tool_label(name, _), do: name
 
   defp build_diff(path, old, new) do
     old_lines = String.split(old, "\n")
     new_lines = String.split(new, "\n")
 
-    # Find the first and last differing lines
     {prefix_len, _} =
       Enum.zip(old_lines, new_lines)
       |> Enum.with_index()
@@ -451,7 +312,6 @@ defmodule Penbot.TUI do
     start = max(0, prefix_len - ctx)
     old_end = min(length(old_lines), length(old_lines) - suffix_len + ctx)
     new_end = min(length(new_lines), length(new_lines) - suffix_len + ctx)
-
     lang = lang_from_path(path)
 
     removed =
@@ -459,10 +319,11 @@ defmodule Penbot.TUI do
       |> Enum.slice(start..min(old_end, length(old_lines) - 1)//1)
       |> Enum.with_index(start + 1)
       |> Enum.map(fn {line, num} ->
+        hl = highlight_line(line, lang)
         if num > prefix_len and num <= length(old_lines) - suffix_len do
-          "    \e[31m- #{num}: #{highlight_line(line, lang)}\e[0m"
+          "    \e[31m- #{num}: #{hl}\e[0m"
         else
-          "    \e[2m  #{num}: #{highlight_line(line, lang)}\e[0m"
+          "    \e[2m  #{num}: #{hl}\e[0m"
         end
       end)
 
@@ -471,16 +332,29 @@ defmodule Penbot.TUI do
       |> Enum.slice(start..min(new_end, length(new_lines) - 1)//1)
       |> Enum.with_index(start + 1)
       |> Enum.map(fn {line, num} ->
+        hl = highlight_line(line, lang)
         if num > prefix_len and num <= length(new_lines) - suffix_len do
-          "    \e[32m+ #{num}: #{highlight_line(line, lang)}\e[0m"
+          "    \e[32m+ #{num}: #{hl}\e[0m"
         else
-          "    \e[2m  #{num}: #{highlight_line(line, lang)}\e[0m"
+          "    \e[2m  #{num}: #{hl}\e[0m"
         end
       end)
 
-    # Return as raw strings (already ANSI-formatted)
-    (removed ++ added) |> Enum.take(20) |> Enum.map(&[&1])
+    (removed ++ added) |> Enum.take(20)
   end
+
+  defp added_lines(diff_lines) do
+    Enum.count(diff_lines, &String.contains?(&1, "\e[32m+"))
+  end
+
+  defp removed_lines(diff_lines) do
+    Enum.count(diff_lines, &String.contains?(&1, "\e[31m-"))
+  end
+
+  defp result_oneliner(text) when is_binary(text) do
+    text |> String.split("\n", trim: true) |> List.first("") |> trunc(90)
+  end
+  defp result_oneliner(_), do: ""
 
   # --- Syntax Highlighting ---
 
@@ -491,10 +365,8 @@ defmodule Penbot.TUI do
       nil -> line
       bat ->
         try do
-          case System.cmd(bat, [
-                 "--color=always", "--style=plain", "--language=#{lang}",
-                 "--paging=never", "-"
-               ], input: line, stderr_to_stdout: true) do
+          case System.cmd(bat, ["--color=always", "--style=plain", "--language=#{lang}",
+                 "--paging=never", "-"], input: line, stderr_to_stdout: true) do
             {highlighted, 0} -> String.trim_trailing(highlighted)
             _ -> line
           end
@@ -528,7 +400,6 @@ defmodule Penbot.TUI do
       ".rs" -> "rust"
       ".go" -> "go"
       ".sh" -> "bash"
-      ".bash" -> "bash"
       ".json" -> "json"
       ".yaml" -> "yaml"
       ".yml" -> "yaml"
@@ -537,27 +408,7 @@ defmodule Penbot.TUI do
       ".css" -> "css"
       ".sql" -> "sql"
       ".md" -> "markdown"
-      ".xml" -> "xml"
       _ -> nil
     end
   end
-
-  defp added_lines(diff_lines) do
-    Enum.count(diff_lines, fn
-      [raw] when is_binary(raw) -> String.contains?(raw, "\e[32m+")
-      _ -> false
-    end)
-  end
-
-  defp removed_lines(diff_lines) do
-    Enum.count(diff_lines, fn
-      [raw] when is_binary(raw) -> String.contains?(raw, "\e[31m-")
-      _ -> false
-    end)
-  end
-
-  defp result_oneliner(text) when is_binary(text) do
-    text |> String.split("\n", trim: true) |> List.first("") |> trunc(90)
-  end
-  defp result_oneliner(_), do: ""
 end

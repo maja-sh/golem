@@ -13,8 +13,7 @@ defmodule Penbot.Application do
 
     children = [
       Penbot.Sandbox,
-      Penbot.FileCache,
-      Penbot.TUI
+      Penbot.FileCache
     ]
 
     opts = [strategy: :one_for_one, name: Penbot.Supervisor]
