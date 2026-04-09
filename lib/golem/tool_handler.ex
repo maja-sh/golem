@@ -258,6 +258,39 @@ defmodule Golem.ToolHandler do
     {:continue, "Progress updated (#{completed}/#{total} completed)."}
   end
 
+  def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
+    count = length(agents)
+    Logger.info("  [parallel_sub_agents] #{count} agents")
+
+    # Spawn all sub-agents concurrently
+    tasks =
+      Enum.map(agents, fn agent ->
+        goal = Map.fetch!(agent, "goal")
+        context = Map.get(agent, "context", "")
+        Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth) end)
+      end)
+
+    # Await all results (generous timeout — sub-agents can take a while)
+    results = Task.await_many(tasks, :infinity)
+
+    # Format results summary
+    summaries =
+      results
+      |> Enum.zip(agents)
+      |> Enum.map(fn {result, agent} ->
+        goal = Map.get(agent, "goal", "unknown")
+        case result do
+          {:ok, %{success: true, summary: s}} -> "✓ #{goal}: #{s}"
+          {:ok, %{success: false, summary: s}} -> "✗ #{goal}: #{s}"
+          {:error, reason} -> "✗ #{goal}: error — #{inspect(reason)}"
+        end
+      end)
+      |> Enum.join("\n")
+
+    succeeded = Enum.count(results, &match?({:ok, %{success: true}}, &1))
+    {:continue, "#{succeeded}/#{count} sub-agents succeeded:\n#{summaries}"}
+  end
+
   def execute(%{name: "screenshot", input: _input}, _depth) do
     Logger.info("  [screenshot]")
 

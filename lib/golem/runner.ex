@@ -146,6 +146,8 @@ defmodule Golem.Runner do
           history: [],
           costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
           errors: [],
+          phase_costs: [],
+          last_completed: 0,
           run_id: run_id
         }
 
@@ -310,6 +312,7 @@ defmodule Golem.Runner do
             messages = append_multi_tool_exchange(messages, response, executed)
             state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
             Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
+            log_phase_costs(state)
             maybe_save(state)
             {:ok, summary}
 
@@ -325,7 +328,10 @@ defmodule Golem.Runner do
             messages = maybe_inject_review(messages, executed)
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
-            state = %{state | messages: messages, step: step, costs: costs, errors: errors, history: update_history(state.history, executed)}
+            {phase_costs, last_completed} = track_phase_costs(executed, costs, state)
+            state = %{state | messages: messages, step: step, costs: costs, errors: errors,
+                       phase_costs: phase_costs, last_completed: last_completed,
+                       history: update_history(state.history, executed)}
             maybe_save(state)
             loop(state, system)
         end
@@ -576,6 +582,7 @@ defmodule Golem.Runner do
   defp summarize_input(%{name: "screenshot", input: _}), do: "display"
   defp summarize_input(%{name: "browse", input: %{"url" => u}}), do: u
   defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
+  defp summarize_input(%{name: "parallel_sub_agents", input: %{"agents" => a}}), do: "#{length(a)} agents"
   defp summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
   defp summarize_input(%{name: "update_progress", input: _}), do: "progress"
 
@@ -588,6 +595,53 @@ defmodule Golem.Runner do
     if Golem.State.should_save?(step), do: Golem.State.save(run_id, state)
   end
   defp maybe_save(_state), do: :ok
+
+  # --- Phase Cost Tracking ---
+
+  defp track_phase_costs(executed, costs, state) do
+    # Check if update_progress was called with newly completed items
+    progress_call = Enum.find(executed, fn {tc, _} -> tc.name == "update_progress" end)
+
+    case progress_call do
+      {tc, _} ->
+        items = Map.get(tc.input, "items", [])
+        completed = Enum.count(items, fn i ->
+          Map.get(i, "status", "") in ["completed", "complete", "done"]
+        end)
+
+        prev = Map.get(state, :last_completed, 0)
+
+        if completed > prev do
+          # New items completed — record cost for them
+          cost_now = format_cost(costs)
+          new_phases = Enum.filter(items, fn i ->
+            Map.get(i, "status", "") in ["completed", "complete", "done"]
+          end) |> Enum.map(& &1["text"]) |> Enum.take(completed - prev)
+
+          new_entries = Enum.map(new_phases, fn name -> {name, cost_now} end)
+          phase_costs = Map.get(state, :phase_costs, []) ++ new_entries
+
+          {phase_costs, completed}
+        else
+          {Map.get(state, :phase_costs, []), prev}
+        end
+
+      nil ->
+        {Map.get(state, :phase_costs, []), Map.get(state, :last_completed, 0)}
+    end
+  end
+
+  defp log_phase_costs(state) do
+    phase_costs = Map.get(state, :phase_costs, [])
+    if phase_costs != [] do
+      Logger.info("Phase cost breakdown:")
+      Enum.each(phase_costs, fn {name, cost} ->
+        Logger.info("  #{name}: $#{cost}")
+      end)
+
+      Golem.TUI.show_phase_costs(phase_costs)
+    end
+  end
 
   # --- Self-Review ---
 

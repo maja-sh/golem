@@ -14,7 +14,7 @@ defmodule Golem.Tools do
     base = base_tools()
 
     extras =
-      (if depth < @max_agent_depth, do: [sub_agent_tool()], else: []) ++
+      (if depth < @max_agent_depth, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []) ++
         (if discord_available?(), do: [ask_user_tool()], else: [])
 
     base ++ extras
@@ -33,6 +33,27 @@ defmodule Golem.Tools do
         context: %{type: "string", description: "Any relevant context the sub-agent needs (file paths, decisions made so far, constraints)"}
       },
       required: ["goal"]
+    })
+  end
+
+  defp parallel_sub_agents_tool do
+    tool("parallel_sub_agents", "Spawn multiple sub-agents to work on independent tasks concurrently. Each gets its own context. Use when you have 2-4 independent tasks that don't depend on each other — e.g. \"implement module A\" and \"write tests for module B\" at the same time. All agents share the same filesystem so avoid conflicting file writes.", %{
+      type: "object",
+      properties: %{
+        agents: %{
+          type: "array",
+          description: "List of sub-agent tasks to run in parallel",
+          items: %{
+            type: "object",
+            properties: %{
+              goal: %{type: "string", description: "What this sub-agent should accomplish"},
+              context: %{type: "string", description: "Context for this sub-agent"}
+            },
+            required: ["goal"]
+          }
+        }
+      },
+      required: ["agents"]
     })
   end
 

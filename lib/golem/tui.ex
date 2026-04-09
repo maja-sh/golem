@@ -143,6 +143,14 @@ defmodule Golem.TUI do
   def replan_start, do: planning("Re-planning with Opus...")
   def replan_done, do: puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Plan revised", :green)])
 
+  def show_phase_costs(phase_costs) do
+    puts("")
+    puts([Owl.Data.tag("  Cost breakdown:", :faint)])
+    Enum.each(phase_costs, fn {name, cost} ->
+      puts([Owl.Data.tag("    #{name}: ", :white), Owl.Data.tag("$#{cost}", :yellow)])
+    end)
+  end
+
   def run_complete(success, summary) do
     update_status(%{action: nil})
     puts("")

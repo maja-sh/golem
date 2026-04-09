@@ -71,7 +71,7 @@ defmodule Golem.Sandbox do
     Process.flag(:trap_exit, true)
     container = Application.get_env(:golem, :container, "golem-vm")
     Logger.info("Sandbox initialized, container: #{container}")
-    {:ok, %{port: nil, container: container, buffer: "", mode: :idle}}
+    {:ok, %{port: nil, container: container, buffer: "", mode: :idle, cwd: nil}}
   end
 
   @impl true
@@ -85,8 +85,11 @@ defmodule Golem.Sandbox do
       port ->
         ref = :crypto.strong_rand_bytes(8) |> Base.encode16()
 
+        # Prepend cd to persist working directory across commands
+        cd_prefix = if state.cwd, do: "cd #{escape(state.cwd)} 2>/dev/null; ", else: ""
+        # Run command directly (not in subshell) so cd persists, then capture pwd
         wrapped =
-          "echo '---CMD_START_#{ref}---'; (#{command}) 2>&1; __exit=$?; echo ''; echo \"---CMD_END_#{ref}_${__exit}---\"\n"
+          "echo '---CMD_START_#{ref}---'; #{cd_prefix}#{command} 2>&1; __exit=$?; echo ''; echo \"---CWD_#{ref}_$(pwd)---\"; echo \"---CMD_END_#{ref}_${__exit}---\"\n"
 
         Port.command(port, wrapped)
         timer = Process.send_after(self(), {:exec_timeout, ref}, timeout)
@@ -156,10 +159,10 @@ defmodule Golem.Sandbox do
     case state.mode do
       {:exec, ref, from, timer} ->
         case parse_sentinel(buffer, ref) do
-          {:ok, output, exit_code} ->
+          {:ok, output, exit_code, new_cwd} ->
             Process.cancel_timer(timer)
             GenServer.reply(from, {:ok, %{output: output, exit_code: exit_code}})
-            {:noreply, %{state | buffer: "", mode: :idle}}
+            {:noreply, %{state | buffer: "", mode: :idle, cwd: new_cwd || state.cwd}}
 
           :incomplete ->
             {:noreply, %{state | buffer: buffer}}
@@ -263,6 +266,7 @@ defmodule Golem.Sandbox do
   defp parse_sentinel(buffer, ref) do
     start_marker = "---CMD_START_#{ref}---\n"
     end_pattern = ~r/---CMD_END_#{ref}_(\d+)---/
+    cwd_pattern = ~r/---CWD_#{ref}_(.+)---/
 
     case :binary.match(buffer, start_marker) do
       {start_offset, start_len} ->
@@ -271,8 +275,20 @@ defmodule Golem.Sandbox do
 
         case Regex.run(end_pattern, rest) do
           [_, exit_str] ->
-            [output | _] = String.split(rest, ~r/\n---CMD_END_#{ref}_\d+---/, parts: 2)
-            {:ok, String.trim_trailing(output), String.to_integer(exit_str)}
+            # Extract cwd from output
+            new_cwd = case Regex.run(cwd_pattern, rest) do
+              [_, cwd] -> String.trim(cwd)
+              nil -> nil
+            end
+
+            # Remove cwd marker from visible output
+            output = rest
+              |> String.split(~r/\n---CMD_END_#{ref}_\d+---/, parts: 2)
+              |> List.first("")
+              |> String.replace(~r/\n?---CWD_#{ref}_.+---/, "")
+              |> String.trim_trailing()
+
+            {:ok, output, String.to_integer(exit_str), new_cwd}
 
           nil ->
             :incomplete
