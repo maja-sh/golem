@@ -1,109 +1,74 @@
-# Revenue Product: Research, Plan, Build
+# Build Something Developers Would Share
 
-**Difficulty:** Very Hard (open-ended research + full build)
+**Difficulty:** Very Hard (creative + full build)
 **Expected steps:** 150-300
 **Recommended max_steps:** 400
-**Tools exercised:** web_search, web_fetch, think, write_file, edit_file, shell, sub_agent, glob, grep
-**Validates:** Phased execution (research → replan → build), sustained multi-phase work
+**Tools exercised:** web_search, web_fetch, think, write_file, edit_file, shell, sub_agent, glob, grep, browse
 
 ## Goal
 
-Your mission is to research, plan, and build a small revenue-generating software product. This is a multi-phase task — do NOT skip the research. Thorough research is the difference between building something nobody wants and building something people will pay for.
+Build a small, opinionated, genuinely creative software product that a developer would see on Hacker News and think "holy shit, I need that." Not a boring SaaS. Not a CRUD app. Something with personality.
 
 ### Environment
 
-You have root access to a Ubuntu 24.04 container with Python, Node.js, and basic Linux tools pre-installed. Elixir and PHP are NOT pre-installed — you will need to install your chosen language as the first step of the build phase. For Elixir: install Erlang and Elixir via apt or asdf. For PHP: install php, composer, and any needed extensions via apt. You can install anything you need with apt.
+You have root access to a Ubuntu 24.04 container with Python, Node.js, and basic Linux tools. Elixir and PHP are NOT pre-installed — install what you need. Firefox is available on DISPLAY=:99 for testing web UIs.
 
-### Phase 1: Market Research (spend at least 20 searches here)
+### What makes a good product
 
-Research the current landscape of small, profitable software products (micro-SaaS, developer tools, paid APIs, niche utilities). Your goal is to find REAL gaps, not to generate ideas from your training data.
+Think about tools that developers actually get excited about and share:
+- **htop** — made `top` fun to look at
+- **jq** — one thing, done perfectly, impossible to live without after trying it
+- **bat** — `cat` with wings, nobody asked for it, everybody loves it
+- **ngrok** — "holy shit I can expose localhost?" moment
+- **fig/warp** — reimagined the terminal
+- **carbon.now.sh** — turn code into pretty screenshots, weirdly useful
 
-**What to search for:**
-- "micro saas ideas 2025 2026" on Indie Hackers, Hacker News
-- "what tools do you wish existed" threads on Reddit (r/SaaS, r/smallbusiness, r/webdev, r/freelance)
-- Pricing pages of existing small tools — find ones that are overpriced for what they do
-- Product Hunt launches in the last 6 months — what got traction, what flopped
-- "I built X and it makes $Y/month" posts — what's actually working
-- Common complaints about existing tools (too expensive, too complex, missing feature X)
+The pattern: take something developers already do and make it **10x more fun, visual, or delightful**. Not more features — more personality.
 
-**What to look for in each opportunity:**
-- Real user complaints or requests (link to sources)
-- What existing solutions charge and what they're missing
-- Whether the audience is reachable (where do they hang out online?)
+### What NOT to build
 
-**Do NOT:**
-- Generate ideas from your general knowledge without searching first
-- Pick the first idea that sounds good — research at least 5-7 different niches
-- Move to Phase 2 until you have concrete evidence (real URLs, real pricing data, real user complaints)
-- Suggest anything in these saturated categories (every LLM suggests these — they're NOT gaps). If you suggest any of these you have FAILED:
-  - Uptime/status page monitoring (Statuspage, BetterUptime, dozens more)
-  - URL shorteners
-  - Invoice/billing/accounting tools of ANY kind (FreshBooks, Wave, Stripe Invoicing, QuickBooks, Xero — this market is absurdly crowded, including for freelancers)
-  - Webhook debugging/relay (ngrok, RequestBin alternatives exist)
-  - Social media schedulers
-  - Link-in-bio pages
-  - Habit trackers / todo apps / productivity tools
-  - Bookmark managers
-  - Email signature generators
-  - QR code generators
-  - Time tracking tools (Toggl, Harvest, Clockify, dozens more)
-  - Form builders (Typeform, Google Forms, Tally)
-  - CRM tools of any kind
-  - Landing page builders
-  - Freelancer tools in general (invoicing, proposals, contracts — all done to death)
-  - Generic "API for X" where X already has 5+ providers
-  - Anything you can describe in 3 words that returns 50+ results on Product Hunt
-- The idea needs to be SPECIFIC and UNIQUE — not a category, but a particular pain point that you found REAL PEOPLE complaining about in actual forum posts. "PDF invoicing" is a category (bad). "Converting French CERFA tax forms to structured JSON for accounting software" is a specific pain point (good). If you can't link to a real post/thread where someone complained about the problem, it's not evidence-based.
+- Anything that exists as a category (invoicing, CRM, monitoring, time tracking, forms, etc.)
+- Anything described as "X but for Y" where X already works fine
+- Anything that requires a sales team or enterprise pitch to sell
+- Anything boring. If you wouldn't tweet about it, don't build it.
 
-### Phase 2: Validate and Decide
+### Categories to explore (pick ONE or invent your own)
 
-After researching, you need to validate your top 2-3 ideas before committing.
+- **CLI tools that make ugly things beautiful** — git log, docker ps, server logs, test output, database queries, API responses
+- **Dev workflow tools that feel like magic** — one command that does something you'd normally spend 5 minutes doing manually
+- **Visual/creative dev tools** — things that turn code/data into something visual, shareable, or just fun to look at
+- **Niche power tools** — something that 1000 developers would pay $10/month for because it saves them 30 minutes a day on a specific annoying task
+- **Developer entertainment** — things that are genuinely fun while being useful (deploy tarot, code graveyard, git gossip)
 
-**For each candidate idea, search for:**
-- Existing solutions (to confirm the gap is real and not already filled)
-- The actual pricing of competitors
-- How people currently solve the problem (workarounds, spreadsheets, manual processes)
+### Phase 1: Ideation (spend 5-10 searches max)
 
-Use `think` (without replan) to synthesize your findings. Then use `ask_user` to present your top 2-3 candidates to the human operator with your analysis and recommendation. Let them pick or redirect you before you commit to building anything.
+Don't do exhaustive market research. Instead:
+1. Search for "Show HN" posts that went viral — what made people excited?
+2. Search for "I built this" posts that developers loved — what's the common thread?
+3. Use `think` to brainstorm 5 genuinely creative ideas. Be weird. Be opinionated.
+4. Use `ask_user` to present your top 3 ideas to the human. Include a one-sentence pitch for each.
 
-Evaluate each opportunity against ALL of these criteria:
-- **Market gap**: Is there a REAL underserved need? Cite your evidence.
-- **Revenue potential**: What are realistic monthly revenue scenarios? (pessimistic / realistic / optimistic)
-- **Scope**: Can it be built as an MVP in under 1000 lines of code? No external services beyond a database and maybe email.
-- **Solo maintainability**: Can one person run this indefinitely? No complex infrastructure, no 24/7 ops burden, no customer support nightmare. Must be deployable on a single $5-20/month VPS.
-- **Language fit**: Must be built in Elixir or PHP. No Python. Think about which language fits the problem better.
+### Phase 2: Build it
 
-Write your full analysis (all candidates, with evidence and citations) to /home/agent/product/RESEARCH.md.
+Use a `sub_agent` for the build. Requirements:
+- Written in Elixir, PHP, TypeScript/Node, or Rust (your pick based on what fits)
+- Has personality — the README should make someone laugh or go "oh that's clever"
+- Works as a real tool (not a prototype/stub)
+- If it's a CLI tool: installable, has --help, handles errors gracefully
+- If it's a web app: has a landing page, actually looks good (use browse to verify)
+- Include a Dockerfile so it can be deployed
+- Include tests
+- Put everything in /home/agent/product/
 
-Then use `think` with `request_replan: true` to present your chosen product and get a detailed build plan.
+### Phase 3: Polish
 
-### Phase 3: Build the MVP
-
-Use a `sub_agent` to do the actual building — this keeps your research context from bloating the build context. Give the sub-agent:
-- The specific product to build
-- The language choice and why
-- The key features for the MVP (keep it minimal)
-- Clear file structure expectations
-
-**Build requirements:**
-- Written in Elixir or PHP (no Python)
-- Minimal dependencies — fewer deps = less maintenance
-- Working code that actually runs (not just stubs)
-- Include a README with: what it does, who it's for, how to run it, how to deploy, pricing model
-- Include basic tests that pass
-- Put everything in /home/agent/product/src/
-- Infrastructure: SQLite or flat files for storage (no external database server needed for MVP)
-- **Containerized deployment**: Include a Dockerfile and docker-compose.yml (or podman equivalent) so the product can be deployed with a single `docker-compose up`. The container should include all runtime dependencies. This makes it trivially deployable on any VPS.
-
-After the sub-agent finishes, verify the build by running the tests yourself.
-
-### Phase 4: Revenue Analysis
-
-Create /home/agent/product/BUSINESS.md with:
-- **Product summary**: One paragraph on what it does and why it matters
-- **Target customer profile**: Who exactly would pay for this? Be specific (job title, company size, pain point)
-- **Pricing strategy**: What to charge and why (reference competitor pricing from your research)
-- **Customer acquisition plan**: Where would you find the first 10 customers? The first 100? Be specific — name the subreddits, forums, communities.
-- **Infrastructure costs**: Monthly cost to run on a VPS (be realistic)
-- **Break-even analysis**: How many paying customers to cover infrastructure + domain + time?
-- **6-month projection**: Pessimistic / realistic / optimistic revenue scenarios with assumptions stated
+After building:
+1. Use `browse` to visually verify any web UI
+2. Make sure the README is good — funny, clear, has screenshots/examples
+3. Think about the "Show HN" title — if you can't write a compelling one-sentence title, the product isn't interesting enough
+4. Create /home/agent/product/LAUNCH.md with:
+   - One-sentence pitch (the "Show HN" title)
+   - Who would use this and why they'd share it
+   - Pricing (if applicable) — or explain why it's free/open source
+   - Where to post it (HN, specific subreddits, Twitter/X, dev communities)
+   - A sample tweet announcing it
