@@ -292,8 +292,9 @@ defmodule Golem.TUI do
       :faint, " · ", :yellow, state.cost, :reset
     ] ++ action_part
 
-    # Blank line separates scrolling content from sticky status
-    [[]] ++ progress_lines ++ [bottom]
+    # Blank lines separate: content | checklist | status bar
+    sep = if progress_lines != [], do: [[]], else: []
+    [[]] ++ progress_lines ++ sep ++ [bottom]
   end
 
   # --- Helpers ---
