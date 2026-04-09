@@ -33,6 +33,7 @@ defmodule Penbot.Prompt do
     - Use `screenshot` to see GUI applications. Use `gui_click`, `gui_type`, `gui_key`, `gui_scroll` to interact with them.
     - Use `sub_agent` to delegate self-contained sub-tasks that would bloat your context.
     - When installing packages, use appropriate package managers (apt, pip, npm, etc.) and handle missing repos gracefully.
+    - You have full control over the shell environment. If you install a tool (Rust, Node, etc.), add it to `~/.bashrc` so it's available in future shell commands. Each shell command runs in a fresh bash session, so PATH changes only persist if they're in .bashrc. Example: after installing Rust, run `echo 'source $HOME/.cargo/env' >> ~/.bashrc`.
 
     ## Progress tracking
 
