@@ -297,16 +297,17 @@ defmodule Penbot.Runner do
         # Text was already streamed — just log it
         if response.text, do: Logger.info("#{p}  Agent: #{response.text}")
 
-        # Log timing to file (TUI shows it via tool results)
-        if is_nil(response.text) do
-          Logger.info("#{p}  (#{Penbot.TUI.format_elapsed(llm_elapsed)} · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
+        # Show step context in TUI when there's no streamed text
+        if is_nil(response.text) and state.depth == 0 do
+          count = length(tool_calls)
+          if count > 1 do
+            Penbot.TUI.agent_text("Running #{count} actions (#{Penbot.TUI.format_elapsed(llm_elapsed)})")
+          end
         end
+
+        Logger.info("#{p}  (#{Penbot.TUI.format_elapsed(llm_elapsed)} · #{length(tool_calls)} tools · ↓ #{Penbot.TUI.format_tokens(output_tokens)})")
 
         costs = accumulate_costs(costs, response.usage, model)
-
-        if length(tool_calls) > 1 do
-          Logger.info("#{p}  #{length(tool_calls)} tool calls in this turn")
-        end
 
         # Execute all tool calls, stopping early on done/think_replan
         case execute_tool_calls(tool_calls, state.depth) do
