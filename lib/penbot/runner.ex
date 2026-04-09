@@ -126,7 +126,7 @@ defmodule Penbot.Runner do
     case plan_result do
       {:ok, plan} ->
         if depth == 0, do: Penbot.TUI.plan_created(plan)
-        Logger.info("#{prefix}Plan:\n#{plan}")
+        Logger.info("#{prefix}Plan created (logged to file)")
 
         state = %{
           goal: goal,

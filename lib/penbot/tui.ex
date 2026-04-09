@@ -346,8 +346,8 @@ defmodule Penbot.TUI do
       :faint, " · ", :yellow, state.cost, :reset
     ] ++ action_part
 
-    # Add blank lines to separate from scrolling content and between checklist and cost
-    progress_lines ++ [bottom]
+    # Blank line separates scrolling content from the sticky checklist
+    [[]] ++ progress_lines ++ [bottom]
   end
 
   # --- Helpers ---
