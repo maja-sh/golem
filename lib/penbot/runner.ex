@@ -80,6 +80,7 @@ defmodule Penbot.Runner do
           depth: saved.depth,
           prefix: prefix,
           history: saved.history,
+          costs: Map.get(saved, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
           run_id: run_id
         }
 
