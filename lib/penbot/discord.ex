@@ -34,9 +34,28 @@ defmodule Penbot.Discord do
       Logger.error("Discord: bot not connected after 10s")
       {:error, :not_connected}
     else
-      formatted = "🔧 **Forge** [run `#{run_id}`]\n\n#{question}\n\n_Reply in this channel to continue the run._"
+      header = "🔧 **Forge** [run `#{run_id}`]"
+      footer = "\n\n_Reply to continue the run._"
+      max_question = 2000 - String.length(header) - String.length(footer) - 10
 
-      case Nostrum.Api.Message.create(channel_id, content: formatted) do
+      # Split into multiple messages if needed
+      messages =
+        if String.length(question) > max_question do
+          chunks = chunk_text(question, 1900)
+          first = [header <> "\n\n" <> hd(chunks)]
+          middle = tl(chunks) |> Enum.slice(0..-2//1)
+          last_chunk = List.last(tl(chunks)) || ""
+          first ++ middle ++ [last_chunk <> footer]
+        else
+          [header <> "\n\n" <> question <> footer]
+        end
+
+      # Send all message chunks
+      results = Enum.map(messages, fn msg ->
+        Nostrum.Api.Message.create(channel_id, content: msg)
+      end)
+
+      case List.last(results) do
         {:ok, _msg} ->
           Logger.info("Discord: asked question, waiting for reply...")
           :persistent_term.put(@waiter_key, {self(), run_id, channel_id})
@@ -100,5 +119,20 @@ defmodule Penbot.Discord do
   defp channel_id! do
     (System.get_env("DISCORD_CHANNEL_ID") || raise("DISCORD_CHANNEL_ID not set"))
     |> String.to_integer()
+  end
+
+  defp chunk_text(text, max_len) do
+    # Split on newlines, accumulate chunks up to max_len
+    text
+    |> String.split("\n")
+    |> Enum.reduce([""], fn line, [current | rest] ->
+      if String.length(current) + String.length(line) + 1 > max_len do
+        [line, current | rest]
+      else
+        sep = if current == "", do: "", else: "\n"
+        [current <> sep <> line | rest]
+      end
+    end)
+    |> Enum.reverse()
   end
 end
