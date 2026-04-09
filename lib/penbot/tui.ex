@@ -80,7 +80,7 @@ defmodule Penbot.TUI do
       summary = [[:faint, "    #{Path.basename(path)}: ",
         :green, "+#{added_lines(diff_lines)}", :faint, " / ",
         :red, "-#{removed_lines(diff_lines)}", :faint, " lines", :reset]]
-      GenServer.call(__MODULE__, {:print_raw, summary ++ diff_lines ++ [[]]})
+      GenServer.call(__MODULE__, {:print_raw, summary ++ diff_lines})
     end
   end
 
