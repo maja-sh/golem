@@ -1,121 +1,62 @@
 defmodule Golem.TUI do
   @moduledoc """
-  Terminal UI using Owl.LiveScreen for a fixed status area at the bottom
-  and Owl.IO.puts for scrolling output above it. No manual ANSI cursor
-  manipulation — Owl handles everything.
+  Terminal UI with scrolling output and a fixed status area.
+
+  Before printing any new line, the status area is erased.
+  After printing, the status area is redrawn at the bottom.
+  This keeps the status pinned at the bottom.
   """
 
+  use GenServer
   require Logger
 
   @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-  @spinner_interval 200
+  @spinner_interval 500
 
   @forge_verbs [
     "Forging", "Hammering", "Smelting", "Tempering", "Quenching",
     "Annealing", "Casting", "Welding", "Shaping", "Refining"
   ]
 
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
   # --- Public API ---
 
   def init_display(run_id, goal) do
-    Application.ensure_all_started(:owl)
-
-    # Ensure LiveScreen is running — it may have crashed on boot
-    unless Process.whereis(Owl.LiveScreen) do
-      Owl.LiveScreen.start_link(name: Owl.LiveScreen)
-    end
-
-    Logger.configure(level: :warning)
-
-    puts([Owl.Data.tag("● ", :cyan), Owl.Data.tag("Forge ", [:bright, :white]), Owl.Data.tag(run_id, :faint)])
-    puts([Owl.Data.tag("  #{goal}", :faint)])
-    puts("")
-
-    initial_state = %{
-      progress: [], cost: "$0.0000", action: nil,
-      spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      started_at: System.monotonic_time(:second)
-    }
-
-    :persistent_term.put(:golem_tui_status, initial_state)
-
-    Owl.LiveScreen.add_block(:status,
-      state: initial_state,
-      render: &render_status/1
-    )
-
-    # Start ticker for spinner animation — updates the status block state
-    ticker_pid = spawn_link(fn -> ticker_loop() end)
-    :persistent_term.put(:golem_tui_ticker, ticker_pid)
-    :persistent_term.put(:golem_tui_active, true)
+    GenServer.call(__MODULE__, {:init, run_id, goal})
   end
 
-  def stop_display do
-    if pid = :persistent_term.get(:golem_tui_ticker, nil) do
-      Process.exit(pid, :shutdown)
-    end
-    :persistent_term.put(:golem_tui_active, false)
-
-    try do
-      status = :persistent_term.get(:golem_tui_status, %{})
-      started_at = Map.get(status, :started_at, 0)
-      cost = Map.get(status, :cost, "$0.0000")
-      verb = Map.get(status, :verb, "Forging")
-      elapsed = format_duration(System.monotonic_time(:second) - started_at)
-      Owl.LiveScreen.flush()
-      IO.puts(IO.ANSI.format([:faint, " #{verb} took #{elapsed} · #{cost}", :reset]))
-    catch
-      _, _ -> :ok
-    end
-
-    Logger.configure(level: :info)
-  end
-
-  def planning(label \\ "Planning...") do
-    puts([Owl.Data.tag("+ ", :yellow), Owl.Data.tag(label, :yellow)])
-  end
-
-  def plan_created(plan) do
-    phases = Regex.scan(~r/^## /m, plan) |> length()
-    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
-    puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Plan created ", :green),
-          Owl.Data.tag("(#{phases} phases, #{steps} steps)", :faint)])
-    puts("")
-  end
-
-  def step_header(_step, _max_steps, cost_str) do
-    update_status(%{cost: cost_str, action: nil})
+  def step_header(step, max_steps, cost_str) do
+    GenServer.cast(__MODULE__, {:update, cost: cost_str, step: step, max_steps: max_steps})
   end
 
   def agent_text(nil), do: :ok
   def agent_text(text) do
-    puts("")
-    puts([Owl.Data.tag("● ", :cyan), Owl.Data.tag(text, :white)])
+    GenServer.call(__MODULE__, {:print, [[], [:cyan, "● ", :reset, text]]})
   end
 
   def tool_call(name, detail) do
-    update_status(%{action: "#{name} #{detail}"})
+    GenServer.cast(__MODULE__, {:update, action: "#{name} #{detail}"})
   end
 
   def tool_result(name, detail, result, elapsed_ms, _tokens) do
     elapsed = format_elapsed(elapsed_ms)
     summary = result_oneliner(result)
-
-    puts([Owl.Data.tag("  #{tool_icon(name)} ", :faint),
-          Owl.Data.tag(tool_label(name, detail), :white),
-          Owl.Data.tag(" (#{elapsed})", :faint)])
-
-    if summary != "" do
-      puts([Owl.Data.tag("  └ #{summary}", :faint)])
-    end
-
-    update_status(%{action: nil})
+    lines = [
+      [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset, :faint, " (#{elapsed})", :reset]
+    ]
+    lines = if summary != "", do: lines ++ [[:faint, "  └ #{summary}", :reset]], else: lines
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def tool_error(name, detail, error_text) do
-    puts([Owl.Data.tag("  ✗ ", :red), Owl.Data.tag(tool_label(name, detail), :red)])
-    puts([Owl.Data.tag("  └ #{trunc(error_text, 100)}", [:faint, :red])])
-    update_status(%{action: nil})
+    lines = [
+      [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
+      [:faint, :red, "  └ #{trunc(error_text, 100)}", :reset]
+    ]
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def show_diff(path, old_content, new_content) do
@@ -123,63 +64,83 @@ defmodule Golem.TUI do
     if diff_lines != [] do
       added = added_lines(diff_lines)
       removed = removed_lines(diff_lines)
-      puts([Owl.Data.tag("    #{Path.basename(path)}: ", :faint),
-            Owl.Data.tag("+#{added}", :green), Owl.Data.tag(" / ", :faint),
-            Owl.Data.tag("-#{removed}", :red), Owl.Data.tag(" lines", :faint)])
-      Enum.each(diff_lines, fn line -> IO.puts(line) end)
-      puts("")
+      summary = [[:faint, "    #{Path.basename(path)}: ",
+        :green, "+#{added}", :faint, " / ",
+        :red, "-#{removed}", :faint, " lines", :reset]]
+      GenServer.call(__MODULE__, {:print_raw, summary ++ Enum.map(diff_lines, &[&1]) ++ [[]]})
     end
   end
 
+  def show_phase_costs(phase_costs) do
+    lines = [[], [:faint, "  Cost breakdown:", :reset]] ++
+      Enum.map(phase_costs, fn {name, cost} ->
+        [:white, "    #{name}: ", :yellow, "$#{cost}", :reset]
+      end)
+    GenServer.call(__MODULE__, {:print, lines})
+  end
+
   def set_progress(items) do
-    update_status(%{progress: items})
+    GenServer.call(__MODULE__, {:set_progress, items})
+  end
+
+  def planning(label \\ "Planning...") do
+    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
+  end
+
+  def plan_created(plan) do
+    phases = Regex.scan(~r/^## /m, plan) |> length()
+    steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
+    GenServer.call(__MODULE__, {:print, [
+      [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset],
+      []
+    ]})
+  end
+
+  def replan_start, do: planning("Re-planning with Opus...")
+
+  def replan_done do
+    GenServer.call(__MODULE__, {:print, [[:green, "✓ Plan revised", :reset]]})
   end
 
   def sub_agent_start(goal) do
-    puts([Owl.Data.tag("  ● ", :magenta), Owl.Data.tag("Sub-agent: ", :magenta),
-          Owl.Data.tag(trunc(goal, 70), :faint)])
+    GenServer.call(__MODULE__, {:print, [
+      [:magenta, "  ● Sub-agent: ", :reset, :faint, trunc(goal, 70), :reset]
+    ]})
   end
 
   def sub_agent_result(_goal, steps, success) do
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
-    puts([Owl.Data.tag("  #{icon} ", color), Owl.Data.tag("Sub-agent done ", color),
-          Owl.Data.tag("· #{steps} steps", :faint)])
-  end
-
-  def replan_start, do: planning("Re-planning with Opus...")
-  def replan_done, do: puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Plan revised", :green)])
-
-  def show_phase_costs(phase_costs) do
-    puts("")
-    puts([Owl.Data.tag("  Cost breakdown:", :faint)])
-    Enum.each(phase_costs, fn {name, cost} ->
-      puts([Owl.Data.tag("    #{name}: ", :white), Owl.Data.tag("$#{cost}", :yellow)])
-    end)
+    GenServer.call(__MODULE__, {:print, [
+      [color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset]
+    ]})
   end
 
   def run_complete(success, summary) do
-    update_status(%{action: nil})
-    puts("")
-    if success do
-      puts([Owl.Data.tag("✓ ", :green), Owl.Data.tag("Goal achieved", [:bright, :green])])
-    else
-      puts([Owl.Data.tag("✗ ", :red), Owl.Data.tag("Goal not achieved", [:bright, :red])])
-    end
-    puts([Owl.Data.tag("  #{trunc(summary, 120)}", :faint)])
+    lines = [[]] ++
+      if success do
+        [[:green, :bright, "✓ Goal achieved", :reset]]
+      else
+        [[:red, :bright, "✗ Goal not achieved", :reset]]
+      end ++ [[:faint, "  #{trunc(summary, 120)}", :reset]]
+    GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
   def run_paused(run_id) do
-    puts("")
-    puts([Owl.Data.tag("⏸ ", :yellow), Owl.Data.tag("Paused ", :yellow),
-          Owl.Data.tag("— resume: ", :faint), Owl.Data.tag("mix golem.resume #{run_id}", :white)])
+    GenServer.call(__MODULE__, {:print, [
+      [],
+      [:yellow, "⏸ Paused", :reset, :faint, " — resume: ", :reset, "mix golem.resume #{run_id}"]
+    ]})
   end
 
   def run_error(reason) do
-    puts("")
-    puts([Owl.Data.tag("✗ Error: #{inspect(reason)}", :red)])
+    GenServer.call(__MODULE__, {:print, [[:red, "✗ Error: #{inspect(reason)}", :reset]]})
   end
 
-  # Stubs for streaming (disabled — using non-streaming calls)
+  def stop_display do
+    GenServer.call(__MODULE__, :stop)
+  end
+
+  # Streaming stubs (not used — non-streaming mode)
   def stream_start, do: :ok
   def stream_text(_chunk), do: :ok
   def stream_end, do: :ok
@@ -194,72 +155,148 @@ defmodule Golem.TUI do
   def format_tokens(n) when n < 1000, do: "#{n} tokens"
   def format_tokens(n), do: "#{Float.round(n / 1000, 1)}k tokens"
 
-  # --- Status Block Renderer ---
+  # --- GenServer ---
 
-  defp render_status(%{progress: progress, cost: cost, action: action,
-                       spinner_idx: idx, verb: verb, started_at: started_at}) do
-    spinner = Enum.at(@spinner_frames, idx)
-    elapsed = format_duration(System.monotonic_time(:second) - (started_at || 0))
+  @impl true
+  def init(_opts) do
+    {:ok, %{
+      active: false, cost: "$0.0000", step: 0, max_steps: 0,
+      progress: [], action: nil, status_lines: 0,
+      started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
+      ticker: nil
+    }}
+  end
 
-    prog =
-      Enum.map(progress, fn item ->
+  @impl true
+  def handle_call({:init, run_id, goal}, _from, state) do
+    Logger.configure(level: :warning)
+    IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
+    IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
+    IO.puts("")
+
+    {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
+
+    {:reply, :ok, %{state |
+      active: true, status_lines: 0,
+      started_at: System.monotonic_time(:second),
+      verb: Enum.random(@forge_verbs),
+      ticker: ticker
+    }}
+  end
+
+  def handle_call({:print, lines}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, &print_line/1)
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:print_raw, lines}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, fn
+      [] -> IO.puts("")
+      [raw] when is_binary(raw) -> IO.puts(raw)
+      tokens -> print_line(tokens)
+    end)
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:print_and_update, lines, updates}, _from, state) do
+    state = erase_status(state)
+    Enum.each(lines, &print_line/1)
+    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:set_progress, items}, _from, state) do
+    state = erase_status(state)
+    state = %{state | progress: items}
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:stop, _from, state) do
+    if state.ticker, do: :timer.cancel(state.ticker)
+    state = erase_status(state)
+    elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
+    IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
+    Logger.configure(level: :info)
+    {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
+  end
+
+  @impl true
+  def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
+    state = erase_status(state)
+    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
+    state = draw_status(state)
+    {:noreply, state}
+  end
+
+  def handle_info(:tick, %{active: true} = state) do
+    {:noreply, %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast({:update, updates}, state) do
+    state = erase_status(state)
+    state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
+    state = draw_status(state)
+    {:noreply, state}
+  end
+
+  # --- Status Area ---
+
+  defp erase_status(%{status_lines: 0} = state), do: state
+  defp erase_status(%{status_lines: n} = state) do
+    IO.write("\e[#{n}A")
+    for _ <- 1..n, do: IO.write("\e[2K\n")
+    IO.write("\e[#{n}A")
+    %{state | status_lines: 0}
+  end
+
+  defp draw_status(%{active: false} = state), do: state
+  defp draw_status(state) do
+    lines = build_status_lines(state)
+    Enum.each(lines, fn line ->
+      IO.write("\e[2K")
+      IO.puts(IO.ANSI.format(line))
+    end)
+    %{state | status_lines: length(lines)}
+  end
+
+  defp build_status_lines(state) do
+    progress_lines =
+      Enum.map(state.progress, fn item ->
         {icon, color} = case item.status do
           :completed -> {"✓", :green}
           :in_progress -> {"→", :yellow}
           :pending -> {"·", :faint}
         end
         style = if item.status == :pending, do: :faint, else: :white
-        [Owl.Data.tag(" [", :faint), Owl.Data.tag(icon, color), Owl.Data.tag("] ", :faint),
-         Owl.Data.tag(trunc(item.text, 55), style)]
+        [:faint, " [", color, icon, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
       end)
 
-    action_part = if action, do: [Owl.Data.tag(" · ", :faint), Owl.Data.tag(trunc(action, 40), :magenta)], else: []
+    spinner = Enum.at(@spinner_frames, state.spinner_idx)
+    elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
+    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
 
     bottom = [
-      Owl.Data.tag(" #{spinner} ", :cyan),
-      Owl.Data.tag("#{verb} for #{elapsed}", :white),
-      Owl.Data.tag(" · ", :faint),
-      Owl.Data.tag(cost, :yellow)
+      :cyan, " #{spinner} ", :reset,
+      :white, "#{state.verb} for #{elapsed}", :reset,
+      :faint, " · ", :yellow, state.cost, :reset
     ] ++ action_part
 
-    (prog ++ [bottom])
-    |> Enum.intersperse("\n")
-    |> List.flatten()
+    progress_lines ++ [bottom]
   end
-
-  defp render_status(_), do: ""
 
   # --- Helpers ---
 
-  defp puts(data), do: Owl.IO.puts(data)
-
-  defp update_status(changes) do
-    try do
-      # Store latest state in persistent_term for the ticker to read
-      current = :persistent_term.get(:golem_tui_status, %{})
-      new_state = Map.merge(current, changes)
-      :persistent_term.put(:golem_tui_status, new_state)
-      # Update the Owl block with the full state including spinner
-      Owl.LiveScreen.update(:status, new_state)
-    catch
-      _, _ -> :ok
-    end
-  end
-
-  defp ticker_loop do
-    Process.sleep(@spinner_interval)
-    try do
-      current = :persistent_term.get(:golem_tui_status, %{})
-      idx = Map.get(current, :spinner_idx, 0)
-      new_idx = rem(idx + 1, length(@spinner_frames))
-      new_state = Map.put(current, :spinner_idx, new_idx)
-      :persistent_term.put(:golem_tui_status, new_state)
-      Owl.LiveScreen.update(:status, new_state)
-    catch
-      _, _ -> :ok
-    end
-    ticker_loop()
-  end
+  defp print_line([]), do: IO.puts("")
+  defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
 
   defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
   defp format_duration(seconds) do
@@ -358,13 +395,8 @@ defmodule Golem.TUI do
     (removed ++ added) |> Enum.take(20)
   end
 
-  defp added_lines(diff_lines) do
-    Enum.count(diff_lines, &String.contains?(&1, "\e[32m+"))
-  end
-
-  defp removed_lines(diff_lines) do
-    Enum.count(diff_lines, &String.contains?(&1, "\e[31m-"))
-  end
+  defp added_lines(diff_lines), do: Enum.count(diff_lines, &String.contains?(&1, "\e[32m+"))
+  defp removed_lines(diff_lines), do: Enum.count(diff_lines, &String.contains?(&1, "\e[31m-"))
 
   defp result_oneliner(text) when is_binary(text) do
     text |> String.split("\n", trim: true) |> List.first("") |> trunc(90)
