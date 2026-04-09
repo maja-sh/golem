@@ -28,12 +28,12 @@ defmodule Golem.Runner do
     run_id = opts[:run_id] || Golem.State.new_run_id()
     prefix = depth_prefix(depth)
 
+    # Initialize TUI first (suppresses console logger)
+    if depth == 0, do: Golem.TUI.init_display(run_id, goal)
+
     Logger.info("#{prefix}========== RUN STARTED (#{run_id}) ==========")
     Logger.info("#{prefix}Goal: #{goal}")
     Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
-
-    # Initialize TUI for top-level runs
-    if depth == 0, do: Golem.TUI.init_display(run_id, goal)
 
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
