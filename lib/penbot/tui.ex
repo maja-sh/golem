@@ -73,6 +73,13 @@ defmodule Penbot.TUI do
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
+  def show_diff(path, old_content, new_content) do
+    diff_lines = build_diff(path, old_content, new_content)
+    if diff_lines != [] do
+      GenServer.call(__MODULE__, {:print, diff_lines})
+    end
+  end
+
   def set_progress(items) do
     GenServer.call(__MODULE__, {:set_progress, items})
   end
@@ -382,6 +389,57 @@ defmodule Penbot.TUI do
   defp tool_label("think", _), do: "Thinking..."
   defp tool_label("ask_user", _), do: "Asking user..."
   defp tool_label(name, _), do: name
+
+  defp build_diff(_path, old, new) do
+    old_lines = String.split(old, "\n")
+    new_lines = String.split(new, "\n")
+
+    # Find the first and last differing lines
+    {prefix_len, _} =
+      Enum.zip(old_lines, new_lines)
+      |> Enum.with_index()
+      |> Enum.find({length(old_lines), nil}, fn {{a, b}, _} -> a != b end)
+      |> then(fn {_, idx} -> {idx || 0, nil} end)
+
+    {suffix_len, _} =
+      Enum.zip(Enum.reverse(old_lines), Enum.reverse(new_lines))
+      |> Enum.with_index()
+      |> Enum.find({length(old_lines), nil}, fn {{a, b}, _} -> a != b end)
+      |> then(fn {_, idx} -> {idx || 0, nil} end)
+
+    # Extract changed regions with context
+    ctx = 2
+    start = max(0, prefix_len - ctx)
+    old_end = min(length(old_lines), length(old_lines) - suffix_len + ctx)
+    new_end = min(length(new_lines), length(new_lines) - suffix_len + ctx)
+
+    removed =
+      old_lines
+      |> Enum.slice(start..min(old_end, length(old_lines) - 1)//1)
+      |> Enum.with_index(start + 1)
+      |> Enum.map(fn {line, num} ->
+        if num > prefix_len and num <= length(old_lines) - suffix_len do
+          [:red, "    - #{num}: #{trunc(line, 80)}", :reset]
+        else
+          [:faint, "      #{num}: #{trunc(line, 80)}", :reset]
+        end
+      end)
+
+    added =
+      new_lines
+      |> Enum.slice(start..min(new_end, length(new_lines) - 1)//1)
+      |> Enum.with_index(start + 1)
+      |> Enum.map(fn {line, num} ->
+        if num > prefix_len and num <= length(new_lines) - suffix_len do
+          [:green, "    + #{num}: #{trunc(line, 80)}", :reset]
+        else
+          [:faint, "      #{num}: #{trunc(line, 80)}", :reset]
+        end
+      end)
+
+    # Cap total lines shown
+    (removed ++ added) |> Enum.take(20)
+  end
 
   defp result_oneliner(text) when is_binary(text) do
     text |> String.split("\n", trim: true) |> List.first("") |> trunc(90)

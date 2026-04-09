@@ -84,6 +84,7 @@ defmodule Penbot.ToolHandler do
             case Penbot.Sandbox.write_file(path, updated) do
               :ok ->
                 Penbot.FileCache.put(path, updated)
+                Penbot.TUI.show_diff(path, content, updated)
                 {:continue, "Edit applied to #{path}"}
               {:error, reason} ->
                 {:continue, "[error] Failed to write: #{inspect(reason)}"}
