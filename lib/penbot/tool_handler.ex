@@ -91,14 +91,19 @@ defmodule Penbot.ToolHandler do
             end
 
           [_no_match] ->
-            # Show context from the file to help the agent fix the edit
-            hint =
-              case Penbot.FileCache.find_context(path, old) do
-                nil -> ""
-                ctx -> "\n\nClosest match in file:\n#{ctx}"
+            # Check if the edit was already applied (e.g. resume after crash)
+            if String.contains?(content, new) do
+              Penbot.FileCache.put(path, content)
+              {:continue, "Edit already applied to #{path} (no change needed)."}
+            else
+              hint =
+                case Penbot.FileCache.find_context(path, old) do
+                  nil -> ""
+                  ctx -> "\n\nClosest match in file:\n#{ctx}"
               end
 
             {:continue, "[error] old_string not found in #{path}. Make sure it matches exactly, including whitespace and indentation.#{hint}"}
+            end
         end
     end
   end
