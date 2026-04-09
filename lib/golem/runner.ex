@@ -86,10 +86,11 @@ defmodule Golem.Runner do
           prefix: prefix,
           history: saved.history,
           costs: Map.get(saved, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
+          errors: Map.get(saved, :errors, []),
           run_id: run_id
         }
 
-        system = Golem.Prompt.executor_system()
+        system = Golem.Prompt.executor_system(state.errors)
         result = loop(state, system)
 
         if saved.depth == 0 do
@@ -144,10 +145,11 @@ defmodule Golem.Runner do
           prefix: prefix,
           history: [],
           costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
+          errors: [],
           run_id: run_id
         }
 
-        system = Golem.Prompt.executor_system()
+        system = Golem.Prompt.executor_system([])
         initial = Golem.Prompt.initial_message(goal, plan)
         state = %{state | messages: [%{role: "user", content: initial}]}
 
@@ -187,7 +189,8 @@ defmodule Golem.Runner do
       depth: depth,
       prefix: prefix,
       history: [],
-      costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0}
+      costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
+      errors: []
     }
 
     result = loop(state, system)
@@ -249,15 +252,18 @@ defmodule Golem.Runner do
     {:error, :max_steps_reached}
   end
 
-  defp loop(state, system) do
+  defp loop(state, _system) do
     step = state.step + 1
     p = state.prefix
-    # Make run_id available to tool handlers (for ask_user Discord messages)
     if run_id = Map.get(state, :run_id), do: Process.put(:golem_run_id, run_id)
     costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
+    errors = Map.get(state, :errors, [])
     cost_str = "$#{format_cost(costs)}"
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
     if state.depth == 0, do: Golem.TUI.step_header(step, state.max_steps, cost_str)
+
+    # Rebuild system prompt with current error memory
+    system = Golem.Prompt.executor_system(errors)
 
     model = Application.get_env(:golem, :executor_model)
     max_tokens = Application.get_env(:golem, :executor_max_tokens, 8000)
@@ -315,7 +321,11 @@ defmodule Golem.Runner do
 
           {:continue, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
-            state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
+            # Inject self-review prompt if large files were written
+            messages = maybe_inject_review(messages, executed)
+            new_errors = extract_errors(executed)
+            errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
+            state = %{state | messages: messages, step: step, costs: costs, errors: errors, history: update_history(state.history, executed)}
             maybe_save(state)
             loop(state, system)
         end
@@ -578,6 +588,50 @@ defmodule Golem.Runner do
     if Golem.State.should_save?(step), do: Golem.State.save(run_id, state)
   end
   defp maybe_save(_state), do: :ok
+
+  # --- Self-Review ---
+
+  @review_threshold 30  # lines
+
+  defp maybe_inject_review(messages, executed) do
+    large_writes =
+      executed
+      |> Enum.filter(fn {tc, result} ->
+        tc.name == "write_file" and match?({:text, "File written" <> _}, result) and
+          (tc.input["content"] || "") |> String.split("\n") |> length() > @review_threshold
+      end)
+      |> Enum.map(fn {tc, _} -> tc.input["path"] end)
+
+    if large_writes != [] do
+      files = Enum.join(large_writes, ", ")
+      messages ++ [
+        %{role: "user", content: "[System] You just wrote #{length(large_writes)} large file(s): #{files}. Before running or moving on, read the file(s) back and briefly verify the code is correct — check for obvious bugs, missing imports, and incomplete functions."}
+      ]
+    else
+      messages
+    end
+  end
+
+  # --- Error Memory ---
+
+  defp extract_errors(executed) do
+    executed
+    |> Enum.flat_map(fn {tc, result} ->
+      case result do
+        {:text, text} when is_binary(text) ->
+          cond do
+            String.starts_with?(text, "[error]") ->
+              ["#{tc.name}: #{String.slice(text, 0, 150)}"]
+            String.starts_with?(text, "[exit code") ->
+              # Extract the meaningful error from compiler/runtime output
+              error_line = text |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "error")) || String.slice(text, 0, 100)
+              ["#{tc.name}: #{String.slice(error_line, 0, 150)}"]
+            true -> []
+          end
+        _ -> []
+      end
+    end)
+  end
 
   # --- Cost Tracking ---
 

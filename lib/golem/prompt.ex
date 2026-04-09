@@ -6,8 +6,9 @@ defmodule Golem.Prompt do
   @doc """
   System prompt for the executor — the agent that runs tool calls in a loop.
   """
-  def executor_system do
-    """
+  def executor_system(errors \\ [])
+  def executor_system(errors) do
+    base = """
     You are an autonomous agent executing tasks inside a Linux container. You have full root access.
 
     ## How you work
@@ -45,6 +46,15 @@ defmodule Golem.Prompt do
 
     Each call sends the FULL item list — include all items every time, with their current status. Keep items short (under 50 chars). 5-15 items is ideal.
 
+    ## Verification gates
+
+    Before moving from one major phase to the next, you MUST run verification:
+    1. Compile/build the project (e.g. `cargo check`, `mix compile`, `npm run build`)
+    2. Run all tests (e.g. `cargo test`, `mix test`, `npm test`)
+    3. Fix ALL errors and warnings before proceeding
+
+    Do NOT mark a phase as completed in update_progress until verification passes. If tests fail, fix them first. This is mandatory, not optional.
+
     ## General guidelines
 
     - Read before you write. Understand the current state before making changes.
@@ -55,6 +65,20 @@ defmodule Golem.Prompt do
 
     When you respond with text (not a tool call), keep it brief — just state what you're about to do and why.
     """
+
+    if errors == [] do
+      base
+    else
+      error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
+      base <> """
+
+      ## Lessons learned (errors from this run — do NOT repeat these)
+
+      #{error_list}
+
+      Review these before each action. If you're about to do something that previously failed, try a different approach.
+      """
+    end
   end
 
   @doc """
