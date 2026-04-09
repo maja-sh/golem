@@ -121,6 +121,7 @@ defmodule Penbot.TUI do
             Owl.Data.tag("+#{added}", :green), Owl.Data.tag(" / ", :faint),
             Owl.Data.tag("-#{removed}", :red), Owl.Data.tag(" lines", :faint)])
       Enum.each(diff_lines, fn line -> IO.puts(line) end)
+      puts("")
     end
   end
 
