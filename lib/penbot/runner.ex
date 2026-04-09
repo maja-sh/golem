@@ -71,6 +71,11 @@ defmodule Penbot.Runner do
         Logger.info("#{prefix}========== RESUMING RUN #{run_id} ==========")
         Logger.info("#{prefix}Continuing from step #{saved.step}, new max: #{new_max}")
 
+        if saved.depth == 0 do
+          Penbot.TUI.init_display(run_id, saved.goal)
+          Penbot.TUI.planning("Resuming from step #{saved.step}...")
+        end
+
         state = %{
           goal: saved.goal,
           plan: saved.plan,
@@ -87,21 +92,21 @@ defmodule Penbot.Runner do
         system = Penbot.Prompt.executor_system()
         result = loop(state, system)
 
+        if saved.depth == 0 do
+          case result do
+            {:ok, %{success: success} = s} -> Penbot.TUI.run_complete(success, s.summary)
+            {:error, :max_steps_reached} -> Penbot.TUI.run_paused(run_id)
+            {:error, reason} -> Penbot.TUI.run_error(reason)
+          end
+          Penbot.TUI.stop_display()
+        end
+
+        # Always log to file
         case result do
-          {:ok, %{success: true} = s} ->
-            Logger.info("#{prefix}========== RUN SUCCEEDED ==========")
-            Logger.info("#{prefix}#{s.summary}")
-
-          {:ok, %{success: false} = s} ->
-            Logger.info("#{prefix}========== RUN FAILED ==========")
-            Logger.info("#{prefix}#{s.summary}")
-
-          {:error, :max_steps_reached} ->
-            Logger.warning("#{prefix}========== RUN PAUSED (max steps) ==========")
-            Logger.warning("#{prefix}Resume with: Penbot.resume(\"#{run_id}\")")
-
-          {:error, reason} ->
-            Logger.error("#{prefix}========== RUN ERROR: #{inspect(reason)} ==========")
+          {:ok, %{success: true} = s} -> Logger.info("#{prefix}RUN SUCCEEDED: #{s.summary}")
+          {:ok, %{success: false} = s} -> Logger.info("#{prefix}RUN FAILED: #{s.summary}")
+          {:error, :max_steps_reached} -> Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
+          {:error, reason} -> Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
         end
 
         result
