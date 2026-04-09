@@ -87,6 +87,7 @@ defmodule Golem.Runner do
           history: saved.history,
           costs: Map.get(saved, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
           errors: Map.get(saved, :errors, []),
+          agents_md: Map.get(saved, :agents_md),
           run_id: run_id
         }
 
@@ -146,6 +147,7 @@ defmodule Golem.Runner do
           history: [],
           costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
           errors: [],
+          agents_md: opts[:agents_md],
           phase_costs: [],
           last_completed: 0,
           run_id: run_id
@@ -264,8 +266,9 @@ defmodule Golem.Runner do
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
     if state.depth == 0, do: Golem.TUI.step_header(step, state.max_steps, cost_str)
 
-    # Rebuild system prompt with current error memory
-    system = Golem.Prompt.executor_system(errors)
+    # Rebuild system prompt with current error memory and AGENTS.md
+    agents_md = Map.get(state, :agents_md)
+    system = Golem.Prompt.executor_system(errors, agents_md)
 
     model = Application.get_env(:golem, :executor_model)
     max_tokens = Application.get_env(:golem, :executor_max_tokens, 8000)

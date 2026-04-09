@@ -6,8 +6,8 @@ defmodule Golem.Prompt do
   @doc """
   System prompt for the executor — the agent that runs tool calls in a loop.
   """
-  def executor_system(errors \\ [])
-  def executor_system(errors) do
+  def executor_system(errors \\ [], agents_md \\ nil)
+  def executor_system(errors, agents_md) do
     base = """
     You are an autonomous agent executing tasks inside a Linux container. You have full root access.
 
@@ -66,11 +66,25 @@ defmodule Golem.Prompt do
     When you respond with text (not a tool call), keep it brief — just state what you're about to do and why.
     """
 
-    if errors == [] do
-      base
-    else
+    prompt = base
+
+    # Inject AGENTS.md if provided
+    prompt =
+      if agents_md do
+        prompt <> """
+
+        ## Project Instructions (from AGENTS.md)
+
+        #{agents_md}
+        """
+      else
+        prompt
+      end
+
+    # Inject error memory if any
+    if errors != [] do
       error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
-      base <> """
+      prompt <> """
 
       ## Lessons learned (errors from this run — do NOT repeat these)
 
@@ -78,6 +92,8 @@ defmodule Golem.Prompt do
 
       Review these before each action. If you're about to do something that previously failed, try a different approach.
       """
+    else
+      prompt
     end
   end
 
