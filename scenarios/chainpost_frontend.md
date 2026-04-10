@@ -13,6 +13,13 @@ Build a desktop client for the ChainPost blockchain microblogging platform using
 
 Put everything in `/home/agent/chainpost-client/`. Install Rust and Tauri prerequisites as the first step. Node.js is already available. Firefox is on DISPLAY=:99 for visual testing with the `browse` tool.
 
+**IMPORTANT — Backend already exists:** The ChainPost backend node is already built at `/home/agent/chainpost/`. Before starting frontend work:
+1. Explore the backend's API: read `/home/agent/chainpost/src/api/` to understand the available endpoints, request/response formats, and transaction signing requirements.
+2. Start the backend node in the background: `cd /home/agent/chainpost && cargo run -- --api-port 3030 &`
+3. Verify it's running: `curl http://localhost:3030/api/info`
+
+The frontend connects to this running node. Do NOT rebuild or modify the backend.
+
 ---
 
 ## Architecture

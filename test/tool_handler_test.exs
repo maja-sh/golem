@@ -147,6 +147,53 @@ defmodule Golem.ToolHandlerTest do
     end
   end
 
+  describe "edit_file fuzzy matching" do
+    setup do
+      Agent.update(Golem.FileCache, fn _ -> %{} end)
+      :ok
+    end
+
+    test "matches despite trailing whitespace differences" do
+      # File has trailing spaces on some lines
+      content = "fn main() {\n    let x = 1;  \n    let y = 2;\n}\n"
+      Golem.FileCache.put("/test/fuzzy.rs", content)
+
+      # Agent's old_string doesn't have trailing spaces
+      result = Golem.ToolHandler.execute(
+        %{name: "edit_file", input: %{
+          "path" => "/test/fuzzy.rs",
+          "old_string" => "fn main() {\n    let x = 1;\n    let y = 2;\n}",
+          "new_string" => "fn main() {\n    let x = 42;\n    let y = 2;\n}"
+        }},
+        0
+      )
+
+      assert {:continue, msg} = result
+      # Should either apply (if sandbox available) or error on write
+      # The key is it doesn't report "old_string not found"
+      refute String.contains?(msg, "old_string not found")
+    end
+
+    test "matches despite tab/space differences" do
+      # File uses tabs
+      content = "fn main() {\n\tlet x = 1;\n}\n"
+      Golem.FileCache.put("/test/tabs.rs", content)
+
+      # Agent's old_string uses spaces
+      result = Golem.ToolHandler.execute(
+        %{name: "edit_file", input: %{
+          "path" => "/test/tabs.rs",
+          "old_string" => "fn main() {\n  let x = 1;\n}",
+          "new_string" => "fn main() {\n\tlet x = 42;\n}"
+        }},
+        0
+      )
+
+      assert {:continue, msg} = result
+      refute String.contains?(msg, "old_string not found")
+    end
+  end
+
   describe "unknown tool" do
     setup do
       Agent.update(Golem.FileCache, fn _ -> %{} end)

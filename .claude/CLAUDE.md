@@ -70,6 +70,25 @@ Set in `.env` (loaded by dotenv):
 - `DISCORD_TOKEN` — Required for ask_user tool
 - `DISCORD_CHANNEL_ID` — Required for ask_user tool
 
+## Git Access (optional)
+
+To let the bot push/pull from GitHub or Bitbucket, generate a dedicated SSH key:
+
+```bash
+mkdir -p ssh
+ssh-keygen -t ed25519 -f ssh/id_ed25519 -N "" -C "golem-bot"
+```
+
+Then add the public key (`ssh/id_ed25519.pub`) to your GitHub/Bitbucket account. The `ssh/` directory is gitignored — keys stay local.
+
+Optionally set git identity in `.env`:
+```bash
+GIT_USER="Your Name"
+GIT_EMAIL=you@example.com
+```
+
+Recreate the container after setup: `podman rm -f golem-vm && ./containers/start.sh`
+
 ## System Dependencies
 
 - `podman` — Container runtime (required)

@@ -40,21 +40,53 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "read_file", input: %{"path" => path}}, _depth) do
-    Logger.info("  [read_file] #{path}")
+  def execute(%{name: "read_file", input: %{"path" => path} = input}, _depth) do
+    offset = Map.get(input, "offset")
+    limit = Map.get(input, "limit")
+    Logger.info("  [read_file] #{path}#{if offset, do: " offset=#{offset}"}#{if limit, do: " limit=#{limit}"}")
 
     # Check cache first (verifies hash against container)
-    case Golem.FileCache.get(path) do
-      nil ->
-        case Golem.Sandbox.read_file(path) do
-          {:ok, content} ->
-            Golem.FileCache.put(path, content)
-            {:continue, truncate(content, 50_000)}
-          {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
-        end
-      content ->
-        Logger.info("  [read_file] cache hit for #{path}")
-        {:continue, "[cached — you've already read/written this file]\n#{truncate(content, 50_000)}"}
+    content =
+      case Golem.FileCache.get(path) do
+        nil ->
+          case Golem.Sandbox.read_file(path) do
+            {:ok, c} ->
+              Golem.FileCache.put(path, c)
+              {:ok, c, false}
+            {:error, reason} ->
+              {:error, reason}
+          end
+        c ->
+          Logger.info("  [read_file] cache hit for #{path}")
+          {:ok, c, true}
+      end
+
+    case content do
+      {:error, reason} ->
+        {:continue, "[error] #{inspect(reason)}"}
+
+      {:ok, full_content, cached} ->
+        lines = String.split(full_content, "\n")
+        total_lines = length(lines)
+
+        # Apply offset/limit if provided
+        {sliced, showing_range} =
+          case {offset, limit} do
+            {nil, nil} ->
+              {full_content, nil}
+
+            {off, lim} ->
+              start = max((off || 1) - 1, 0)
+              count = lim || total_lines
+              selected = lines |> Enum.drop(start) |> Enum.take(count)
+              end_line = min(start + count, total_lines)
+              {Enum.join(selected, "\n"), "lines #{start + 1}-#{end_line} of #{total_lines}"}
+          end
+
+        prefix = if cached, do: "[cached] ", else: ""
+        range_info = if showing_range, do: "[#{showing_range}]\n", else: ""
+
+        {:continue, "#{prefix}#{range_info}#{truncate(sliced, 50_000)}"}
     end
   end
 
@@ -79,17 +111,7 @@ defmodule Golem.ToolHandler do
       content ->
         case String.split(content, old, parts: 2) do
           [_before, _after] ->
-            updated = String.replace(content, old, new, global: false)
-
-            case Golem.Sandbox.write_file(path, updated) do
-              :ok ->
-                Golem.FileCache.put(path, updated)
-                # show_diff prints the diff AND the edit summary atomically
-                Golem.Output.current().show_diff(path, content, updated)
-                {:continue, "Edit applied to #{path}"}
-              {:error, reason} ->
-                {:continue, "[error] Failed to write: #{inspect(reason)}"}
-            end
+            apply_edit(path, content, old, new)
 
           [_no_match] ->
             # Check if the edit was already applied (e.g. resume after crash)
@@ -97,14 +119,22 @@ defmodule Golem.ToolHandler do
               Golem.FileCache.put(path, content)
               {:continue, "Edit already applied to #{path} (no change needed)."}
             else
-              line_count = content |> String.split("\n") |> length()
-              hint =
-                case Golem.FileCache.find_context(path, old, 5) do
-                  nil -> "\n\nThe file has #{line_count} lines. Use read_file to see the actual content before retrying."
-                  ctx -> "\n\nFile has #{line_count} lines. Closest match:\n#{ctx}\n\nDo NOT retry with the same old_string. Read the file first to see the exact content."
-              end
+              # Try fuzzy matching: normalize whitespace and retry
+              case fuzzy_find(content, old) do
+                {:ok, actual_old} ->
+                  Logger.info("  [edit_file] fuzzy match succeeded for #{path}")
+                  apply_edit(path, content, actual_old, new)
 
-            {:continue, "[error] old_string not found in #{path}.#{hint}"}
+                :no_match ->
+                  line_count = content |> String.split("\n") |> length()
+                  hint =
+                    case Golem.FileCache.find_context(path, old, 5) do
+                      nil -> "\n\nThe file has #{line_count} lines. Use read_file to see the actual content before retrying."
+                      ctx -> "\n\nFile has #{line_count} lines. Closest match:\n#{ctx}\n\nDo NOT retry with the same old_string. Read the file first to see the exact content."
+                    end
+
+                  {:continue, "[error] old_string not found in #{path}.#{hint}"}
+              end
             end
         end
     end
@@ -126,15 +156,17 @@ defmodule Golem.ToolHandler do
     Logger.info("  [glob] #{pattern} in #{path}")
 
     # Use find with -path for glob matching, or shell globstar
-    cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | head -200 | sort"
+    cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | sort | head -200"
 
     case Golem.Sandbox.exec(cmd, timeout: 15_000) do
       {:ok, %{output: output, exit_code: _}} ->
         if output == "" do
           {:continue, "No files matched pattern '#{pattern}' in #{path}"}
         else
-          count = output |> String.split("\n") |> length()
-          {:continue, "Found #{count} files:\n#{truncate(output, 50_000)}"}
+          files = output |> String.split("\n") |> Enum.reject(&(&1 == ""))
+          count = length(files)
+          suffix = if count >= 200, do: "\n(showing first 200 — narrow your pattern)", else: ""
+          {:continue, "Found #{count} files:\n#{truncate(output, 30_000)}#{suffix}"}
         end
 
       {:error, reason} ->
@@ -142,21 +174,49 @@ defmodule Golem.ToolHandler do
     end
   end
 
+  @grep_limit 200
+
   def execute(%{name: "grep", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
     file_glob = Map.get(input, "glob")
     context = Map.get(input, "context", 0)
+    offset = Map.get(input, "offset", 0)
     Logger.info("  [grep] '#{pattern}' in #{path}")
 
     glob_flag = if file_glob, do: " --include='#{file_glob}'", else: ""
     context_flag = if context > 0, do: " -C #{context}", else: ""
 
-    cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | head -500"
+    # Get total count first (cheap) so we can show pagination hints
+    count_cmd = "grep -rl#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | wc -l"
+    # Get results with offset + limit
+    skip = if offset > 0, do: " | tail -n +#{offset + 1}", else: ""
+    results_cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null#{skip} | head -#{@grep_limit}"
 
-    case Golem.Sandbox.exec(cmd, timeout: 15_000) do
-      {:ok, %{output: output, exit_code: 0}} ->
-        {:continue, truncate(output, 50_000)}
+    count_task = Task.async(fn -> Golem.Sandbox.exec(count_cmd, timeout: 15_000) end)
+    results_task = Task.async(fn -> Golem.Sandbox.exec(results_cmd, timeout: 15_000) end)
+
+    [count_result, results_result] = Task.await_many([count_task, results_task], :infinity)
+
+    total_files =
+      case count_result do
+        {:ok, %{output: n}} -> n |> String.trim() |> String.to_integer()
+        _ -> 0
+      end
+
+    case results_result do
+      {:ok, %{output: output, exit_code: 0}} when byte_size(output) > 0 ->
+        lines = output |> String.split("\n") |> Enum.reject(&(&1 == ""))
+        shown = length(lines)
+
+        header =
+          if shown >= @grep_limit do
+            "Showing #{offset + 1}-#{offset + shown} (#{total_files} files matched, results truncated — use offset: #{offset + shown} to see more)\n"
+          else
+            ""
+          end
+
+        {:continue, header <> truncate(output, 30_000)}
 
       {:ok, %{output: "", exit_code: 1}} ->
         {:continue, "No matches found for '#{pattern}' in #{path}"}
@@ -165,7 +225,7 @@ defmodule Golem.ToolHandler do
         if output == "" do
           {:continue, "No matches found for '#{pattern}' in #{path}"}
         else
-          {:continue, truncate(output, 50_000)}
+          {:continue, truncate(output, 30_000)}
         end
 
       {:error, reason} ->
@@ -384,6 +444,66 @@ defmodule Golem.ToolHandler do
   def execute(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
+  end
+
+  # --- Edit Helpers ---
+
+  defp apply_edit(path, content, old, new) do
+    updated = String.replace(content, old, new, global: false)
+
+    case Golem.Sandbox.write_file(path, updated) do
+      :ok ->
+        Golem.FileCache.put(path, updated)
+        Golem.Output.current().show_diff(path, content, updated)
+        {:continue, "Edit applied to #{path}"}
+
+      {:error, reason} ->
+        {:continue, "[error] Failed to write: #{inspect(reason)}"}
+    end
+  end
+
+  # Try to find old_string in content using whitespace normalization.
+  # Handles: trailing whitespace differences, tab/space mismatches,
+  # and minor indentation shifts.
+  defp fuzzy_find(content, old_string) do
+    normalized_old = normalize_ws(old_string)
+    old_lines = String.split(normalized_old, "\n")
+    old_line_count = length(old_lines)
+
+    content_lines = String.split(content, "\n")
+
+    # Slide a window of old_line_count lines over content_lines
+    match_idx =
+      content_lines
+      |> Enum.with_index()
+      |> Enum.find_value(fn {_line, idx} ->
+        window = Enum.slice(content_lines, idx, old_line_count)
+
+        if length(window) == old_line_count and normalize_ws(Enum.join(window, "\n")) == normalized_old do
+          idx
+        end
+      end)
+
+    if match_idx do
+      actual = content_lines |> Enum.slice(match_idx, old_line_count) |> Enum.join("\n")
+      {:ok, actual}
+    else
+      :no_match
+    end
+  end
+
+  # Normalize whitespace for fuzzy comparison:
+  # - Strip trailing whitespace from each line
+  # - Collapse runs of spaces/tabs to a single space (preserves leading indent structure)
+  defp normalize_ws(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map(fn line ->
+      line
+      |> String.trim_trailing()
+      |> String.replace(~r/\t/, "  ")
+    end)
+    |> Enum.join("\n")
   end
 
   defp escape(str), do: "'#{String.replace(str, "'", "'\\''")}'"

@@ -5,10 +5,45 @@ defmodule Golem.Prompt do
 
   @doc """
   System prompt for the executor — the agent that runs tool calls in a loop.
+
+  Returns a list of system content blocks for the Claude API.
+  The static prefix gets `cache_control` so it stays cached across turns
+  even when errors/agents_md change.
   """
   def executor_system(errors \\ [], agents_md \\ nil)
   def executor_system(errors, agents_md) do
-    base = """
+    static = %{
+      type: "text",
+      text: executor_static(),
+      cache_control: %{type: "ephemeral"}
+    }
+
+    dynamic_parts =
+      (if agents_md, do: ["## Project Instructions (from AGENTS.md)\n\n#{agents_md}"], else: []) ++
+      (if errors != [] do
+        error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
+        ["""
+        ## Lessons learned (errors from this run — do NOT repeat these)
+
+        #{error_list}
+
+        Review these before each action. If you're about to do something that previously failed, try a different approach.\
+        """]
+      else
+        []
+      end)
+
+    if dynamic_parts == [] do
+      [static]
+    else
+      [static, %{type: "text", text: Enum.join(dynamic_parts, "\n\n")}]
+    end
+  end
+
+  # The static portion of the executor prompt — never changes between turns,
+  # so it stays in the prompt cache.
+  defp executor_static do
+    """
     You are an autonomous agent executing tasks inside a Linux container. You have full root access.
 
     ## How you work
@@ -74,40 +109,15 @@ defmodule Golem.Prompt do
     - If a command fails, diagnose why before retrying. Don't blindly retry the same thing.
     - When you've achieved the goal (or determined it's impossible), use the `done` tool.
 
-    ## Output style
+    ## Output efficiency
 
-    When you respond with text (not a tool call), keep it brief — just state what you're about to do and why.
+    You are optimized for ACTION, not explanation. Token budget is real money.
+    - Between tool calls: **≤25 words**. State what you're doing, not why. No preamble.
+    - Final summary (in `done`): **≤100 words** unless the task specifically requires a detailed report.
+    - Never narrate what you just did — the tool results speak for themselves.
+    - Never restate the plan or list remaining steps in prose. The progress checklist handles that.
+    - Prefer a tool call with no text over text explaining you're about to make a tool call.
     """
-
-    prompt = base
-
-    # Inject AGENTS.md if provided
-    prompt =
-      if agents_md do
-        prompt <> """
-
-        ## Project Instructions (from AGENTS.md)
-
-        #{agents_md}
-        """
-      else
-        prompt
-      end
-
-    # Inject error memory if any
-    if errors != [] do
-      error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
-      prompt <> """
-
-      ## Lessons learned (errors from this run — do NOT repeat these)
-
-      #{error_list}
-
-      Review these before each action. If you're about to do something that previously failed, try a different approach.
-      """
-    else
-      prompt
-    end
   end
 
   @doc """

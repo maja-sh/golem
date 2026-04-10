@@ -310,8 +310,11 @@ defmodule Golem.Runner do
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
     tools = Golem.Tools.for_depth(state.depth)
 
+    # Microcompact: clear bulky tool results from older messages
+    messages = microcompact(state.messages)
+
     # Trim messages if conversation is getting long
-    messages = trim_messages(state.messages)
+    messages = trim_messages(messages)
 
     llm_start = System.monotonic_time(:millisecond)
 
@@ -350,10 +353,18 @@ defmodule Golem.Runner do
           {:done, summary, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
             state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
-            Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
-            log_phase_costs(state)
-            maybe_save(state)
-            {:ok, summary}
+
+            case maybe_verify(summary, state) do
+              {:accept, state} ->
+                Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
+                log_phase_costs(state)
+                maybe_save(state)
+                {:ok, summary}
+
+              {:reject, state} ->
+                maybe_save(state)
+                loop(state, system)
+            end
 
           {:think_replan, reasoning, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
@@ -405,22 +416,111 @@ defmodule Golem.Runner do
     end
   end
 
-  # Execute multiple tool calls sequentially. Stops early on :done or :think_replan.
-  # Returns {action, list_of_{tool_call, result}} where action is :continue, {:done, summary}, or {:think_replan, reasoning}
-  defp execute_tool_calls(tool_calls, depth) do
-    execute_tool_calls(tool_calls, depth, [])
-  end
-
-  defp execute_tool_calls([], _depth, executed) do
-    {:continue, Enum.reverse(executed)}
-  end
-
+  # Execute multiple tool calls, running read-only tools concurrently.
+  # Partitions calls into batches: consecutive concurrent-safe tools run in
+  # parallel, everything else runs serially. Stops early on :done / :think_replan.
   @silent_tools ~w(update_progress)
+  @concurrent_safe ~w(read_file glob grep list_directory web_search web_fetch screenshot)
 
-  defp execute_tool_calls([tc | rest], depth, executed) do
+  defp execute_tool_calls(tool_calls, depth) do
+    batches = partition_batches(tool_calls)
+    execute_batches(batches, depth, [])
+  end
+
+  # Group consecutive concurrent-safe tools into one batch.
+  # Each non-concurrent tool is its own batch.
+  defp partition_batches([]), do: []
+
+  defp partition_batches(tool_calls) do
+    {concurrent, rest} = Enum.split_while(tool_calls, &(&1.name in @concurrent_safe))
+
+    cond do
+      concurrent != [] and rest == [] ->
+        [concurrent]
+
+      concurrent != [] ->
+        [serial_tc | remaining] = rest
+        [concurrent, [serial_tc] | partition_batches(remaining)]
+
+      true ->
+        [serial_tc | remaining] = tool_calls
+        [[serial_tc] | partition_batches(remaining)]
+    end
+  end
+
+  defp execute_batches([], _depth, executed), do: {:continue, executed}
+
+  defp execute_batches([batch | rest], depth, executed) do
+    if length(batch) > 1 do
+      # Multiple concurrent-safe tools — run in parallel
+      results = execute_concurrent_batch(batch, depth)
+      execute_batches(rest, depth, executed ++ results)
+    else
+      # Single tool — run serially (may be done/think_replan)
+      [tc] = batch
+
+      case execute_single_tool(tc, depth) do
+        {:done, summary, entry} ->
+          {:done, summary, executed ++ [entry]}
+
+        {:think_replan, reasoning, entry} ->
+          {:think_replan, reasoning, executed ++ [entry]}
+
+        {:continue, entry} ->
+          execute_batches(rest, depth, executed ++ [entry])
+      end
+    end
+  end
+
+  # Run a batch of read-only tools concurrently using Task.async.
+  defp execute_concurrent_batch(batch, depth) do
+    # Show all tool_call headers first
+    Enum.each(batch, fn tc ->
+      silent = tc.name in @silent_tools
+      if not silent, do: output().tool_call(tc.name, summarize_input(tc))
+    end)
+
+    # Execute all in parallel
+    tasks =
+      Enum.map(batch, fn tc ->
+        Task.async(fn ->
+          start = System.monotonic_time(:millisecond)
+          result = Golem.ToolHandler.execute(tc, depth)
+          elapsed = System.monotonic_time(:millisecond) - start
+          {tc, result, elapsed}
+        end)
+      end)
+
+    results = Task.await_many(tasks, :infinity)
+
+    # Report results to TUI in order
+    Enum.map(results, fn {tc, result, elapsed} ->
+      detail = summarize_input(tc)
+      silent = tc.name in @silent_tools
+
+      case result do
+        {:continue, text} ->
+          is_error = String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
+
+          if not silent do
+            if is_error,
+              do: output().tool_error(tc.name, detail, text),
+              else: output().tool_result(tc.name, detail, text, elapsed, nil)
+          end
+
+          {tc, {:text, text}}
+
+        {:continue_with_image, %{text: text, base64: base64}} ->
+          if not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+          {tc, {:image, text, base64}}
+      end
+    end)
+  end
+
+  # Execute a single tool call (may be any type, including done/think_replan).
+  defp execute_single_tool(tc, depth) do
     detail = summarize_input(tc)
     silent = tc.name in @silent_tools
-
     if not silent, do: output().tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
@@ -429,30 +529,29 @@ defmodule Golem.Runner do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
         output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
-        {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
+        {:done, summary, {tc, {:text, "Goal completed."}}}
 
       {:think_replan, reasoning} ->
         elapsed = System.monotonic_time(:millisecond) - start
         output().tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
-        {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
+        {:think_replan, reasoning, {tc, {:text, "Re-planning requested."}}}
 
       {:continue, result} ->
         elapsed = System.monotonic_time(:millisecond) - start
         is_error = String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code")
 
         if not silent do
-          if is_error do
-            output().tool_error(tc.name, detail, result)
-          else
-            output().tool_result(tc.name, detail, result, elapsed, nil)
-          end
+          if is_error,
+            do: output().tool_error(tc.name, detail, result),
+            else: output().tool_result(tc.name, detail, result, elapsed, nil)
         end
-        execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
+
+        {:continue, {tc, {:text, result}}}
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
-        execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
+        {:continue, {tc, {:image, text, base64}}}
     end
   end
 
@@ -532,6 +631,144 @@ defmodule Golem.Runner do
     end
   end
 
+  # --- Done Verification ---
+
+  @max_done_rejections 3
+
+  # Only verify top-level successful runs, with a rejection cap.
+  defp maybe_verify(summary, state) do
+    rejections = Map.get(state, :done_rejections, 0)
+
+    if not summary.success or state.depth > 0 or rejections >= @max_done_rejections do
+      {:accept, state}
+    else
+      Logger.info("#{state.prefix}  Verifying before accepting done (attempt #{rejections + 1})...")
+      if state.depth == 0, do: output().planning("Running verification checks...")
+
+      case Golem.Verify.run_checks() do
+        {:ok, nil} ->
+          # No project detected — nothing to verify
+          {:accept, state}
+
+        {:ok, project_path} ->
+          # Compile + tests passed. Now run a fresh sub-agent for deeper review.
+          Logger.info("#{state.prefix}  Programmatic checks passed, running verification agent...")
+          if state.depth == 0, do: output().planning("Running verification agent...")
+
+          case Golem.Verify.run_agent(project_path) do
+            :ok ->
+              Logger.info("#{state.prefix}  Verification passed")
+              {:accept, state}
+
+            {:error, issues} ->
+              reject_done(state, "Verification agent found issues:\n\n#{issues}")
+          end
+
+        {:error, issues} ->
+          reject_done(state, issues)
+      end
+    end
+  end
+
+  defp reject_done(state, issues) do
+    rejections = Map.get(state, :done_rejections, 0) + 1
+
+    Logger.warning(
+      "#{state.prefix}  Done REJECTED (#{rejections}/#{@max_done_rejections}): " <>
+        String.slice(issues, 0, 300)
+    )
+
+    if state.depth == 0 do
+      output().planning("Verification failed — sending agent back to fix (#{rejections}/#{@max_done_rejections})")
+    end
+
+    messages =
+      state.messages ++
+        [
+          %{
+            role: "user",
+            content: """
+            [System] Your `done` call was REJECTED because verification failed (attempt #{rejections}/#{@max_done_rejections}):
+
+            #{issues}
+
+            Fix ALL of these issues, then call `done` again. Do not skip any.
+            """
+          }
+        ]
+
+    {:reject, %{state | messages: messages, done_rejections: rejections}}
+  end
+
+  # --- Microcompaction ---
+
+  # Selectively clear bulky tool results from older messages.
+  # Keeps the last @micro_keep_recent messages untouched. For older messages,
+  # replaces large tool_result content with "[cleared]" — the tool name and
+  # structure are preserved so the model still knows what happened.
+  @micro_keep_recent 10
+  @micro_clearable_tools ~w(shell read_file grep glob web_search web_fetch list_directory browse)
+  @micro_min_size 500
+
+  defp microcompact(messages) when length(messages) <= @micro_keep_recent, do: messages
+
+  defp microcompact(messages) do
+    split_at = max(0, length(messages) - @micro_keep_recent)
+    {old, recent} = Enum.split(messages, split_at)
+
+    # Build a map of tool_use_id → tool_name from assistant messages
+    tool_names = build_tool_name_index(old)
+
+    Enum.map(old, &microcompact_message(&1, tool_names)) ++ recent
+  end
+
+  defp build_tool_name_index(messages) do
+    messages
+    |> Enum.filter(&(&1.role == "assistant"))
+    |> Enum.flat_map(fn msg ->
+      case msg.content do
+        blocks when is_list(blocks) ->
+          Enum.flat_map(blocks, fn
+            %{type: "tool_use", id: id, name: name} -> [{id, name}]
+            %{"type" => "tool_use", "id" => id, "name" => name} -> [{id, name}]
+            _ -> []
+          end)
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp microcompact_message(%{role: "user", content: content} = msg, tool_names) when is_list(content) do
+    %{msg | content: Enum.map(content, &maybe_clear_tool_result(&1, tool_names))}
+  end
+
+  defp microcompact_message(msg, _tool_names), do: msg
+
+  defp maybe_clear_tool_result(%{type: "tool_result", content: content} = block, tool_names) when is_binary(content) do
+    id = Map.get(block, :tool_use_id) || Map.get(block, "tool_use_id")
+    tool_name = Map.get(tool_names, id)
+
+    if byte_size(content) > @micro_min_size and tool_name in @micro_clearable_tools do
+      %{block | content: "[cleared]"}
+    else
+      block
+    end
+  end
+
+  defp maybe_clear_tool_result(%{"type" => "tool_result", "content" => content} = block, tool_names) when is_binary(content) do
+    id = Map.get(block, "tool_use_id")
+    tool_name = Map.get(tool_names, id)
+
+    if byte_size(content) > @micro_min_size and tool_name in @micro_clearable_tools do
+      Map.put(block, "content", "[cleared]")
+    else
+      block
+    end
+  end
+
+  defp maybe_clear_tool_result(block, _tool_names), do: block
+
   # --- Message Management ---
 
   # Keep conversation manageable. When messages exceed the threshold,
@@ -573,39 +810,100 @@ defmodule Golem.Runner do
   defp drop_leading_user_messages(messages), do: messages
 
   defp compact_messages(messages) do
-    # Extract a readable summary from old tool exchanges
-    text =
-      messages
-      |> Enum.chunk_every(2)
-      |> Enum.map(fn
-        [%{role: "assistant", content: content}, %{role: "user"} = user_msg] ->
-          # Extract tool name and result
-          tool_name = extract_tool_name(content)
-          result = extract_result_text(user_msg)
-          "- [#{tool_name}] → #{String.slice(result, 0, 150)}"
+    # Extract a structured tool log for the LLM to summarize
+    tool_log = extract_tool_log(messages)
 
-        [%{role: "assistant", content: content}] ->
-          text = if is_binary(content), do: content, else: "[tool call]"
-          "- Agent: #{String.slice(text, 0, 150)}"
+    # Use an LLM call for high-quality structured summary
+    case llm_compact(tool_log) do
+      {:ok, summary} ->
+        summary
 
-        [%{role: "user", content: content}] ->
-          text = if is_binary(content), do: content, else: "[system]"
-          "- System: #{String.slice(text, 0, 150)}"
-
-        _ ->
-          nil
-      end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join("\n")
-
-    # If the summary itself is manageable, just use it directly
-    # No need for an LLM call — structured extraction is cheaper and faster
-    if byte_size(text) > 10_000 do
-      "[#{length(messages)} earlier messages truncated]\n" <>
-        (text |> String.slice(0, 8_000))
-    else
-      text
+      {:error, _reason} ->
+        # Fall back to raw tool log if LLM fails
+        Logger.warning("LLM compaction failed, using raw tool log")
+        if byte_size(tool_log) > 10_000 do
+          "[#{length(messages)} earlier messages truncated]\n" <>
+            String.slice(tool_log, 0, 8_000)
+        else
+          tool_log
+        end
     end
+  end
+
+  @compaction_prompt """
+  You are summarizing a conversation between an autonomous agent and its tools. \
+  The agent is working toward a goal inside a Linux container.
+
+  Produce a structured summary that preserves the CONTEXT the agent needs to continue \
+  effectively. Focus on WHAT matters, not the raw tool calls.
+
+  Format your summary with these sections:
+
+  ## Accomplished
+  What has been built, installed, or completed so far. List files created/modified.
+
+  ## Current State
+  Where things stand right now — what's working, what's partially done.
+
+  ## Key Decisions
+  Important choices made (tech stack, architecture, approach). The agent needs to \
+  remember WHY it chose approach A over B.
+
+  ## Errors & Fixes
+  Problems encountered and how they were resolved. Only include if the fix is \
+  non-obvious and the error could recur.
+
+  Keep each section to 3-5 bullet points. Be specific (include file paths, command names, \
+  package versions) but concise. Total summary should be under 500 words.
+
+  CRITICAL: Respond with ONLY the summary text. Do NOT use any tools. Do NOT add commentary.
+  """
+
+  defp llm_compact(tool_log) do
+    # Truncate the tool log if it's massive — we need it to fit in context
+    input = if byte_size(tool_log) > 30_000, do: String.slice(tool_log, -30_000, 30_000), else: tool_log
+
+    messages = [
+      %{role: "user", content: "Here is the tool call log to summarize:\n\n#{input}"}
+    ]
+
+    model = Application.get_env(:golem, :executor_model)
+
+    case Golem.Claude.call(messages,
+           model: model,
+           max_tokens: 2_000,
+           system: @compaction_prompt
+         ) do
+      {:ok, %{text: text}} when is_binary(text) and text != "" ->
+        {:ok, text}
+
+      _ ->
+        {:error, :no_summary}
+    end
+  end
+
+  defp extract_tool_log(messages) do
+    messages
+    |> Enum.chunk_every(2)
+    |> Enum.map(fn
+      [%{role: "assistant", content: content}, %{role: "user"} = user_msg] ->
+        tool_name = extract_tool_name(content)
+        result = extract_result_text(user_msg)
+        "- [#{tool_name}] → #{String.slice(result, 0, 200)}"
+
+      [%{role: "assistant", content: content}] ->
+        text = if is_binary(content), do: content, else: "[tool call]"
+        "- Agent: #{String.slice(text, 0, 200)}"
+
+      [%{role: "user", content: content}] ->
+        text = if is_binary(content), do: content, else: "[system]"
+        "- System: #{String.slice(text, 0, 200)}"
+
+      _ ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
   end
 
   defp extract_tool_name(content) when is_list(content) do

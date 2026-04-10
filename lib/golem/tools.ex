@@ -84,10 +84,12 @@ defmodule Golem.Tools do
         },
         required: ["path", "content"]
       }),
-      tool("read_file", "Read a file from the container.", %{
+      tool("read_file", "Read a file from the container. For large files, use offset and limit to read specific line ranges instead of the whole file.", %{
         type: "object",
         properties: %{
-          path: %{type: "string", description: "Absolute file path"}
+          path: %{type: "string", description: "Absolute file path"},
+          offset: %{type: "integer", description: "Start reading from this line number (1-based). Omit to start from the beginning."},
+          limit: %{type: "integer", description: "Maximum number of lines to return. Omit to read the entire file. Use this for large files to avoid flooding your context."}
         },
         required: ["path"]
       }),
@@ -115,13 +117,14 @@ defmodule Golem.Tools do
         },
         required: ["pattern"]
       }),
-      tool("grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers.", %{
+      tool("grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. Results are capped at 200 lines — use offset to paginate if needed.", %{
         type: "object",
         properties: %{
           pattern: %{type: "string", description: "Regex pattern to search for"},
           path: %{type: "string", description: "File or directory to search in (default: current working directory)"},
           glob: %{type: "string", description: "Only search files matching this glob (e.g. *.py)"},
-          context: %{type: "integer", description: "Number of context lines before and after each match (default: 0)"}
+          context: %{type: "integer", description: "Number of context lines before and after each match (default: 0)"},
+          offset: %{type: "integer", description: "Skip this many lines of output (for paginating large result sets). Default: 0."}
         },
         required: ["pattern"]
       }),

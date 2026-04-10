@@ -37,3 +37,6 @@ golem-*.tar
 # Exported output
 /output/
 
+# Bot SSH keys (private keys must never be committed)
+/ssh/
+

@@ -394,6 +394,11 @@ defmodule Golem.Claude do
     ])
   end
 
+  # Pre-built system blocks (static cached + dynamic uncached)
+  defp maybe_put(map, :system, blocks) when is_list(blocks) do
+    Map.put(map, :system, blocks)
+  end
+
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp maybe_put_thinking(body, nil), do: body
