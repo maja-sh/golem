@@ -217,9 +217,14 @@ defmodule Golem.TUI do
   end
 
   def handle_call({:set_progress, items}, _from, state) do
-    # Just update state — the next tick or print call will redraw with new items.
-    # Don't erase/redraw here to avoid interleaving checklist with tool output.
-    {:reply, :ok, %{state | progress: items}}
+    # Erase old status, update items, redraw with correct line count.
+    # This is needed so status_lines stays accurate for future erase_status calls.
+    # The tick only updates the bottom line, so this is the only place
+    # where status_lines gets recalculated when progress changes.
+    state = erase_status(state)
+    state = %{state | progress: items}
+    state = draw_status(state)
+    {:reply, :ok, state}
   end
 
   def handle_call(:stop, _from, state) do
