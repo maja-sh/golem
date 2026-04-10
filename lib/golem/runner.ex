@@ -395,8 +395,6 @@ defmodule Golem.Runner do
   end
 
   @silent_tools ~w(update_progress)
-  # Tools where successful results are shown by the tool handler itself (e.g. diff)
-  @self_reporting_tools ~w(edit_file)
 
   defp execute_tool_calls([tc | rest], depth, executed) do
     detail = summarize_input(tc)
@@ -420,13 +418,12 @@ defmodule Golem.Runner do
       {:continue, result} ->
         elapsed = System.monotonic_time(:millisecond) - start
         is_error = String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code")
-        self_reporting = tc.name in @self_reporting_tools
 
         if not silent do
-          cond do
-            is_error -> Golem.TUI.tool_error(tc.name, detail, result)
-            self_reporting -> :ok  # diff already shown by tool handler
-            true -> Golem.TUI.tool_result(tc.name, detail, result, elapsed, nil)
+          if is_error do
+            Golem.TUI.tool_error(tc.name, detail, result)
+          else
+            Golem.TUI.tool_result(tc.name, detail, result, elapsed, nil)
           end
         end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
