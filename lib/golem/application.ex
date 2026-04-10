@@ -41,7 +41,7 @@ defmodule Golem.Application do
       executor_max_tokens: 16_000,
       thinking_budget: 10_000,
       max_steps: 200,
-      command_timeout: 60_000,
+      command_timeout: 300_000,
       screenshot_dir: "screenshots",
       log_dir: "logs"
     ]
