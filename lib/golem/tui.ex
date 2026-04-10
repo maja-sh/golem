@@ -59,9 +59,11 @@ defmodule Golem.TUI do
   end
 
   def tool_error(name, detail, error_text) do
+    # Show first meaningful line of error, wrapped
+    first_line = error_text |> String.split("\n", trim: true) |> List.first("") |> trunc(100)
     lines = [
       [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
-      [:faint, :red, "  └ #{trunc(error_text, 100)}", :reset]
+      [:faint, :red, "  └ #{first_line}", :reset]
     ]
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end

@@ -85,11 +85,10 @@ defmodule Golem.Sandbox do
       port ->
         ref = :crypto.strong_rand_bytes(8) |> Base.encode16()
 
-        # Prepend cd to persist working directory across commands
+        # Source .bashrc for PATH, then cd to persist working directory
         cd_prefix = if state.cwd, do: "cd #{escape(state.cwd)} 2>/dev/null; ", else: ""
-        # Run command directly (not in subshell) so cd persists, then capture pwd
         wrapped =
-          "echo '---CMD_START_#{ref}---'; #{cd_prefix}#{command} 2>&1; __exit=$?; echo ''; echo \"---CWD_#{ref}_$(pwd)---\"; echo \"---CMD_END_#{ref}_${__exit}---\"\n"
+          "source ~/.bashrc 2>/dev/null; echo '---CMD_START_#{ref}---'; #{cd_prefix}#{command} 2>&1; __exit=$?; echo ''; echo \"---CWD_#{ref}_$(pwd)---\"; echo \"---CMD_END_#{ref}_${__exit}---\"\n"
 
         Port.command(port, wrapped)
         timer = Process.send_after(self(), {:exec_timeout, ref}, timeout)
