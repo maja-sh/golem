@@ -11,6 +11,8 @@ defmodule Golem.Runner do
 
   require Logger
 
+  defp output, do: Golem.Output.current()
+
   @doc """
   Run the agent with the given goal. Blocks until completion.
 
@@ -29,7 +31,7 @@ defmodule Golem.Runner do
     prefix = depth_prefix(depth)
 
     # Initialize TUI first (suppresses console logger)
-    if depth == 0, do: Golem.TUI.init_display(run_id, goal)
+    if depth == 0, do: output().init_display(run_id, goal)
 
     Logger.info("#{prefix}========== RUN STARTED (#{run_id}) ==========")
     Logger.info("#{prefix}Goal: #{goal}")
@@ -39,12 +41,12 @@ defmodule Golem.Runner do
 
     if depth == 0 do
       case result do
-        {:ok, %{success: success} = s} -> Golem.TUI.run_complete(success, s.summary)
-        {:error, :max_steps_reached} -> Golem.TUI.run_paused(run_id)
-        {:error, reason} -> Golem.TUI.run_error(reason)
+        {:ok, %{success: success} = s} -> output().run_complete(success, s.summary)
+        {:error, :max_steps_reached} -> output().run_paused(run_id)
+        {:error, reason} -> output().run_error(reason)
       end
 
-      Golem.TUI.stop_display()
+      output().stop_display()
     end
 
     # Always log to file
@@ -72,11 +74,11 @@ defmodule Golem.Runner do
         Logger.info("#{prefix}Continuing from step #{saved.step}, new max: #{new_max}")
 
         if saved.depth == 0 do
-          Golem.TUI.init_display(run_id, saved.goal)
-          Golem.TUI.planning("Resuming from step #{saved.step}...")
+          output().init_display(run_id, saved.goal)
+          output().planning("Resuming from step #{saved.step}...")
           # Restore progress checklist
           progress = Map.get(saved, :progress, [])
-          if progress != [], do: Golem.TUI.set_progress(progress)
+          if progress != [], do: output().set_progress(progress)
         end
 
         state = %{
@@ -110,11 +112,11 @@ defmodule Golem.Runner do
 
         if saved.depth == 0 do
           case result do
-            {:ok, %{success: success} = s} -> Golem.TUI.run_complete(success, s.summary)
-            {:error, :max_steps_reached} -> Golem.TUI.run_paused(run_id)
-            {:error, reason} -> Golem.TUI.run_error(reason)
+            {:ok, %{success: success} = s} -> output().run_complete(success, s.summary)
+            {:error, :max_steps_reached} -> output().run_paused(run_id)
+            {:error, reason} -> output().run_error(reason)
           end
-          Golem.TUI.stop_display()
+          output().stop_display()
         end
 
         # Always log to file
@@ -137,7 +139,7 @@ defmodule Golem.Runner do
     plan_result =
       case opts[:plan] do
         nil ->
-          if depth == 0, do: Golem.TUI.planning()
+          if depth == 0, do: output().planning()
           Logger.info("#{prefix}Planning with Opus...")
           create_plan(goal)
 
@@ -147,7 +149,7 @@ defmodule Golem.Runner do
 
     case plan_result do
       {:ok, plan} ->
-        if depth == 0, do: Golem.TUI.plan_created(plan)
+        if depth == 0, do: output().plan_created(plan)
         Logger.info("#{prefix}Plan created (logged to file)")
 
         state = %{
@@ -278,7 +280,7 @@ defmodule Golem.Runner do
     errors = Map.get(state, :errors, [])
     cost_str = "$#{format_cost(costs)}"
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
-    if state.depth == 0, do: Golem.TUI.step_header(step, state.max_steps, cost_str)
+    if state.depth == 0, do: output().step_header(step, state.max_steps, cost_str)
 
     # Rebuild system prompt with current error memory and AGENTS.md
     agents_md = Map.get(state, :agents_md)
@@ -310,13 +312,13 @@ defmodule Golem.Runner do
 
         if response.text do
           Logger.info("#{p}  Agent: #{response.text}")
-          if state.depth == 0, do: Golem.TUI.agent_text(response.text)
+          if state.depth == 0, do: output().agent_text(response.text)
         end
 
         if is_nil(response.text) and state.depth == 0 do
           count = length(tool_calls)
           if count > 1 do
-            Golem.TUI.agent_text("Running #{count} actions (#{Golem.TUI.format_elapsed(llm_elapsed)})")
+            output().agent_text("Running #{count} actions (#{Golem.TUI.format_elapsed(llm_elapsed)})")
           end
         end
 
@@ -376,7 +378,7 @@ defmodule Golem.Runner do
           # Wait and retry — overloads and transient errors can recover
           wait = min(60_000, 10_000 * api_failures)
           Logger.warning("#{p}  Waiting #{div(wait, 1000)}s before retry (attempt #{api_failures}/3)")
-          if state.depth == 0, do: Golem.TUI.planning("API error — retrying in #{div(wait, 1000)}s...")
+          if state.depth == 0, do: output().planning("API error — retrying in #{div(wait, 1000)}s...")
           Process.sleep(wait)
           maybe_save(state)
           loop(Map.put(state, :api_failures, api_failures), system)
@@ -400,19 +402,19 @@ defmodule Golem.Runner do
     detail = summarize_input(tc)
     silent = tc.name in @silent_tools
 
-    if not silent, do: Golem.TUI.tool_call(tc.name, detail)
+    if not silent, do: output().tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
 
     case Golem.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        Golem.TUI.tool_result(tc.name, detail, summary.summary, elapsed, nil)
+        output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
         {:done, summary, Enum.reverse([{tc, {:text, "Goal completed."}} | executed])}
 
       {:think_replan, reasoning} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        Golem.TUI.tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
+        output().tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
         {:think_replan, reasoning, Enum.reverse([{tc, {:text, "Re-planning requested."}} | executed])}
 
       {:continue, result} ->
@@ -421,16 +423,16 @@ defmodule Golem.Runner do
 
         if not silent do
           if is_error do
-            Golem.TUI.tool_error(tc.name, detail, result)
+            output().tool_error(tc.name, detail, result)
           else
-            Golem.TUI.tool_result(tc.name, detail, result, elapsed, nil)
+            output().tool_result(tc.name, detail, result, elapsed, nil)
           end
         end
         execute_tool_calls(rest, depth, [{tc, {:text, result}} | executed])
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        if not silent, do: Golem.TUI.tool_result(tc.name, detail, text, elapsed, nil)
+        if not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
         execute_tool_calls(rest, depth, [{tc, {:image, text, base64}} | executed])
     end
   end
@@ -482,7 +484,7 @@ defmodule Golem.Runner do
 
   defp handle_replan(state, system, step, _tool_call, reasoning) do
     Logger.info("#{state.prefix}  Re-planning with Opus...")
-    if state.depth == 0, do: Golem.TUI.planning("Re-planning with Opus...")
+    if state.depth == 0, do: output().planning("Re-planning with Opus...")
 
     # Take last 20 history entries for context
     recent = Enum.take(state.history, -20)
@@ -691,7 +693,7 @@ defmodule Golem.Runner do
         Logger.info("  #{name}: $#{cost}")
       end)
 
-      Golem.TUI.show_phase_costs(phase_costs)
+      output().show_phase_costs(phase_costs)
     end
   end
 

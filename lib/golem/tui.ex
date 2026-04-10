@@ -7,6 +7,8 @@ defmodule Golem.TUI do
   This keeps the status pinned at the bottom.
   """
 
+  @behaviour Golem.Output
+
   use GenServer
   require Logger
 

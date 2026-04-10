@@ -85,7 +85,7 @@ defmodule Golem.ToolHandler do
               :ok ->
                 Golem.FileCache.put(path, updated)
                 # show_diff prints the diff AND the edit summary atomically
-                Golem.TUI.show_diff(path, content, updated)
+                Golem.Output.current().show_diff(path, content, updated)
                 {:continue, "Edit applied to #{path}"}
               {:error, reason} ->
                 {:continue, "[error] Failed to write: #{inspect(reason)}"}
@@ -256,7 +256,7 @@ defmodule Golem.ToolHandler do
     total = length(parsed)
     Logger.info("  [update_progress] #{completed}/#{total} completed")
 
-    Golem.TUI.set_progress(parsed)
+    Golem.Output.current().set_progress(parsed)
     # Store in persistent_term so runner state can pick it up for saving
     :persistent_term.put(:golem_progress, parsed)
     {:continue, "Progress updated (#{completed}/#{total} completed)."}

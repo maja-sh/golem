@@ -7,6 +7,11 @@ defmodule Golem.Application do
     ensure_defaults()
     setup_file_logger()
 
+    # Set output backend — daemon mode uses Discord, CLI uses TUI
+    unless Application.get_env(:golem, :output_backend) do
+      Application.put_env(:golem, :output_backend, Golem.TUI)
+    end
+
     token = System.get_env("DISCORD_TOKEN")
 
     if token do
