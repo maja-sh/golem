@@ -32,15 +32,18 @@ defmodule Mix.Tasks.Golem.Export do
   end
 
   defp do_export(container_path, local_path) do
-    Mix.Task.run("app.start")
     Mix.shell().info("Exporting #{container_path} → #{local_path}")
+    File.mkdir_p!(local_path)
 
-    case Golem.export(container_path, local_path) do
-      {:ok, path} ->
-        Mix.shell().info("✓ Exported to #{path}")
+    container = Application.get_env(:golem, :container, "golem-vm")
 
-      {:error, reason} ->
-        Mix.shell().error("✗ #{reason}")
+    case System.cmd("podman", ["cp", "#{container}:#{container_path}/.", local_path],
+           stderr_to_stdout: true) do
+      {_, 0} ->
+        Mix.shell().info("✓ Exported to #{local_path}")
+
+      {output, code} ->
+        Mix.shell().error("✗ podman cp failed (#{code}): #{output}")
     end
   end
 end
