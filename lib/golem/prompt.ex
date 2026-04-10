@@ -46,6 +46,8 @@ defmodule Golem.Prompt do
 
     Each call sends the FULL item list — include all items every time, with their current status. Keep items short (under 50 chars). 5-15 items is ideal.
 
+    IMPORTANT: Call `update_progress` frequently — at minimum after completing each task. The operator watches the checklist to understand what you're doing. If you're working but not updating progress, the operator can't see your progress.
+
     ## Verification gates
 
     Before moving from one major phase to the next, you MUST run verification:
