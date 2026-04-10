@@ -261,13 +261,9 @@ defmodule Golem.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
-    # Move up, clear each line with cursor-down (not \n to avoid scroll buffer leak)
     IO.write("\e[#{n}A")
-    for i <- 1..n do
-      IO.write("\e[2K")
-      if i < n, do: IO.write("\e[1B")
-    end
-    IO.write("\e[#{n - 1}A\r")
+    for _ <- 1..n, do: IO.write("\e[2K\n")
+    IO.write("\e[#{n}A")
     %{state | status_lines: 0}
   end
 
