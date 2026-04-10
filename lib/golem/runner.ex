@@ -376,12 +376,15 @@ defmodule Golem.Runner do
             messages = append_multi_tool_exchange(messages, response, executed)
             messages = maybe_inject_review(messages, executed)
             messages = maybe_inject_stuck_warning(messages, executed, state)
+            messages = maybe_inject_file_size_warning(messages, executed)
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
             {phase_costs, last_completed} = track_phase_costs(executed, costs, state)
             state = %{state | messages: messages, step: step, costs: costs, errors: errors,
                        phase_costs: phase_costs, last_completed: last_completed,
                        history: update_history(state.history, executed)}
+            messages = maybe_inject_drift_warning(state)
+            state = %{state | messages: messages}
             maybe_save(state)
             loop(state, system)
         end
@@ -1039,6 +1042,113 @@ defmodule Golem.Runner do
       Logger.warning("Stuck detection: #{Enum.join(stuck_files, ", ")}")
       messages ++ [
         %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. You've been editing the same file(s) repeatedly without making progress. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`."}
+      ]
+    else
+      messages
+    end
+  end
+
+  # --- Drift Detection ---
+
+  # Every @drift_check_interval steps, compare recent activity against the plan.
+  # Uses a cheap LLM call to detect if the agent has wandered off-plan.
+  @drift_check_interval 15
+
+  defp maybe_inject_drift_warning(%{step: step, plan: plan, history: history, depth: depth} = state)
+       when depth == 0 and plan != nil and rem(step, @drift_check_interval) == 0 and step > 0 do
+    recent =
+      history
+      |> Enum.take(-15)
+      |> Enum.map(fn {tool, input, _result} -> "- [#{tool}] #{input}" end)
+      |> Enum.join("\n")
+
+    case check_drift(plan, recent) do
+      {:drifting, explanation} ->
+        Logger.warning("Drift detected at step #{step}: #{String.slice(explanation, 0, 200)}")
+
+        state.messages ++
+          [
+            %{
+              role: "user",
+              content: """
+              [System] DRIFT WARNING: You appear to be working on tasks not in the plan.
+
+              #{explanation}
+
+              Get back on track. Check your progress checklist and resume the next uncompleted item. \
+              If the plan genuinely needs to change, use `think(request_replan: true)` instead of silently diverging.
+              """
+            }
+          ]
+
+      :on_track ->
+        state.messages
+    end
+  end
+
+  defp maybe_inject_drift_warning(state), do: state.messages
+
+  @drift_prompt """
+  You are checking whether an autonomous agent is following its plan.
+
+  Given the PLAN and the agent's RECENT ACTIONS, determine if the agent is on track or drifting.
+
+  Drifting means: working on tasks not mentioned in the plan, adding unrequested features, \
+  refactoring code that isn't part of the current phase, or doing research unrelated to the goal.
+
+  NOT drifting: fixing errors that arose from plan steps, installing dependencies needed by the plan, \
+  debugging test failures, or doing sub-steps implied by the plan even if not explicitly listed.
+
+  Respond with EXACTLY one of:
+  - ON_TRACK
+  - DRIFTING: <one sentence explaining what they're doing that's off-plan>
+
+  No other output.
+  """
+
+  defp check_drift(plan, recent_actions) do
+    messages = [
+      %{role: "user", content: "## Plan\n\n#{String.slice(plan, 0, 3000)}\n\n## Recent Actions\n\n#{recent_actions}"}
+    ]
+
+    model = Application.get_env(:golem, :executor_model)
+
+    case Golem.Claude.call(messages, model: model, max_tokens: 200, system: @drift_prompt) do
+      {:ok, %{text: text}} when is_binary(text) ->
+        trimmed = String.trim(text)
+
+        if String.starts_with?(trimmed, "DRIFTING:") do
+          {:drifting, String.trim_leading(trimmed, "DRIFTING:") |> String.trim()}
+        else
+          :on_track
+        end
+
+      _ ->
+        :on_track
+    end
+  end
+
+  # --- File Size Warnings ---
+
+  @file_size_warning_threshold 300  # lines
+
+  defp maybe_inject_file_size_warning(messages, executed) do
+    large_files =
+      executed
+      |> Enum.filter(fn {tc, result} ->
+        tc.name == "write_file" and match?({:text, "File written" <> _}, result) and
+          (tc.input["content"] || "") |> String.split("\n") |> length() > @file_size_warning_threshold
+      end)
+      |> Enum.map(fn {tc, _} ->
+        lines = tc.input["content"] |> String.split("\n") |> length()
+        "#{tc.input["path"]} (#{lines} lines)"
+      end)
+
+    if large_files != [] do
+      files = Enum.join(large_files, ", ")
+      Logger.warning("Large file warning: #{files}")
+      messages ++ [
+        %{role: "user", content: "[System] WARNING: You wrote large file(s): #{files}. Files over #{@file_size_warning_threshold} lines are harder to edit reliably — `edit_file` failures increase with file size. Consider splitting into smaller modules (e.g., one file per struct/component/handler). This is not optional cleanup — it directly prevents edit failures in later steps."}
       ]
     else
       messages
