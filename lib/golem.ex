@@ -53,7 +53,7 @@ defmodule Golem do
     File.mkdir_p!(local_path)
     container = Application.get_env(:golem, :container, "golem-vm")
 
-    case System.cmd("podman", ["cp", "#{container}:#{container_path}/.", local_path],
+    case System.cmd(Golem.Runtime.cmd(), ["cp", "#{container}:#{container_path}/.", local_path],
            stderr_to_stdout: true
          ) do
       {_, 0} -> {:ok, local_path}

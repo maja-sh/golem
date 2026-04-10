@@ -37,7 +37,7 @@ defmodule Golem.Screenshot do
   defp copy_to_host(container_path, local_path) do
     container = Application.get_env(:golem, :container, "golem-vm")
 
-    case System.cmd("podman", ["cp", "#{container}:#{container_path}", local_path],
+    case System.cmd(Golem.Runtime.cmd(), ["cp", "#{container}:#{container_path}", local_path],
            stderr_to_stdout: true
          ) do
       {_, 0} ->

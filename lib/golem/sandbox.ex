@@ -113,11 +113,11 @@ defmodule Golem.Sandbox do
     Logger.info("Resetting container #{container}...")
 
     # Stop and remove
-    System.cmd("podman", ["stop", "-t", "2", container], stderr_to_stdout: true)
-    System.cmd("podman", ["rm", "-f", container], stderr_to_stdout: true)
+    System.cmd(Golem.Runtime.cmd(), ["stop", "-t", "2", container], stderr_to_stdout: true)
+    System.cmd(Golem.Runtime.cmd(), ["rm", "-f", container], stderr_to_stdout: true)
 
     # Recreate from image with persistent volume
-    case System.cmd("podman", [
+    case System.cmd(Golem.Runtime.cmd(), [
            "run", "-d",
            "--name", container,
            "--privileged",
@@ -135,7 +135,7 @@ defmodule Golem.Sandbox do
   end
 
   def handle_call(:status, _from, state) do
-    case System.cmd("podman", ["inspect", "-f", "{{.State.Status}}", state.container],
+    case System.cmd(Golem.Runtime.cmd(), ["inspect", "-f", "{{.State.Status}}", state.container],
            stderr_to_stdout: true
          ) do
       {output, 0} -> {:reply, {:ok, String.trim(output)}, state}
@@ -222,7 +222,7 @@ defmodule Golem.Sandbox do
   # --- Private ---
 
   defp ensure_port(%{port: nil, container: container} = state) do
-    podman = System.find_executable("podman")
+    podman = System.find_executable(Golem.Runtime.cmd())
 
     if podman do
       try do
@@ -306,7 +306,7 @@ defmodule Golem.Sandbox do
     try do
       File.write!(tmp_path, content)
 
-      case System.cmd("podman", ["cp", tmp_path, "#{container}:#{container_path}"],
+      case System.cmd(Golem.Runtime.cmd(), ["cp", tmp_path, "#{container}:#{container_path}"],
              stderr_to_stdout: true
            ) do
         {_, 0} -> :ok

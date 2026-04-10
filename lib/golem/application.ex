@@ -42,6 +42,7 @@ defmodule Golem.Application do
       thinking_budget: 10_000,
       max_steps: 200,
       command_timeout: 900_000,
+      container_runtime: detect_runtime(),
       screenshot_dir: "screenshots",
       log_dir: "logs"
     ]
@@ -55,6 +56,14 @@ defmodule Golem.Application do
     # Suppress Nostrum warnings
     Application.put_env(:nostrum, :youtubedl, nil)
     Application.put_env(:nostrum, :streamlink, nil)
+  end
+
+  defp detect_runtime do
+    cond do
+      System.find_executable("podman") -> "podman"
+      System.find_executable("docker") -> "docker"
+      true -> "podman"
+    end
   end
 
   defp setup_file_logger do
