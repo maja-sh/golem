@@ -233,9 +233,13 @@ defmodule Golem.TUI do
 
   @impl true
   def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
-    state = erase_status(state)
+    # Only overwrite the LAST line (spinner/cost), not the full checklist.
+    # This prevents the checklist from appearing between tool results.
     state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
-    state = draw_status(state)
+    # Move to last line, clear it, redraw just the bottom bar
+    IO.write("\e[1A\e[2K")
+    bottom = build_bottom_line(state)
+    IO.puts(IO.ANSI.format(bottom))
     {:noreply, state}
   end
 
@@ -277,6 +281,16 @@ defmodule Golem.TUI do
     %{state | status_lines: length(lines)}
   end
 
+  defp build_bottom_line(state) do
+    spinner = Enum.at(@spinner_frames, state.spinner_idx)
+    elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
+    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
+
+    [:cyan, " #{spinner} ", :reset,
+     :white, "#{state.verb} for #{elapsed}", :reset,
+     :faint, " · ", :yellow, state.cost, :reset] ++ action_part
+  end
+
   defp build_status_lines(state) do
     progress_lines =
       Enum.map(state.progress, fn item ->
@@ -289,15 +303,7 @@ defmodule Golem.TUI do
         [:faint, " [", color, icon, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
       end)
 
-    spinner = Enum.at(@spinner_frames, state.spinner_idx)
-    elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
-    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
-
-    bottom = [
-      :cyan, " #{spinner} ", :reset,
-      :white, "#{state.verb} for #{elapsed}", :reset,
-      :faint, " · ", :yellow, state.cost, :reset
-    ] ++ action_part
+    bottom = build_bottom_line(state)
 
     # Blank lines separate: content | checklist | status bar
     sep = if progress_lines != [], do: [[]], else: []

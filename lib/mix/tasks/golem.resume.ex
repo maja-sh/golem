@@ -39,20 +39,17 @@ defmodule Mix.Tasks.Golem.Resume do
       Mix.shell().info("Resuming run #{run_id}...\n")
 
       case Golem.resume(run_id, runner_opts) do
-        {:ok, %{success: true, summary: summary}} ->
-          Mix.shell().info("\n✓ Goal achieved: #{summary}")
-
-        {:ok, %{success: false, summary: summary}} ->
-          Mix.shell().info("\n✗ Goal not achieved: #{summary}")
+        {:ok, _} ->
+          :ok  # TUI handles completion message
 
         {:error, :max_steps_reached} ->
-          Mix.shell().info("\n⏸ Paused — resume with: mix golem.resume #{run_id}")
+          :ok  # TUI handles pause message
 
         {:error, {:load_failed, reason}} ->
           Mix.shell().error("\n✗ Failed to load run: #{inspect(reason)}")
 
-        {:error, reason} ->
-          Mix.shell().error("\n✗ Error: #{inspect(reason)}")
+        {:error, _reason} ->
+          :ok  # TUI handles error message
       end
     end
   end

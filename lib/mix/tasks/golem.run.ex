@@ -70,15 +70,8 @@ defmodule Mix.Tasks.Golem.Run do
       end
 
     case Golem.run(goal, runner_opts) do
-      {:ok, %{success: true, summary: summary}} ->
-        Mix.shell().info("\n✓ Goal achieved: #{summary}")
-
-      {:ok, %{success: false, summary: summary}} ->
-        Mix.shell().info("\n✗ Goal not achieved: #{summary}")
-
-      {:error, :max_steps_reached} ->
-        Mix.shell().error("\n✗ Hit maximum step limit")
-
+      {:ok, _} -> :ok          # TUI handles it
+      {:error, :max_steps_reached} -> :ok  # TUI handles it
       {:error, reason} ->
         Mix.shell().error("\n✗ Error: #{inspect(reason)}")
     end
