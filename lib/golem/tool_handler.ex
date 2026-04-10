@@ -84,6 +84,7 @@ defmodule Golem.ToolHandler do
             case Golem.Sandbox.write_file(path, updated) do
               :ok ->
                 Golem.FileCache.put(path, updated)
+                # show_diff prints the diff AND the edit summary atomically
                 Golem.TUI.show_diff(path, content, updated)
                 {:continue, "Edit applied to #{path}"}
               {:error, reason} ->
