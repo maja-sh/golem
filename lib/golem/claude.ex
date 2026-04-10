@@ -6,8 +6,9 @@ defmodule Golem.Claude do
   require Logger
 
   @base_url "https://api.anthropic.com/v1"
-  @max_retries 5
-  @initial_backoff_ms 1_000
+  @max_retries 10
+  @initial_backoff_ms 2_000
+  @max_backoff_ms 120_000
   @retryable_statuses [429, 500, 502, 503, 529]
 
   @doc """
@@ -324,9 +325,10 @@ defmodule Golem.Claude do
   end
 
   defp backoff_ms(attempt) do
-    # Exponential backoff with jitter: 1s, 2s, 4s, 8s, 16s + random 0-1s
-    base = @initial_backoff_ms * :math.pow(2, attempt) |> round()
-    jitter = :rand.uniform(1_000)
+    # Exponential backoff with jitter, capped at max
+    # 2s, 4s, 8s, 16s, 32s, 64s, 120s, 120s, 120s, 120s
+    base = (@initial_backoff_ms * :math.pow(2, attempt)) |> round() |> min(@max_backoff_ms)
+    jitter = :rand.uniform(2_000)
     base + jitter
   end
 

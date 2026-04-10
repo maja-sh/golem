@@ -295,6 +295,7 @@ defmodule Golem.Runner do
 
     case result do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
+        state = Map.put(state, :api_failures, 0)  # Reset on success
         llm_elapsed = System.monotonic_time(:millisecond) - llm_start
         output_tokens = Map.get(response.usage, :output_tokens, 0)
 
@@ -356,7 +357,21 @@ defmodule Golem.Runner do
 
       {:error, reason} ->
         Logger.error("#{p}  Claude API error: #{inspect(reason)}")
-        {:error, reason}
+        api_failures = Map.get(state, :api_failures, 0) + 1
+
+        if api_failures >= 3 do
+          # 3 consecutive API failures — give up
+          Logger.error("#{p}  #{api_failures} consecutive API failures — stopping")
+          {:error, reason}
+        else
+          # Wait and retry — overloads and transient errors can recover
+          wait = min(60_000, 10_000 * api_failures)
+          Logger.warning("#{p}  Waiting #{div(wait, 1000)}s before retry (attempt #{api_failures}/3)")
+          if state.depth == 0, do: Golem.TUI.planning("API error — retrying in #{div(wait, 1000)}s...")
+          Process.sleep(wait)
+          maybe_save(state)
+          loop(Map.put(state, :api_failures, api_failures), system)
+        end
     end
   end
 
