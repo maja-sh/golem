@@ -21,7 +21,8 @@ defmodule Golem.Application do
     children = [
       Golem.Sandbox,
       Golem.FileCache,
-      Golem.TUI
+      Golem.TUI,
+      Golem.DaemonRunner
     ]
 
     opts = [strategy: :one_for_one, name: Golem.Supervisor]

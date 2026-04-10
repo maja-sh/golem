@@ -19,7 +19,17 @@ defmodule Golem.Discord do
   """
   def send_message(content) do
     channel_id = channel_id!()
-    Nostrum.Api.Message.create(channel_id, content: content)
+    send_message_to(channel_id, content)
+  end
+
+  @doc """
+  Send a message to a specific channel, splitting if over 2000 chars.
+  """
+  def send_message_to(channel_id, content) do
+    chunks = chunk_text(content, 1900)
+    Enum.each(chunks, fn chunk ->
+      Nostrum.Api.Message.create(channel_id, content: chunk)
+    end)
   end
 
   @doc """
@@ -102,14 +112,30 @@ defmodule Golem.Discord do
     if me && msg.author.id == me.id do
       :noop
     else
-      # Check if someone is waiting for a reply in this channel
-      case :persistent_term.get(@waiter_key, nil) do
-        {pid, _run_id, channel_id} when msg.channel_id == channel_id ->
-          # Deliver the reply to the waiting process
-          send(pid, {:discord_reply, msg.content})
+      channel_id = channel_id!()
+      if msg.channel_id == channel_id do
+        waiter = :persistent_term.get(@waiter_key, nil)
 
-        _ ->
-          :noop
+        case Golem.Discord.Commander.parse(msg.content) do
+          # status and stop always work, even while waiting for ask_user
+          {:command, cmd, args} when cmd in [:status, :stop] ->
+            response = Golem.Discord.Commander.execute(cmd, args)
+            send_message_to(channel_id, response)
+
+          # Other commands only work when NOT waiting for a reply
+          {:command, cmd, args} when is_nil(waiter) ->
+            response = Golem.Discord.Commander.execute(cmd, args)
+            send_message_to(channel_id, response)
+
+          # Not a command, or command while waiting — treat as reply
+          _ ->
+            case waiter do
+              {pid, _run_id, ^channel_id} ->
+                send(pid, {:discord_reply, msg.content})
+              _ ->
+                :noop
+            end
+        end
       end
     end
   end

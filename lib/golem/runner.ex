@@ -273,6 +273,25 @@ defmodule Golem.Runner do
   end
 
   defp loop(state, _system) do
+    # Check for stop signal (from DaemonRunner.stop_run)
+    if check_stop() do
+      Logger.info("Stop requested — saving state")
+      if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
+      {:error, :stopped}
+    else
+      do_loop(state)
+    end
+  end
+
+  defp check_stop do
+    receive do
+      :stop_requested -> true
+    after
+      0 -> false
+    end
+  end
+
+  defp do_loop(state) do
     step = state.step + 1
     p = state.prefix
     if run_id = Map.get(state, :run_id), do: Process.put(:golem_run_id, run_id)

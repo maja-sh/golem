@@ -57,6 +57,17 @@ defmodule Golem.Prompt do
 
     Do NOT mark a phase as completed in update_progress until verification passes. If tests fail, fix them first. This is mandatory, not optional.
 
+    ## Final verification before "done"
+
+    Before calling `done` with success=true, you MUST:
+    1. Run the FULL test suite — ALL tests must pass
+    2. Fix any compiler warnings
+    3. Scan for unused code (unused imports, dead functions, TODO placeholders)
+    4. Run the linter if available (e.g. `cargo clippy`, `mix credo`, `eslint .`)
+    5. Fix all issues found in steps 1-4
+
+    Do NOT call `done` with success=true while any test is failing or the code has obvious issues. This is mandatory.
+
     ## General guidelines
 
     - Read before you write. Understand the current state before making changes.
