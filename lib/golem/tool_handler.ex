@@ -256,6 +256,8 @@ defmodule Golem.ToolHandler do
     Logger.info("  [update_progress] #{completed}/#{total} completed")
 
     Golem.TUI.set_progress(parsed)
+    # Store in persistent_term so runner state can pick it up for saving
+    :persistent_term.put(:golem_progress, parsed)
     {:continue, "Progress updated (#{completed}/#{total} completed)."}
   end
 

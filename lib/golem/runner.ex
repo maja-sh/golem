@@ -74,6 +74,9 @@ defmodule Golem.Runner do
         if saved.depth == 0 do
           Golem.TUI.init_display(run_id, saved.goal)
           Golem.TUI.planning("Resuming from step #{saved.step}...")
+          # Restore progress checklist
+          progress = Map.get(saved, :progress, [])
+          if progress != [], do: Golem.TUI.set_progress(progress)
         end
 
         state = %{
@@ -611,7 +614,11 @@ defmodule Golem.Runner do
 
   # Save state periodically (only for top-level runs, not sub-agents)
   defp maybe_save(%{depth: 0, run_id: run_id, step: step} = state) when not is_nil(run_id) do
-    if Golem.State.should_save?(step), do: Golem.State.save(run_id, state)
+    if Golem.State.should_save?(step) do
+      # Include latest progress from persistent_term
+      progress = :persistent_term.get(:golem_progress, [])
+      Golem.State.save(run_id, Map.put(state, :progress, progress))
+    end
   end
   defp maybe_save(_state), do: :ok
 

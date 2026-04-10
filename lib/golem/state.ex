@@ -46,6 +46,9 @@ defmodule Golem.State do
       costs: Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
       errors: Map.get(state, :errors, []),
       agents_md: Map.get(state, :agents_md),
+      progress: Map.get(state, :progress, []),
+      phase_costs: Map.get(state, :phase_costs, []),
+      last_completed: Map.get(state, :last_completed, 0),
       saved_at: DateTime.utc_now() |> DateTime.to_iso8601()
     }
 
@@ -75,7 +78,10 @@ defmodule Golem.State do
           messages: atomize_messages(data["messages"]),
           costs: decode_costs(data["costs"]),
           errors: data["errors"] || [],
-          agents_md: data["agents_md"]
+          agents_md: data["agents_md"],
+          progress: decode_progress(data["progress"]),
+          phase_costs: decode_phase_costs(data["phase_costs"]),
+          last_completed: data["last_completed"] || 0
         }
 
         {:ok, state}
@@ -140,6 +146,26 @@ defmodule Golem.State do
       cache_read: Map.get(costs, "cache_read", 0),
       cache_create: Map.get(costs, "cache_create", 0)
     }
+  end
+
+  defp decode_progress(nil), do: []
+  defp decode_progress(items) do
+    Enum.map(items, fn item ->
+      %{
+        text: Map.get(item, "text", ""),
+        status: String.to_atom(Map.get(item, "status", "pending"))
+      }
+    end)
+  end
+
+  defp decode_phase_costs(nil), do: []
+  defp decode_phase_costs(costs) do
+    Enum.map(costs, fn
+      [name, cost] -> {name, cost}
+      %{"name" => name, "cost" => cost} -> {name, cost}
+      _ -> nil
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
   # Ensure message keys are atoms (role, content) when loaded from JSON
