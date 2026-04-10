@@ -46,8 +46,8 @@ defmodule Golem.State do
       costs: Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
       errors: Map.get(state, :errors, []),
       agents_md: Map.get(state, :agents_md),
-      progress: Map.get(state, :progress, []),
-      phase_costs: Map.get(state, :phase_costs, []),
+      progress: Map.get(state, :progress, []) |> Enum.map(fn item -> %{text: item.text, status: Atom.to_string(item.status)} end),
+      phase_costs: Map.get(state, :phase_costs, []) |> Enum.map(fn {n, c} -> %{name: n, cost: c} end),
       last_completed: Map.get(state, :last_completed, 0),
       saved_at: DateTime.utc_now() |> DateTime.to_iso8601()
     }
