@@ -342,8 +342,8 @@ defmodule Golem.Runner do
 
           {:continue, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
-            # Inject self-review prompt if large files were written
             messages = maybe_inject_review(messages, executed)
+            messages = maybe_inject_stuck_warning(messages, executed, state)
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
             {phase_costs, last_completed} = track_phase_costs(executed, costs, state)
@@ -695,6 +695,37 @@ defmodule Golem.Runner do
       end)
 
       Golem.TUI.show_phase_costs(phase_costs)
+    end
+  end
+
+  # --- Stuck Detection ---
+
+  defp maybe_inject_stuck_warning(messages, executed, state) do
+    # Count how many times each file was edited in recent history
+    recent_history = Enum.take(state.history, -15)
+    current_edits = Enum.filter(executed, fn {tc, _} -> tc.name in ["edit_file", "write_file"] end)
+                    |> Enum.map(fn {tc, _} -> tc.input["path"] end)
+                    |> Enum.reject(&is_nil/1)
+
+    recent_edits = Enum.filter(recent_history, fn {tool, _, _} -> tool in ["edit_file", "write_file"] end)
+                   |> Enum.map(fn {_, path, _} -> path end)
+
+    all_edits = recent_edits ++ current_edits
+
+    # Find files edited more than 4 times recently
+    stuck_files =
+      all_edits
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_, count} -> count >= 4 end)
+      |> Enum.map(fn {file, count} -> "#{Path.basename(file)} (#{count} edits)" end)
+
+    if stuck_files != [] do
+      Logger.warning("Stuck detection: #{Enum.join(stuck_files, ", ")}")
+      messages ++ [
+        %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. You've been editing the same file(s) repeatedly without making progress. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`."}
+      ]
+    else
+      messages
     end
   end
 
