@@ -34,7 +34,14 @@ defmodule Golem.TUI do
 
   def agent_text(nil), do: :ok
   def agent_text(text) do
-    GenServer.call(__MODULE__, {:print, [[], [:cyan, "● ", :reset, text]]})
+    width = terminal_width() - 4  # leave room for "● " prefix + margin
+    lines = wrap_text(text, width)
+    formatted = case lines do
+      [] -> [[], [:cyan, "● ", :reset]]
+      [first | rest] ->
+        [[] | [[:cyan, "● ", :reset, first] | Enum.map(rest, &[:faint, "  ", :reset, &1])]]
+    end
+    GenServer.call(__MODULE__, {:print, formatted})
   end
 
   def tool_call(name, detail) do
@@ -301,6 +308,41 @@ defmodule Golem.TUI do
 
   defp print_line([]), do: IO.puts("")
   defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
+
+  defp terminal_width do
+    case :io.columns() do
+      {:ok, cols} -> cols
+      _ -> 80
+    end
+  end
+
+  defp wrap_text(text, width) when width > 10 do
+    text
+    |> String.split("\n")
+    |> Enum.flat_map(&wrap_line(&1, width))
+  end
+  defp wrap_text(text, _width), do: [text]
+
+  defp wrap_line("", _width), do: [""]
+  defp wrap_line(line, width) do
+    words = String.split(line, " ")
+    do_wrap(words, width, "", [])
+  end
+
+  defp do_wrap([], _width, current, acc) do
+    Enum.reverse([current | acc])
+  end
+  defp do_wrap([word | rest], width, "", acc) do
+    do_wrap(rest, width, word, acc)
+  end
+  defp do_wrap([word | rest], width, current, acc) do
+    candidate = current <> " " <> word
+    if String.length(candidate) > width do
+      do_wrap([word | rest], width, "", [current | acc])
+    else
+      do_wrap(rest, width, candidate, acc)
+    end
+  end
 
   defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
   defp format_duration(seconds) do
