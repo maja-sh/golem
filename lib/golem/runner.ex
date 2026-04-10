@@ -96,6 +96,15 @@ defmodule Golem.Runner do
           run_id: run_id
         }
 
+        # If no progress items, tell the agent to set them up
+        state =
+          if Map.get(saved, :progress, []) == [] and state.messages != [] do
+            resume_msg = %{role: "user", content: "[System] Run resumed. Use `update_progress` to set your current progress checklist before continuing."}
+            %{state | messages: state.messages ++ [resume_msg]}
+          else
+            state
+          end
+
         system = Golem.Prompt.executor_system(state.errors)
         result = loop(state, system)
 
