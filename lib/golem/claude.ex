@@ -28,8 +28,17 @@ defmodule Golem.Claude do
     tools = opts[:tools]
     thinking_budget = opts[:thinking_budget]
 
+    # Normalize messages: the API requires content to be a list of blocks
+    # when any message in the conversation uses block format (tool_use/tool_result).
+    # System injections use plain strings, so convert them here.
+    # Drop messages with nil/empty content — they're invalid.
+    normalized =
+      messages
+      |> Enum.reject(&empty_message?/1)
+      |> Enum.map(&normalize_message/1)
+
     body =
-      %{model: model, max_tokens: max_tokens, messages: messages}
+      %{model: model, max_tokens: max_tokens, messages: normalized}
       |> maybe_put(:system, system)
       |> maybe_put(:tools, tools)
       |> maybe_put_thinking(thinking_budget)
@@ -384,6 +393,26 @@ defmodule Golem.Claude do
     System.get_env("ANTHROPIC_API_KEY") ||
       raise "ANTHROPIC_API_KEY environment variable not set"
   end
+
+  defp empty_message?(%{content: nil}), do: true
+  defp empty_message?(%{"content" => nil}), do: true
+  defp empty_message?(%{content: ""}), do: true
+  defp empty_message?(%{"content" => ""}), do: true
+  defp empty_message?(%{content: []}), do: true
+  defp empty_message?(%{"content" => []}), do: true
+  defp empty_message?(_), do: false
+
+  # Normalize a message so content is always a list of blocks.
+  # The API rejects string content when other messages use block format.
+  defp normalize_message(%{content: content} = msg) when is_binary(content) do
+    %{msg | content: [%{type: "text", text: content}]}
+  end
+
+  defp normalize_message(%{"content" => content} = msg) when is_binary(content) do
+    Map.put(msg, "content", [%{"type" => "text", "text" => content}])
+  end
+
+  defp normalize_message(msg), do: msg
 
   defp maybe_put(map, _key, nil), do: map
 

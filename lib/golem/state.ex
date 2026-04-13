@@ -43,7 +43,7 @@ defmodule Golem.State do
       depth: state.depth,
       history: encode_history(state.history),
       messages: state.messages,
-      costs: Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
+      costs: Map.get(state, :costs, %{total_dollars: 0.0}),
       errors: Map.get(state, :errors, []),
       agents_md: Map.get(state, :agents_md),
       progress: Map.get(state, :progress, []) |> Enum.map(fn item -> %{text: item.text, status: Atom.to_string(item.status)} end),
@@ -138,14 +138,16 @@ defmodule Golem.State do
     end)
   end
 
-  defp decode_costs(nil), do: %{input: 0, output: 0, cache_read: 0, cache_create: 0}
+  defp decode_costs(nil), do: %{total_dollars: 0.0}
   defp decode_costs(costs) do
-    %{
-      input: Map.get(costs, "input", 0),
-      output: Map.get(costs, "output", 0),
-      cache_read: Map.get(costs, "cache_read", 0),
-      cache_create: Map.get(costs, "cache_create", 0)
-    }
+    # Support both new format (total_dollars) and old format (raw token counts)
+    case Map.get(costs, "total_dollars") do
+      nil ->
+        # Old format — can't accurately reconstruct without knowing models, start fresh
+        %{total_dollars: 0.0}
+      dollars ->
+        %{total_dollars: dollars / 1}
+    end
   end
 
   defp decode_progress(nil), do: []

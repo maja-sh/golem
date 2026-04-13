@@ -32,6 +32,12 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
     Logger.info("  [write_file] #{path} (#{byte_size(content)} bytes)")
 
+    # Ensure parent directory exists — avoids wasting a step on mkdir -p
+    dir = Path.dirname(path)
+    if dir != "." and dir != "/" do
+      Golem.Sandbox.exec("mkdir -p #{escape(dir)}", timeout: 5_000)
+    end
+
     case Golem.Sandbox.write_file(path, content) do
       :ok ->
         Golem.FileCache.put(path, content)
@@ -300,6 +306,18 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "update_progress", input: %{"items" => items}}, depth) do
+    # Handle items sent as a JSON string instead of a parsed list
+    items =
+      case items do
+        s when is_binary(s) ->
+          case Jason.decode(s) do
+            {:ok, list} when is_list(list) -> list
+            _ -> []
+          end
+        list when is_list(list) -> list
+        _ -> []
+      end
+
     parsed =
       Enum.map(items, fn item ->
         status =
@@ -326,6 +344,7 @@ defmodule Golem.ToolHandler do
 
   def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
     count = length(agents)
+    parent_state = Process.get(:golem_parent_state)
     Logger.info("  [parallel_sub_agents] #{count} agents")
 
     # Spawn all sub-agents concurrently
@@ -333,7 +352,7 @@ defmodule Golem.ToolHandler do
       Enum.map(agents, fn agent ->
         goal = Map.fetch!(agent, "goal")
         context = Map.get(agent, "context", "")
-        Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth) end)
+        Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth, parent_state) end)
       end)
 
     # Await all results (generous timeout — sub-agents can take a while)
@@ -419,17 +438,20 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "sub_agent", input: input}, depth) do
     goal = Map.fetch!(input, "goal")
     context = Map.get(input, "context", "")
+    parent_state = Process.get(:golem_parent_state)
     Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
-    case Golem.Runner.run_sub_agent(goal, context, depth) do
-      {:ok, %{success: true, summary: summary}} ->
-        {:continue, "Sub-agent completed successfully: #{summary}"}
+    case Golem.Runner.run_sub_agent(goal, context, depth, parent_state) do
+      {:ok, %{success: true, summary: summary} = result} ->
+        files = format_file_list(result)
+        {:continue, "Sub-agent completed successfully: #{summary}#{files}\n\nIMPORTANT: Do NOT rewrite these files — read them first with `read_file` if you need to understand or modify what the sub-agent produced."}
 
-      {:ok, %{success: false, summary: summary}} ->
-        {:continue, "Sub-agent did not achieve its goal: #{summary}"}
+      {:ok, %{success: false, summary: summary} = result} ->
+        files = format_file_list(result)
+        {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}\n\nRead these files with `read_file` before making changes."}
 
       {:error, :max_steps_reached} ->
-        {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — check the filesystem for progress."}
+        {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
 
       {:error, reason} ->
         {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
@@ -508,12 +530,61 @@ defmodule Golem.ToolHandler do
     |> Enum.join("\n")
   end
 
+  defp format_file_list(%{files: files}) when is_list(files) and files != [] do
+    list = Enum.map_join(files, "\n", &"  - #{&1}")
+    "\n\nFiles created/modified by sub-agent:\n#{list}"
+  end
+
+  defp format_file_list(_), do: ""
+
   defp escape(str), do: "'#{String.replace(str, "'", "'\\''")}'"
 
+  @max_result_chars 30_000
+  @preview_size 2_000
+  @persist_dir "/home/agent/.golem/tool-results"
+
+  @doc """
+  Handle large tool results. If text exceeds @max_result_chars, persist the full
+  output to disk in the container and return a preview with a file path reference.
+  The agent can `read_file` the persisted output if it needs the full content.
+  """
+  def truncate_result({:continue, text}) when is_binary(text) and byte_size(text) > @max_result_chars do
+    {:continue, persist_and_preview(text)}
+  end
+
+  def truncate_result({:continue_with_image, %{text: text} = data}) when is_binary(text) and byte_size(text) > @max_result_chars do
+    {:continue_with_image, %{data | text: persist_and_preview(text)}}
+  end
+
+  def truncate_result(other), do: other
+
+  # Simple truncation for per-tool size hints (keeps tail).
+  # The central truncate_result/1 handles persist-to-disk for anything still too large.
   defp truncate(text, max) when byte_size(text) > max do
     "[truncated to #{max} bytes]\n..." <>
       binary_part(text, byte_size(text) - max, max)
   end
 
   defp truncate(text, _max), do: text
+
+  defp persist_and_preview(text) do
+    total = byte_size(text)
+    id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    path = "#{@persist_dir}/#{id}.txt"
+
+    # Write full output to container filesystem
+    Golem.Sandbox.exec("mkdir -p #{@persist_dir}", timeout: 5_000)
+
+    case Golem.Sandbox.write_file(path, text) do
+      :ok ->
+        preview = binary_part(text, 0, min(@preview_size, total))
+        "[Output too large (#{total} bytes). Full output saved to: #{path}]\n\nPreview (first #{@preview_size} bytes):\n#{preview}"
+
+      {:error, _reason} ->
+        # Fall back to head+tail truncation if persistence fails
+        head = binary_part(text, 0, min(@preview_size, total))
+        tail = binary_part(text, total - min(@preview_size, total), min(@preview_size, total))
+        "#{head}\n\n[... truncated #{total - @preview_size * 2} bytes ...]\n\n#{tail}"
+    end
+  end
 end

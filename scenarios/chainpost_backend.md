@@ -9,19 +9,14 @@
 
 Build the backend for a decentralized microblogging platform powered by a proof-of-work blockchain. Every action (post, user registration, follow, etc.) is a signed transaction included in mined blocks. There is no central authority — any node can join the P2P network and participate.
 
-This is a fresh build of a project previously called "cryptogram." The architecture has been redesigned with transactions-in-blocks, Heed-only indexing, and a proper sync protocol.
+The architecture uses transactions-in-blocks, Heed-only indexing, and a proper sync protocol.
 
-### Reference Code
+### Key Architecture Decisions
 
-The operator's previous attempt is available in the container for reference:
-- `/home/agent/cryptogram/` — Rust backend (blockchain, P2P, API)
-- `/home/agent/cryptogram-client/` — Vue 3 + Tauri frontend
-
-Browse these for design inspiration, but do NOT copy code directly — the architecture is different. Key differences from the reference:
-- Transactions in blocks (reference uses one block per action)
-- Heed-only indexing with pointer databases (reference uses Heed + SQLite)
-- Proper chain sync protocol (reference has none)
-- axum for API (reference uses Warp)
+- Transactions in blocks (not one block per action)
+- Heed-only indexing with pointer databases (no SQLite)
+- Proper chain sync protocol
+- axum for API
 - Non-blocking mining via spawn_blocking (reference blocks the P2P loop)
 
 ### Setup
@@ -408,9 +403,9 @@ tracing-subscriber = "0.3"
 
 ## Notes
 
-This is a from-scratch implementation. The previous attempt ("cryptogram") used:
-- One block per action (we use transactions-in-blocks instead)
-- Heed + SQLite for indexing (we use Heed-only with pointer indexes)
-- No chain sync protocol (we implement proper sync)
-- Warp for API (we use axum)
-- Single-threaded mining that blocked P2P (we use spawn_blocking)
+This is a from-scratch implementation using:
+- Transactions-in-blocks (not one block per action)
+- Heed-only with pointer indexes (no SQLite)
+- Proper chain sync protocol
+- axum for API
+- spawn_blocking for mining (non-blocking P2P)

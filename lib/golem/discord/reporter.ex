@@ -52,6 +52,9 @@ defmodule Golem.Discord.Reporter do
   def show_diff(_path, _old, _new), do: :ok
 
   @impl true
+  def sub_agent_status(_goal, _tool, _detail, _step, _max_steps), do: :ok
+
+  @impl true
   def set_progress(_items), do: :ok
 
   @impl true

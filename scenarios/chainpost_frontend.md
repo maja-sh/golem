@@ -11,7 +11,7 @@ Build a desktop client for the ChainPost blockchain microblogging platform using
 
 ### Setup
 
-Put everything in `/home/agent/chainpost-client/`. Install Rust and Tauri prerequisites as the first step. Node.js is already available. Firefox is on DISPLAY=:99 for visual testing with the `browse` tool.
+Put everything in `/home/agent/chainpost-client/`. Rust and Node.js are already installed. Firefox is on DISPLAY=:99 for visual testing with the `browse` tool.
 
 **IMPORTANT — Backend already exists:** The ChainPost backend node is already built at `/home/agent/chainpost/`. Before starting frontend work:
 1. Explore the backend's API: read `/home/agent/chainpost/src/api/` to understand the available endpoints, request/response formats, and transaction signing requirements.
@@ -21,13 +21,21 @@ Put everything in `/home/agent/chainpost-client/`. Install Rust and Tauri prereq
 The frontend connects to this running node. Do NOT rebuild or modify the backend.
 
 **IMPORTANT — Research before building:** Tauri 2 is new and different from Tauri 1. Before writing any code:
-1. Use `web_search` to find the official Tauri 2 project setup guide (how to create a new project with React + TypeScript)
-2. Use `web_search` to find Tauri 2 command syntax (it changed from Tauri 1 — `#[tauri::command]` patterns, IPC, permissions)
-3. Study the reference implementation at `/home/agent/cryptogram-client/` for the crypto and API patterns, but do NOT copy its Tauri 1 setup — search for the Tauri 2 equivalent
+1. Use `web_search` to find the official Tauri 2 project setup guide
+2. Use `web_search` to find Tauri 2 command syntax (`#[tauri::command]` patterns, IPC, permissions)
+3. Use `web_search` to find how to set up TailwindCSS with Vite (v4 changed significantly)
 
-Do NOT guess at Tauri 2 APIs from memory. Search first.
+Do NOT guess at Tauri 2 or TailwindCSS APIs from memory. Search for current docs first.
 
-**Project scaffolding:** Use `npm create vite@latest chainpost-client -- --template react-ts` for the React project. For Tauri, study the reference at `/home/agent/cryptogram-client/src-tauri/` for the directory structure and adapt it.
+**Project scaffold is pre-built:** A compiling Tauri 2 + React + TypeScript skeleton already exists at `/home/agent/chainpost-client/`. It includes:
+- Vite + React + TypeScript frontend (`src/App.tsx`, `src/main.tsx`)
+- Tauri 2 Rust backend (`src-tauri/src/lib.rs` with a sample `greet` command)
+- All config files (`tauri.conf.json`, `Cargo.toml`, `vite.config.ts`, `tsconfig.json`)
+- Dependencies listed in `package.json` (run `npm install` first)
+
+Start by running `cd /home/agent/chainpost-client && npm install` then verify with `cd src-tauri && cargo check`. Do NOT re-scaffold or recreate the project structure — build on what's there.
+
+**IMPORTANT — Non-interactive terminal:** You have NO interactive terminal. Do NOT use interactive scaffold tools (`npm create`, `npx tauri init`, `npx tailwindcss init`). Install packages with `npm install <pkg>` and create/edit config files manually.
 
 ---
 
@@ -269,16 +277,8 @@ Do NOT call `done` without passing integration tests. The verification agent wil
 
 ---
 
-## Reference Implementation
+## Notes
 
-A previous client exists at `/home/agent/cryptogram-client/` (Vue 3 + Tauri 1). **Study it before building** — it's a working implementation of the same concept:
-- `src-tauri/src/` — Tauri Rust commands for mnemonic generation, keypair derivation, and transaction signing. Adapt these for Tauri 2.
-- `src/` — Vue 3 frontend with screens, components, and API client. Translate the patterns to React.
-- `src/stores/` — Pinia stores for auth and settings. Map these to React Context.
-
-Key things to learn from the reference:
-- How transactions are structured and signed (the crypto flow)
-- The API client and which endpoints are used
-- The UX flow for registration, login, posting, and following
-
-This is a rebuild in React + Tauri 2, not a port. Use it for understanding, not copy-paste.
+- Use `web_search` heavily throughout — Tauri 2 docs, crate API docs, TailwindCSS v4 setup
+- The ChainPost backend API at localhost:3030 is the source of truth for endpoints and tx formats — explore it with `curl` before building the frontend
+- When Rust crates fail to compile, search for the correct API instead of guessing fixes

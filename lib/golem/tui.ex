@@ -139,6 +139,13 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def sub_agent_status(goal, tool, detail, step, max_steps) do
+    short_goal = trunc(goal, 40)
+    label = "#{tool_icon(tool)} #{tool_label(tool, detail)}" |> trunc(50)
+    GenServer.cast(__MODULE__, {:update, action: "↳ #{short_goal} — #{label} (#{step}/#{max_steps})"})
+  end
+
+  @impl true
   def run_complete(success, summary) do
     lines = [[]] ++
       if success do

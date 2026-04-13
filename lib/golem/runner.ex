@@ -13,6 +13,9 @@ defmodule Golem.Runner do
 
   defp output, do: Golem.Output.current()
 
+  # Shared module attributes used across multiple sections
+  @escalation_steps 5
+
   @doc """
   Run the agent with the given goal. Blocks until completion.
 
@@ -90,7 +93,7 @@ defmodule Golem.Runner do
           depth: saved.depth,
           prefix: prefix,
           history: saved.history,
-          costs: Map.get(saved, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0}),
+          costs: Map.get(saved, :costs, %{total_dollars: 0.0}),
           errors: Map.get(saved, :errors, []),
           agents_md: Map.get(saved, :agents_md),
           phase_costs: Map.get(saved, :phase_costs, []),
@@ -161,7 +164,7 @@ defmodule Golem.Runner do
           depth: depth,
           prefix: prefix,
           history: [],
-          costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
+          costs: %{total_dollars: 0.0},
           errors: [],
           agents_md: opts[:agents_md],
           phase_costs: [],
@@ -184,41 +187,88 @@ defmodule Golem.Runner do
   @doc """
   Run a sub-agent with its own context. Used by the sub_agent tool.
   Skips Opus planning — sub-agents execute directly with Sonnet.
+
+  Uses fork model: sub-agent inherits the parent's full message history
+  for context awareness and prompt cache reuse.
   """
-  def run_sub_agent(goal, context, parent_depth) do
+  def run_sub_agent(goal, context, parent_depth, parent_state \\ nil) do
     depth = parent_depth + 1
     prefix = depth_prefix(depth)
     Logger.info("#{prefix}---------- SUB-AGENT SPAWNED ----------")
     Logger.info("#{prefix}Goal: #{String.slice(goal, 0, 500)}")
 
-    system = Golem.Prompt.sub_agent_system()
+    # Build directive message for the sub-agent
+    context_section = if context && context != "", do: "\n\n## Additional Context\n\n#{context}", else: ""
 
-    initial_content =
-      if context && context != "" do
-        "## Goal\n\n#{goal}\n\n## Context from parent agent\n\n#{context}\n\nBegin working on this goal."
+    directive = """
+    ## Sub-Agent Task
+
+    You are a sub-agent working on a specific task. The conversation above is your parent agent's full context — you know everything it knows.
+
+    Your task: #{goal}#{context_section}
+
+    Rules:
+    - Focus ONLY on this task. Do not work on other items from the plan.
+    - Do NOT spawn sub-agents yourself.
+    - When done, call `done` with a clear summary of what you accomplished and which files you created/modified.
+    - You have a limited number of steps. Be efficient.
+    """
+
+    # Fork model: inherit parent's messages for full context + prompt cache reuse
+    # Fall back to fresh context if no parent state (e.g., tests, direct calls)
+    {messages, system, errors} =
+      if parent_state && parent_state.messages != [] do
+        forked = parent_state.messages ++ [
+          %{role: "assistant", content: "I'll delegate this to a sub-agent."},
+          %{role: "user", content: directive}
+        ]
+        # Use parent's system prompt for cache hits
+        parent_errors = Map.get(parent_state, :errors, [])
+        agents_md = Map.get(parent_state, :agents_md)
+        sys = Golem.Prompt.executor_system(parent_errors, agents_md)
+        {forked, sys, parent_errors}
       else
-        "## Goal\n\n#{goal}\n\nBegin working on this goal."
+        fresh = [%{role: "user", content: directive}]
+        {fresh, Golem.Prompt.sub_agent_system(), []}
       end
 
     state = %{
       goal: goal,
-      plan: nil,
-      messages: [%{role: "user", content: initial_content}],
+      plan: Map.get(parent_state || %{}, :plan),
+      messages: messages,
       step: 0,
       max_steps: @sub_agent_max_steps,
       depth: depth,
       prefix: prefix,
       history: [],
-      costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
-      errors: [],
+      costs: %{total_dollars: 0.0},
+      errors: errors,
       phase_costs: [],
       last_completed: 0
     }
 
     result = loop(state, system)
     Logger.info("#{prefix}---------- SUB-AGENT FINISHED ----------")
-    result
+
+    # Extract files created/modified by the sub-agent for parent awareness
+    case result do
+      {:ok, summary} ->
+        files = extract_modified_files(state)
+        {:ok, Map.put(summary, :files, files)}
+
+      other ->
+        other
+    end
   end
+
+  defp extract_modified_files(%{history: history}) do
+    history
+    |> Enum.filter(fn {tool, _, _} -> tool in ["write_file", "edit_file"] end)
+    |> Enum.map(fn {_, input, _} -> to_string(input) end)
+    |> Enum.uniq()
+  end
+
+  defp extract_modified_files(_), do: []
 
   # --- Plan Creation ---
 
@@ -275,13 +325,24 @@ defmodule Golem.Runner do
   end
 
   defp loop(state, _system) do
-    # Check for stop signal (from DaemonRunner.stop_run)
-    if check_stop() do
-      Logger.info("Stop requested — saving state")
+    # Check cost budget (only at depth 0)
+    max_cost = Application.get_env(:golem, :max_cost, nil)
+    current_cost = Map.get(state.costs, :total_dollars, 0.0)
+
+    if state.depth == 0 and max_cost != nil and current_cost >= max_cost do
+      Logger.warning("#{state.prefix}Cost budget reached ($#{format_cost(state.costs)} >= $#{max_cost}). Saving state...")
       if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
-      {:error, :stopped}
+      output().run_paused(Map.get(state, :run_id, "unknown"))
+      {:error, :budget_exceeded}
+    # Check for stop signal (from DaemonRunner.stop_run)
     else
-      do_loop(state)
+      if check_stop() do
+        Logger.info("Stop requested — saving state")
+        if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
+        {:error, :stopped}
+      else
+        do_loop(state)
+      end
     end
   end
 
@@ -297,7 +358,8 @@ defmodule Golem.Runner do
     step = state.step + 1
     p = state.prefix
     if run_id = Map.get(state, :run_id), do: Process.put(:golem_run_id, run_id)
-    costs = Map.get(state, :costs, %{input: 0, output: 0, cache_read: 0, cache_create: 0})
+    Process.put(:golem_parent_state, state)
+    costs = Map.get(state, :costs, %{total_dollars: 0.0})
     errors = Map.get(state, :errors, [])
     cost_str = "$#{format_cost(costs)}"
     Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
@@ -323,7 +385,10 @@ defmodule Golem.Runner do
     # Microcompact: clear bulky tool results from older messages
     messages = microcompact(state.messages)
 
-    # Trim messages if conversation is getting long
+    # Snip: cheap middle-out removal before expensive LLM summary
+    messages = snip_messages(messages)
+
+    # Trim: full LLM summary as last resort
     messages = trim_messages(messages)
 
     llm_start = System.monotonic_time(:millisecond)
@@ -339,6 +404,7 @@ defmodule Golem.Runner do
     case result do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
         state = Map.put(state, :api_failures, 0)  # Reset on success
+        state = Map.put(state, :no_tool_count, 0)  # Reset no-tool counter
         llm_elapsed = System.monotonic_time(:millisecond) - llm_start
         output_tokens = Map.get(response.usage, :output_tokens, 0)
 
@@ -359,7 +425,7 @@ defmodule Golem.Runner do
         costs = accumulate_costs(costs, response.usage, model)
 
         # Execute all tool calls, stopping early on done/think_replan
-        case execute_tool_calls(tool_calls, state.depth) do
+        case execute_tool_calls(tool_calls, state.depth, state) do
           {:done, summary, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
             state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
@@ -387,12 +453,18 @@ defmodule Golem.Runner do
             messages = maybe_inject_review(messages, executed)
             {messages, escalated_until} = maybe_inject_stuck_warning(messages, executed, state)
             messages = maybe_inject_file_size_warning(messages, executed)
+            messages = maybe_inject_search_nudge(messages, executed, state)
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
             {phase_costs, last_completed} = track_phase_costs(executed, costs, state)
             state = %{state | messages: messages, step: step, costs: costs, errors: errors,
                        phase_costs: phase_costs, last_completed: last_completed,
                        history: update_history(state.history, executed)}
+            state = Map.put(state, :escalated_until, escalated_until)
+            # Track consecutive think-only turns
+            {messages, consecutive_thinks, escalated_until} = maybe_inject_think_warning(state.messages, executed, state)
+            state = %{state | messages: messages}
+            state = Map.put(state, :consecutive_thinks, consecutive_thinks)
             state = Map.put(state, :escalated_until, escalated_until)
             {messages, consecutive_drifts} = maybe_inject_drift_warning(state)
             state = %{state | messages: messages}
@@ -402,13 +474,35 @@ defmodule Golem.Runner do
         end
 
       {:ok, %{text: text, tool_use: []} = response} ->
-        Logger.info("#{p}  Agent (no tool): #{text}")
+        text = text || ""  # Guard against nil text from API
+        no_tool_count = Map.get(state, :no_tool_count, 0) + 1
+        Logger.info("#{p}  Agent (no tool, #{no_tool_count}x): #{text}")
         costs = accumulate_costs(costs, response.usage, model)
+
+        nudge =
+          cond do
+            no_tool_count >= 8 ->
+              "[System] You have responded #{no_tool_count} times without using a tool. This is a critical failure. Call `think(request_replan: true)` NOW to get a new plan, or call `done` to finish."
+            no_tool_count >= 5 ->
+              "[System] WARNING: #{no_tool_count} consecutive responses without a tool call. Escalating to a stronger model. You MUST use a tool NOW — `shell`, `write_file`, `edit_file`, `think`, or `done`. Text-only responses are not acceptable."
+            no_tool_count >= 3 ->
+              "[System] You have responded #{no_tool_count} times without using any tool. You MUST use a tool on your next response. If unsure what to do, use `think` to reason about it, or `done` if the goal is achieved."
+            true ->
+              "Continue executing the plan. Use a tool for your next action, or use `done` if the goal is achieved."
+          end
+
+        escalated_until =
+          if no_tool_count >= 5,
+            do: step + @escalation_steps,
+            else: Map.get(state, :escalated_until, 0)
+
         messages = state.messages ++ [
           %{role: "assistant", content: text},
-          %{role: "user", content: "Continue executing the plan. Use a tool for your next action, or use `done` if the goal is achieved."}
+          %{role: "user", content: nudge}
         ]
         state = %{state | messages: messages, step: step, costs: costs}
+        state = Map.put(state, :no_tool_count, no_tool_count)
+        state = Map.put(state, :escalated_until, escalated_until)
         loop(state, system)
 
       {:error, reason} ->
@@ -437,9 +531,9 @@ defmodule Golem.Runner do
   @silent_tools ~w(update_progress)
   @concurrent_safe ~w(read_file glob grep list_directory web_search web_fetch screenshot)
 
-  defp execute_tool_calls(tool_calls, depth) do
+  defp execute_tool_calls(tool_calls, depth, state) do
     batches = partition_batches(tool_calls)
-    execute_batches(batches, depth, [], depth == 0)
+    execute_batches(batches, depth, [], depth == 0, state)
   end
 
   # Group consecutive concurrent-safe tools into one batch.
@@ -463,16 +557,16 @@ defmodule Golem.Runner do
     end
   end
 
-  defp execute_batches([], _depth, executed, _show), do: {:continue, executed}
+  defp execute_batches([], _depth, executed, _show, _state), do: {:continue, executed}
 
-  defp execute_batches([batch | rest], depth, executed, show) do
+  defp execute_batches([batch | rest], depth, executed, show, state) do
     if length(batch) > 1 do
-      results = execute_concurrent_batch(batch, depth, show)
-      execute_batches(rest, depth, executed ++ results, show)
+      results = execute_concurrent_batch(batch, depth, show, state)
+      execute_batches(rest, depth, executed ++ results, show, state)
     else
       [tc] = batch
 
-      case execute_single_tool(tc, depth, show) do
+      case execute_single_tool(tc, depth, show, state) do
         {:done, summary, entry} ->
           {:done, summary, executed ++ [entry]}
 
@@ -480,13 +574,13 @@ defmodule Golem.Runner do
           {:think_replan, reasoning, executed ++ [entry]}
 
         {:continue, entry} ->
-          execute_batches(rest, depth, executed ++ [entry], show)
+          execute_batches(rest, depth, executed ++ [entry], show, state)
       end
     end
   end
 
   # Run a batch of read-only tools concurrently using Task.async.
-  defp execute_concurrent_batch(batch, depth, show) do
+  defp execute_concurrent_batch(batch, depth, show, state) do
     # Show all tool_call headers first
     if show do
       Enum.each(batch, fn tc ->
@@ -500,7 +594,7 @@ defmodule Golem.Runner do
       Enum.map(batch, fn tc ->
         Task.async(fn ->
           start = System.monotonic_time(:millisecond)
-          result = Golem.ToolHandler.execute(tc, depth)
+          result = Golem.ToolHandler.execute(tc, depth) |> Golem.ToolHandler.truncate_result()
           elapsed = System.monotonic_time(:millisecond) - start
           {tc, result, elapsed}
         end)
@@ -508,7 +602,7 @@ defmodule Golem.Runner do
 
     results = Task.await_many(tasks, :infinity)
 
-    # Report results to TUI in order (only at depth 0)
+    # Report results to TUI in order
     Enum.map(results, fn {tc, result, elapsed} ->
       detail = summarize_input(tc)
       silent = tc.name in @silent_tools
@@ -523,24 +617,37 @@ defmodule Golem.Runner do
               else: output().tool_result(tc.name, detail, text, elapsed, nil)
           end
 
+          # Sub-agent: show condensed status line
+          if not show and not silent and state do
+            emit_sub_agent_status(state, tc.name, detail)
+          end
+
           {tc, {:text, text}}
 
         {:continue_with_image, %{text: text, base64: base64}} ->
           if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+          if not show and not silent and state do
+            emit_sub_agent_status(state, tc.name, detail)
+          end
           {tc, {:image, text, base64}}
       end
     end)
   end
 
   # Execute a single tool call (may be any type, including done/think_replan).
-  defp execute_single_tool(tc, depth, show) do
+  defp execute_single_tool(tc, depth, show, state) do
     detail = summarize_input(tc)
     silent = tc.name in @silent_tools
     if show and not silent, do: output().tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
 
-    case Golem.ToolHandler.execute(tc, depth) do
+    # Sub-agent: show condensed status in the spinner line
+    if not show and not silent and state do
+      emit_sub_agent_status(state, tc.name, detail)
+    end
+
+    case Golem.ToolHandler.execute(tc, depth) |> Golem.ToolHandler.truncate_result() do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if show, do: output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
@@ -568,6 +675,16 @@ defmodule Golem.Runner do
         if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
         {:continue, {tc, {:image, text, base64}}}
     end
+  end
+
+  defp emit_sub_agent_status(state, tool, detail) do
+    output().sub_agent_status(
+      state.goal,
+      tool,
+      detail,
+      state.step,
+      state.max_steps
+    )
   end
 
   # Build assistant + user messages for multiple tool calls in one turn
@@ -615,34 +732,51 @@ defmodule Golem.Runner do
     history ++ new_entries
   end
 
+  @max_replans 5
+
   defp handle_replan(state, system, step, _tool_call, reasoning) do
-    Logger.info("#{state.prefix}  Re-planning with Opus...")
-    if state.depth == 0, do: output().planning("Re-planning with Opus...")
+    replan_count = Map.get(state, :replan_count, 0) + 1
 
-    # Take last 20 history entries for context
-    recent = Enum.take(state.history, -20)
+    if replan_count > @max_replans do
+      Logger.warning("#{state.prefix}  Replan cap reached (#{replan_count}/#{@max_replans}) — refusing")
+      messages =
+        state.messages ++
+          [%{role: "user", content: "[System] You've replanned #{replan_count - 1} times already — no more replanning allowed. Execute the current plan as-is, or use `done` to report what you've accomplished. Do NOT request another replan."}]
 
-    # State already has the tool exchange messages appended from execute_tool_calls
-    case replan(state.goal, state.plan, reasoning, recent) do
-      {:ok, new_plan} ->
-        Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
+      state = %{state | messages: messages, step: step}
+      state = Map.put(state, :replan_count, replan_count)
+      loop(state, system)
+    else
+      Logger.info("#{state.prefix}  Re-planning with Opus (#{replan_count}/#{@max_replans})...")
+      if state.depth == 0, do: output().planning("Re-planning with Opus (#{replan_count}/#{@max_replans})...")
 
-        messages =
-          state.messages ++
-            [%{role: "user", content: "## Revised Plan\n\n#{new_plan}\n\nContinue executing from where you left off."}]
+      # Take last 20 history entries for context
+      recent = Enum.take(state.history, -20)
 
-        state = %{state | messages: messages, plan: new_plan, step: step}
-        loop(state, system)
+      # State already has the tool exchange messages appended from execute_tool_calls
+      case replan(state.goal, state.plan, reasoning, recent) do
+        {:ok, new_plan} ->
+          Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
 
-      {:error, reason} ->
-        Logger.error("#{state.prefix}  Re-planning failed: #{inspect(reason)}")
+          messages =
+            state.messages ++
+              [%{role: "user", content: "## Revised Plan\n\n#{new_plan}\n\nContinue executing from where you left off."}]
 
-        messages =
-          state.messages ++
-            [%{role: "user", content: "Re-planning failed. Continue with the current plan."}]
+          state = %{state | messages: messages, plan: new_plan, step: step}
+          state = Map.put(state, :replan_count, replan_count)
+          loop(state, system)
 
-        state = %{state | messages: messages, step: step}
-        loop(state, system)
+        {:error, reason} ->
+          Logger.error("#{state.prefix}  Re-planning failed: #{inspect(reason)}")
+
+          messages =
+            state.messages ++
+              [%{role: "user", content: "Re-planning failed. Continue with the current plan."}]
+
+          state = %{state | messages: messages, step: step}
+          state = Map.put(state, :replan_count, replan_count)
+          loop(state, system)
+      end
     end
   end
 
@@ -721,9 +855,9 @@ defmodule Golem.Runner do
   # Keeps the last @micro_keep_recent messages untouched. For older messages,
   # replaces large tool_result content with "[cleared]" — the tool name and
   # structure are preserved so the model still knows what happened.
-  @micro_keep_recent 10
+  @micro_keep_recent 6
   @micro_clearable_tools ~w(shell read_file grep glob web_search web_fetch list_directory browse)
-  @micro_min_size 500
+  @micro_min_size 200
 
   defp microcompact(messages) when length(messages) <= @micro_keep_recent, do: messages
 
@@ -784,17 +918,81 @@ defmodule Golem.Runner do
 
   defp maybe_clear_tool_result(block, _tool_names), do: block
 
+  # --- Snip Compact ---
+
+  # Cheap middle-out message removal. Drops old message pairs from the middle
+  # while keeping head (goal/plan context) and tail (recent work). No LLM call.
+  # Runs before full compaction to buy headroom cheaply.
+  @snip_token_threshold 100_000
+  @snip_keep_head 4
+  @snip_keep_tail 30
+
+  defp snip_messages(messages) do
+    token_est = estimate_tokens(messages)
+
+    if token_est <= @snip_token_threshold or length(messages) <= @snip_keep_head + @snip_keep_tail do
+      messages
+    else
+      head_count = min(@snip_keep_head, length(messages))
+      tail_count = min(@snip_keep_tail, length(messages) - head_count)
+
+      head = Enum.take(messages, head_count)
+      tail = Enum.take(messages, -tail_count)
+
+      # Ensure tail starts with a user message (valid message structure)
+      tail = drop_leading_assistant_messages(tail)
+
+      middle_removed = length(messages) - head_count - length(tail)
+
+      if middle_removed > 0 do
+        Logger.info("  Snip compact: removed #{middle_removed} middle messages (~#{token_est - estimate_tokens(head ++ tail)} tokens freed)")
+
+        head ++ [
+          %{role: "assistant", content: "I'll continue working on this goal."},
+          %{role: "user", content: "[#{middle_removed} earlier messages removed to save context. Recent messages preserved below.]"}
+        ] ++ tail
+      else
+        messages
+      end
+    end
+  end
+
+  defp drop_leading_assistant_messages([%{role: "assistant"} | rest]) do
+    drop_leading_assistant_messages(rest)
+  end
+  defp drop_leading_assistant_messages(messages), do: messages
+
   # --- Message Management ---
 
-  # Keep conversation manageable. When messages exceed the threshold,
-  # summarize older turns into a compact recap using a cheap LLM call.
-  # This preserves context far better than just dropping messages.
-  @compact_threshold 40
-  @compact_keep_recent 20
-
-  defp trim_messages(messages) when length(messages) <= @compact_threshold, do: messages
+  # Keep conversation manageable. Compact when EITHER:
+  # - Message count exceeds @compact_threshold (prevents very long histories)
+  # - Estimated tokens exceed @compact_token_threshold (prevents context window overflow)
+  #
+  # These are set high intentionally — compaction is lossy and should be a last
+  # resort, not routine. Microcompaction (clearing old tool results) handles the
+  # common case of large outputs without losing conversation structure.
+  @compact_threshold 100
+  @compact_token_threshold 150_000
+  @compact_keep_recent 30
 
   defp trim_messages(messages) do
+    msg_count = length(messages)
+    token_est = estimate_tokens(messages)
+
+    if msg_count <= @compact_threshold and token_est <= @compact_token_threshold do
+      messages
+    else
+      if token_est > @compact_token_threshold do
+        Logger.info("  Compacting: ~#{token_est} estimated tokens exceeds #{@compact_token_threshold} threshold")
+      else
+        Logger.info("  Compacting: #{msg_count} messages exceeds #{@compact_threshold} threshold")
+      end
+
+      do_trim_messages(messages)
+    end
+  end
+
+  defp do_trim_messages(messages) do
     [first | rest] = messages
 
     # Split into old (to compact) and recent (to keep verbatim)
@@ -810,12 +1008,28 @@ defmodule Golem.Runner do
     # Summarize the old messages
     summary = compact_messages(old)
 
+    # Include current progress checklist so the agent doesn't reset it after compaction
+    progress_section =
+      case :persistent_term.get(:golem_progress, []) do
+        [] -> ""
+        items ->
+          checklist = Enum.map_join(items, "\n", fn item ->
+            mark = case item.status do
+              :completed -> "x"
+              :in_progress -> "~"
+              _ -> " "
+            end
+            "- [#{mark}] #{item.text}"
+          end)
+          "\n\n## Current Progress Checklist\n\nThis is the AUTHORITATIVE progress state. When you call `update_progress`, preserve these statuses — do NOT reset completed items to pending.\n\n#{checklist}"
+      end
+
     # Rebuild: first message + assistant ack + summary + recent messages
     # The assistant message prevents consecutive user messages (goal + summary)
     [
       first,
       %{role: "assistant", content: "I'll continue working on this goal."},
-      %{role: "user", content: "[Conversation summary of earlier steps]\n\n#{summary}\n\nContinue from where you left off."}
+      %{role: "user", content: "[Conversation summary of earlier steps]\n\n#{summary}#{progress_section}\n\nContinue from where you left off."}
     ] ++ recent
   end
 
@@ -823,6 +1037,34 @@ defmodule Golem.Runner do
     drop_leading_user_messages(rest)
   end
   defp drop_leading_user_messages(messages), do: messages
+
+  # Rough token estimation: ~4 bytes per token for English text.
+  # Conservative (overestimates) to trigger compaction early rather than late.
+  defp estimate_tokens(messages) do
+    messages
+    |> Enum.map(&estimate_message_tokens/1)
+    |> Enum.sum()
+    |> div(1)  # already in tokens
+  end
+
+  defp estimate_message_tokens(%{content: content}) when is_binary(content) do
+    div(byte_size(content), 4)
+  end
+
+  defp estimate_message_tokens(%{content: blocks}) when is_list(blocks) do
+    Enum.reduce(blocks, 0, fn
+      %{type: "text", text: text}, acc -> acc + div(byte_size(text), 4)
+      %{"type" => "text", "text" => text}, acc -> acc + div(byte_size(text), 4)
+      %{type: "tool_result", content: content}, acc when is_binary(content) -> acc + div(byte_size(content), 4)
+      %{"type" => "tool_result", "content" => content}, acc when is_binary(content) -> acc + div(byte_size(content), 4)
+      %{type: "tool_use", input: input}, acc -> acc + div(byte_size(inspect(input)), 4)
+      %{"type" => "tool_use", "input" => input}, acc -> acc + div(byte_size(inspect(input)), 4)
+      %{type: "image"}, acc -> acc + 2000  # images are ~2000 tokens
+      _, acc -> acc + 50  # small overhead for other block types
+    end)
+  end
+
+  defp estimate_message_tokens(_), do: 50
 
   defp compact_messages(messages) do
     # Extract a structured tool log for the LLM to summarize
@@ -847,31 +1089,60 @@ defmodule Golem.Runner do
 
   @compaction_prompt """
   You are summarizing a conversation between an autonomous agent and its tools. \
-  The agent is working toward a goal inside a Linux container.
+  The agent is working toward a goal inside a Linux container. This summary will \
+  REPLACE the conversation history — it is the ONLY context the agent will have \
+  to continue its work. If you omit something, the agent will not know about it.
 
-  Produce a structured summary that preserves the CONTEXT the agent needs to continue \
-  effectively. Focus on WHAT matters, not the raw tool calls.
+  Before writing your summary, wrap your analysis in <analysis> tags to organize \
+  your thoughts. In your analysis:
+  1. Walk through the conversation chronologically
+  2. Identify the user's original goal and any scope changes
+  3. List every file created or modified with its path
+  4. Note every error encountered and how it was fixed
+  5. Identify EXACTLY what was being worked on in the most recent messages
 
-  Format your summary with these sections:
+  Then write your summary inside <summary> tags with these sections:
+
+  ## Primary Goal
+  The original goal and what the agent is trying to achieve overall. Include any \
+  clarifications or scope changes that emerged during execution.
 
   ## Accomplished
-  What has been built, installed, or completed so far. List files created/modified.
+  What has been built, installed, or completed so far. List specific files \
+  created/modified with their paths. Be thorough — the agent needs to know exactly \
+  what exists.
 
   ## Current State
-  Where things stand right now — what's working, what's partially done.
+  Where things stand right now — what's working, what's partially done, what's \
+  been tested. Include the state of the build/tests (passing? failing? which ones?).
 
   ## Key Decisions
-  Important choices made (tech stack, architecture, approach). The agent needs to \
-  remember WHY it chose approach A over B.
+  Important choices made (tech stack, architecture, approach) and WHY. The agent \
+  needs to remember why it chose approach A over B to avoid revisiting decisions.
 
   ## Errors & Fixes
-  Problems encountered and how they were resolved. Only include if the fix is \
-  non-obvious and the error could recur.
+  Problems encountered and how they were resolved. Include the error message and \
+  the fix so the agent doesn't repeat the same mistake. Only include non-obvious ones.
 
-  Keep each section to 3-5 bullet points. Be specific (include file paths, command names, \
-  package versions) but concise. Total summary should be under 500 words.
+  ## Current Work
+  CRITICAL: Describe EXACTLY what the agent was working on in the most recent \
+  messages. Include:
+  - The specific task or step from the plan
+  - Which file(s) were being modified
+  - What was the last action taken
+  - What should the agent do NEXT
+  Include verbatim quotes from the last few messages if they clarify the task. \
+  This section prevents drift — if you get it wrong, the agent will lose track \
+  of what it was doing.
 
-  CRITICAL: Respond with ONLY the summary text. Do NOT use any tools. Do NOT add commentary.
+  ## Pending Tasks
+  Remaining items from the plan that have NOT been started yet. List them in order.
+
+  Keep each section to 3-7 bullet points. Be specific (include file paths, command \
+  names, package versions) but concise.
+
+  CRITICAL: Respond with <analysis>...</analysis> followed by <summary>...</summary>. \
+  Do NOT use any tools. Do NOT add text outside these tags.
   """
 
   defp llm_compact(tool_log) do
@@ -886,14 +1157,25 @@ defmodule Golem.Runner do
 
     case Golem.Claude.call(messages,
            model: model,
-           max_tokens: 2_000,
+           max_tokens: 4_000,
            system: @compaction_prompt
          ) do
       {:ok, %{text: text}} when is_binary(text) and text != "" ->
-        {:ok, text}
+        {:ok, format_compact_summary(text)}
 
       _ ->
         {:error, :no_summary}
+    end
+  end
+
+  # Strip the <analysis> scratchpad and extract <summary> content.
+  # The analysis improves summary quality but has no value in the final output.
+  defp format_compact_summary(text) do
+    text = Regex.replace(~r/<analysis>[\s\S]*?<\/analysis>/m, text, "")
+
+    case Regex.run(~r/<summary>([\s\S]*?)<\/summary>/m, text) do
+      [_, content] -> String.trim(content)
+      nil -> String.trim(text)  # No tags — use as-is
     end
   end
 
@@ -1031,35 +1313,104 @@ defmodule Golem.Runner do
 
   # --- Stuck Detection ---
 
-  @escalation_steps 5
+  @stuck_edit_threshold 4
+  @stuck_shell_threshold 3
+  @stuck_repeat_threshold 3
 
   defp maybe_inject_stuck_warning(messages, executed, state) do
-    # Count how many times each file was edited in recent history
     recent_history = Enum.take(state.history, -15)
-    current_edits = Enum.filter(executed, fn {tc, _} -> tc.name in ["edit_file", "write_file"] end)
+    step = state.step + 1
+    current_escalation = Map.get(state, :escalated_until, 0)
+
+    # 1. File edit loops: same file edited 4+ times
+    current_edits = executed
+                    |> Enum.filter(fn {tc, _} -> tc.name in ["edit_file", "write_file"] end)
                     |> Enum.map(fn {tc, _} -> tc.input["path"] end)
                     |> Enum.reject(&is_nil/1)
 
-    recent_edits = Enum.filter(recent_history, fn {tool, _, _} -> tool in ["edit_file", "write_file"] end)
+    recent_edits = recent_history
+                   |> Enum.filter(fn {tool, _, _} -> tool in ["edit_file", "write_file"] end)
                    |> Enum.map(fn {_, path, _} -> path end)
 
-    all_edits = recent_edits ++ current_edits
-
-    # Find files edited more than 4 times recently
     stuck_files =
-      all_edits
+      (recent_edits ++ current_edits)
       |> Enum.frequencies()
-      |> Enum.filter(fn {_, count} -> count >= 4 end)
+      |> Enum.filter(fn {_, count} -> count >= @stuck_edit_threshold end)
       |> Enum.map(fn {file, count} -> "#{Path.basename(file)} (#{count} edits)" end)
 
     if stuck_files != [] do
-      Logger.warning("Stuck detection: #{Enum.join(stuck_files, ", ")} — escalating to Opus for #{@escalation_steps} steps")
-      step = state.step + 1
+      Logger.warning("Stuck detection (edits): #{Enum.join(stuck_files, ", ")}")
       {messages ++ [
-        %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. You've been editing the same file(s) repeatedly without making progress. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps to help you break out of this loop."}
+        %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."}
       ], step + @escalation_steps}
     else
-      {messages, Map.get(state, :escalated_until, 0)}
+      # 2. Shell command loops: same command prefix 3+ times in last 10 entries
+      recent_shells = (recent_history |> Enum.take(-10))
+                      |> Enum.filter(fn {tool, _, _} -> tool == "shell" end)
+                      |> Enum.map(fn {_, input, _} -> String.slice(to_string(input), 0, 100) end)
+
+      current_shells = executed
+                       |> Enum.filter(fn {tc, _} -> tc.name == "shell" end)
+                       |> Enum.map(fn {tc, _} -> String.slice(to_string(tc.input["command"]), 0, 100) end)
+
+      shell_repeats =
+        (recent_shells ++ current_shells)
+        |> Enum.frequencies()
+        |> Enum.filter(fn {_, count} -> count >= @stuck_shell_threshold end)
+        |> Enum.map(fn {cmd, count} -> "\"#{String.slice(cmd, 0, 60)}...\" (#{count}x)" end)
+
+      if shell_repeats != [] do
+        Logger.warning("Stuck detection (shell): #{Enum.join(shell_repeats, ", ")}")
+        {messages ++ [
+          %{role: "user", content: "[System] WARNING: You are repeating the same shell command(s): #{Enum.join(shell_repeats, ", ")}. If it failed before, it will fail again. STOP and:\n1. Read the error output carefully\n2. Use `think` to analyze what's going wrong\n3. Try a fundamentally different approach\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."}
+        ], step + @escalation_steps}
+      else
+        # 3. General repetition: same tool+input hash 3+ times
+        current_sigs = Enum.map(executed, fn {tc, _} ->
+          "#{tc.name}:#{:erlang.phash2(tc.input)}"
+        end)
+
+        recent_sigs = Enum.map(recent_history, fn {tool, input, _} ->
+          "#{tool}:#{:erlang.phash2(input)}"
+        end)
+
+        repeated =
+          (recent_sigs ++ current_sigs)
+          |> Enum.frequencies()
+          |> Enum.filter(fn {_, count} -> count >= @stuck_repeat_threshold end)
+
+        if repeated != [] do
+          Logger.warning("Stuck detection (repeat): #{length(repeated)} repeated tool calls")
+          {messages ++ [
+            %{role: "user", content: "[System] WARNING: You are repeating identical tool calls without making progress. This is wasting steps. STOP and use `think` to analyze why you're stuck, then try a different approach.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."}
+          ], step + @escalation_steps}
+        else
+          {messages, current_escalation}
+        end
+      end
+    end
+  end
+
+  # --- Think Loop Detection ---
+
+  @max_consecutive_thinks 3
+
+  defp maybe_inject_think_warning(messages, executed, state) do
+    tool_names = Enum.map(executed, fn {tc, _} -> tc.name end) |> Enum.uniq()
+    think_only = tool_names == ["think"]
+    prev_thinks = Map.get(state, :consecutive_thinks, 0)
+    escalated_until = Map.get(state, :escalated_until, 0)
+
+    consecutive = if think_only, do: prev_thinks + 1, else: 0
+
+    if consecutive >= @max_consecutive_thinks do
+      Logger.warning("Think loop detected: #{consecutive} consecutive think-only turns")
+      step = state.step + 1
+      {messages ++ [
+        %{role: "user", content: "[System] WARNING: You have called `think` #{consecutive} times in a row without taking any other action. Stop thinking and ACT. Use a tool that changes state — `shell`, `write_file`, `edit_file`, `sub_agent` — or call `done` if you're finished. Do NOT call `think` again without an accompanying action tool.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."}
+      ], consecutive, step + @escalation_steps}
+    else
+      {messages, consecutive, escalated_until}
     end
   end
 
@@ -1207,6 +1558,65 @@ defmodule Golem.Runner do
     end
   end
 
+  # --- Error-Triggered Search Nudge ---
+
+  # When build/compile errors mention unknown symbols, modules, or types,
+  # nudge the agent to search for documentation instead of guessing fixes.
+  # This catches the case where the agent has stale training data for a
+  # framework (e.g. Tauri 1 vs 2) and keeps retrying wrong APIs.
+
+  @build_error_patterns [
+    ~r/(?:cannot find|not found|unknown|undefined|unresolved)\s+(?:function|method|type|module|struct|crate|package|symbol|trait|macro)/i,
+    ~r/(?:no such|does not exist|not a member|has no)\s+(?:function|method|field|variant|module|attribute)/i,
+    ~r/error\[E\d+\]/,                     # Rust compiler errors
+    ~r/(?:ModuleNotFoundError|ImportError)/, # Python
+    ~r/Cannot find module/,                  # Node/TypeScript
+    ~r/undefined function .+ is not available/,  # Elixir
+    ~r/the trait .+ is not implemented/i,    # Rust trait errors
+    ~r/expected one of .+ found/i,           # API signature mismatches
+  ]
+
+  defp maybe_inject_search_nudge(messages, executed, state) do
+    # Only check shell results that look like build/compile errors
+    build_errors =
+      executed
+      |> Enum.filter(fn {tc, result} ->
+        tc.name == "shell" and
+          match?({:text, "[exit code" <> _}, result)
+      end)
+      |> Enum.flat_map(fn {tc, {:text, text}} ->
+        cmd = tc.input["command"] || ""
+        is_build = String.contains?(cmd, ["cargo", "npm", "mix", "python", "pip", "go ", "rustc", "gcc", "make", "cmake", "tsc", "node", "bun", "deno", "gradle", "mvn"])
+
+        if is_build and Enum.any?(@build_error_patterns, &Regex.match?(&1, text)) do
+          # Extract a useful snippet of the error
+          error_lines = text
+                        |> String.split("\n")
+                        |> Enum.filter(&String.match?(&1, ~r/error|not found|unknown|undefined|cannot find/i))
+                        |> Enum.take(3)
+                        |> Enum.join("\n")
+          [error_lines]
+        else
+          []
+        end
+      end)
+
+    # Check if we've seen build errors recently (repeat = agent is guessing)
+    recent_build_errors =
+      state.errors
+      |> Enum.count(&String.contains?(&1, ["not found", "unknown", "undefined", "cannot find", "unresolved"]))
+
+    if build_errors != [] and recent_build_errors >= 1 do
+      error_snippet = Enum.join(build_errors, "\n")
+      Logger.warning("Search nudge: build errors with unknown symbols (#{recent_build_errors} prior similar errors)")
+      messages ++ [
+        %{role: "user", content: "[System] You have repeated build errors involving unknown functions, types, or modules:\n\n#{String.slice(error_snippet, 0, 300)}\n\nThis strongly suggests your training data for this library/framework is OUTDATED. Do NOT guess at the fix. Instead:\n1. Use `web_search` to find the CURRENT documentation for the library and version you're using\n2. Search for the specific error message\n3. Check if there was a major version upgrade with breaking API changes\n\nDo NOT edit the code again until you have searched for the correct API."}
+      ]
+    else
+      messages
+    end
+  end
+
   # --- Error Memory ---
 
   defp extract_errors(executed) do
@@ -1231,27 +1641,35 @@ defmodule Golem.Runner do
   # --- Cost Tracking ---
 
   # Pricing per million tokens (as of 2025)
-  @default_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
+  # Accumulate cost in dollars directly, not raw tokens, since models have different prices.
+  @sonnet_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
+  @opus_pricing %{input: 15.0, output: 75.0, cache_read: 1.5, cache_create: 18.75}
 
-  defp accumulate_costs(costs, usage, _model) do
-    %{
-      input: costs.input + Map.get(usage, :input_tokens, 0),
-      output: costs.output + Map.get(usage, :output_tokens, 0),
-      cache_read: costs.cache_read + Map.get(usage, :cache_read, 0),
-      cache_create: costs.cache_create + Map.get(usage, :cache_create, 0)
-    }
+  defp pricing_for(model) when is_binary(model) do
+    if String.contains?(model, "opus"), do: @opus_pricing, else: @sonnet_pricing
   end
 
-  defp format_cost(costs) do
-    p = @default_pricing
-    dollars =
-      costs.input / 1_000_000 * p.input +
-      costs.output / 1_000_000 * p.output +
-      costs.cache_read / 1_000_000 * p.cache_read +
-      costs.cache_create / 1_000_000 * p.cache_create
+  defp accumulate_costs(costs, usage, model) do
+    p = pricing_for(model)
+    input = Map.get(usage, :input_tokens, 0)
+    output = Map.get(usage, :output_tokens, 0)
+    cache_read = Map.get(usage, :cache_read, 0)
+    cache_create = Map.get(usage, :cache_create, 0)
 
+    step_cost =
+      input / 1_000_000 * p.input +
+      output / 1_000_000 * p.output +
+      cache_read / 1_000_000 * p.cache_read +
+      cache_create / 1_000_000 * p.cache_create
+
+    Map.update(costs, :total_dollars, step_cost, &(&1 + step_cost))
+  end
+
+  defp format_cost(%{total_dollars: dollars}) do
     :erlang.float_to_binary(dollars, decimals: 4)
   end
+
+  defp format_cost(_costs), do: "0.0000"
 
   defp depth_prefix(0), do: ""
   defp depth_prefix(depth), do: String.duplicate("│ ", depth)

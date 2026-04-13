@@ -26,7 +26,8 @@ RUN useradd -m -s /bin/bash agent && \
     echo "agent ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY scaffold-tauri2.sh /usr/local/bin/scaffold-tauri2
+RUN chmod +x /entrypoint.sh /usr/local/bin/scaffold-tauri2
 
 USER agent
 WORKDIR /home/agent
