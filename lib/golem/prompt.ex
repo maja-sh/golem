@@ -65,12 +65,14 @@ defmodule Golem.Prompt do
     - Keep shell commands focused. Prefer multiple small commands over one giant pipeline.
     - For file creation, use `write_file`. For targeted edits to existing files, use `edit_file` — it's much more efficient than rewriting the whole file.
     - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
-    - Use `web_search` when you need to look up documentation, error messages, or how to do something. Use `web_fetch` to read a specific URL.
+    - Use `web_search` frequently. Do NOT rely on your training data for APIs, libraries, or frameworks — it may be outdated. Search for current documentation before using any library API. When you hit an error you haven't seen before, search for it. When using a framework you're not 100% sure about, search for the latest docs first.
     - Use `screenshot` to see GUI applications. Use `gui_click`, `gui_type`, `gui_key`, `gui_scroll` to interact with them.
-    - Use `sub_agent` to delegate self-contained sub-tasks that would bloat your context.
+    - Use `sub_agent` aggressively. Each screen, module, or component that can be built independently SHOULD be a sub-agent. Sub-agents get fresh context (no fatigue) and keep your main context clean. Examples: "implement the Feed screen with Following/Discover tabs at src/screens/Feed.tsx", "write the Tauri Rust commands for mnemonic generation and signing in src-tauri/src/". If a task involves creating 3+ files, it should probably be a sub-agent.
     - When installing packages, use appropriate package managers (apt, pip, npm, etc.) and handle missing repos gracefully.
     - You have full control over the shell environment. If you install a tool (Rust, Node, etc.), add it to `~/.bashrc` so it's available in future shell commands. Each shell command runs in a fresh bash session, so PATH changes only persist if they're in .bashrc. Example: after installing Rust, run `echo 'source $HOME/.cargo/env' >> ~/.bashrc`.
     - When working on an existing project, check if it's a git repo with a remote (`git remote -v`). If it is, run `git pull` before making any changes — the operator may have pushed updates.
+    - NEVER run long-lived processes (dev servers, watchers, `npm run dev`, `cargo run`) in the foreground — they block your shell forever. Always background them with `&` or use `timeout`. Example: `npm run dev &` or `timeout 30 cargo run`. To verify a server starts, background it, sleep briefly, then check with `curl`.
+    - You have NO interactive terminal. Simple y/n prompts can be answered with `yes |` or `echo "y" |`. But TUI apps (arrow-key menus, interactive wizards) CANNOT work — they require a real terminal. Always search for non-interactive flags (`--yes`, `-y`, `--no-input`, `--template`, `--`) or create the files manually instead. When in doubt, `web_search` for "tool-name non-interactive" or "tool-name CLI flags".
 
     ## Progress tracking
 
@@ -148,7 +150,9 @@ defmodule Golem.Prompt do
     - Be efficient — you have a limited number of steps. Batch independent operations into single turns when possible.
     - Use `edit_file` for targeted changes, `write_file` for new files.
     - Use `glob` and `grep` to understand existing code before modifying it.
-    - Use `web_search` if you need to look up documentation or APIs.
+    - Use `web_search` BEFORE writing code that uses unfamiliar APIs, crates, or libraries. Do NOT guess at API signatures from memory — search for the current docs. If a compilation error mentions an unknown function or wrong type, search for the correct usage.
+    - Read before you write. If you're editing a file, read it first to see the actual current content.
+    - If you've edited the same file 3+ times and it still doesn't compile, STOP. Read the full file, search for the error, and try a completely different approach.
     - When done, provide a clear summary of what you accomplished — files created, tests run, any issues encountered — so the parent agent can continue its work.
     - If you can't complete the task, use `done` with success=false and explain what's blocking you.
     """
@@ -200,7 +204,7 @@ defmodule Golem.Prompt do
     - Anticipate common issues (missing dependencies, permissions, etc.)
     - Don't over-plan phases that depend on unknown information. Plan what you know, defer what you don't.
     - Consider the container environment — it's a fresh Linux system, so dependencies need to be installed.
-    - For large projects, suggest using sub_agent for self-contained modules.
+    - Plan sub-agent delegation explicitly. Each self-contained module (a screen, a service, a component library, a test suite) should be marked as a sub-agent task in the plan. Example: "- [ ] [sub_agent] Implement Feed screen (Feed.tsx, Post.tsx, ComposeModal.tsx)". The executor should use `sub_agent` for these, not build them inline. This keeps the main context clean and prevents fatigue on long runs.
     """
   end
 

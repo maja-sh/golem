@@ -210,7 +210,9 @@ defmodule Golem.Runner do
       prefix: prefix,
       history: [],
       costs: %{input: 0, output: 0, cache_read: 0, cache_create: 0},
-      errors: []
+      errors: [],
+      phase_costs: [],
+      last_completed: 0
     }
 
     result = loop(state, system)
@@ -305,7 +307,15 @@ defmodule Golem.Runner do
     agents_md = Map.get(state, :agents_md)
     system = Golem.Prompt.executor_system(errors, agents_md)
 
-    model = Application.get_env(:golem, :executor_model)
+    # Escalate to Opus when stuck, drop back after a few steps
+    model =
+      if Map.get(state, :escalated_until, 0) > step do
+        Logger.info("#{p}  [escalated to Opus]")
+        Application.get_env(:golem, :planner_model)
+      else
+        Application.get_env(:golem, :executor_model)
+      end
+
     max_tokens = Application.get_env(:golem, :executor_max_tokens, 8000)
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
     tools = Golem.Tools.for_depth(state.depth)
@@ -375,7 +385,7 @@ defmodule Golem.Runner do
           {:continue, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
             messages = maybe_inject_review(messages, executed)
-            messages = maybe_inject_stuck_warning(messages, executed, state)
+            {messages, escalated_until} = maybe_inject_stuck_warning(messages, executed, state)
             messages = maybe_inject_file_size_warning(messages, executed)
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
@@ -383,8 +393,10 @@ defmodule Golem.Runner do
             state = %{state | messages: messages, step: step, costs: costs, errors: errors,
                        phase_costs: phase_costs, last_completed: last_completed,
                        history: update_history(state.history, executed)}
-            messages = maybe_inject_drift_warning(state)
+            state = Map.put(state, :escalated_until, escalated_until)
+            {messages, consecutive_drifts} = maybe_inject_drift_warning(state)
             state = %{state | messages: messages}
+            state = Map.put(state, :consecutive_drifts, consecutive_drifts)
             maybe_save(state)
             loop(state, system)
         end
@@ -427,7 +439,7 @@ defmodule Golem.Runner do
 
   defp execute_tool_calls(tool_calls, depth) do
     batches = partition_batches(tool_calls)
-    execute_batches(batches, depth, [])
+    execute_batches(batches, depth, [], depth == 0)
   end
 
   # Group consecutive concurrent-safe tools into one batch.
@@ -451,18 +463,16 @@ defmodule Golem.Runner do
     end
   end
 
-  defp execute_batches([], _depth, executed), do: {:continue, executed}
+  defp execute_batches([], _depth, executed, _show), do: {:continue, executed}
 
-  defp execute_batches([batch | rest], depth, executed) do
+  defp execute_batches([batch | rest], depth, executed, show) do
     if length(batch) > 1 do
-      # Multiple concurrent-safe tools — run in parallel
-      results = execute_concurrent_batch(batch, depth)
-      execute_batches(rest, depth, executed ++ results)
+      results = execute_concurrent_batch(batch, depth, show)
+      execute_batches(rest, depth, executed ++ results, show)
     else
-      # Single tool — run serially (may be done/think_replan)
       [tc] = batch
 
-      case execute_single_tool(tc, depth) do
+      case execute_single_tool(tc, depth, show) do
         {:done, summary, entry} ->
           {:done, summary, executed ++ [entry]}
 
@@ -470,18 +480,20 @@ defmodule Golem.Runner do
           {:think_replan, reasoning, executed ++ [entry]}
 
         {:continue, entry} ->
-          execute_batches(rest, depth, executed ++ [entry])
+          execute_batches(rest, depth, executed ++ [entry], show)
       end
     end
   end
 
   # Run a batch of read-only tools concurrently using Task.async.
-  defp execute_concurrent_batch(batch, depth) do
+  defp execute_concurrent_batch(batch, depth, show) do
     # Show all tool_call headers first
-    Enum.each(batch, fn tc ->
-      silent = tc.name in @silent_tools
-      if not silent, do: output().tool_call(tc.name, summarize_input(tc))
-    end)
+    if show do
+      Enum.each(batch, fn tc ->
+        silent = tc.name in @silent_tools
+        if not silent, do: output().tool_call(tc.name, summarize_input(tc))
+      end)
+    end
 
     # Execute all in parallel
     tasks =
@@ -496,7 +508,7 @@ defmodule Golem.Runner do
 
     results = Task.await_many(tasks, :infinity)
 
-    # Report results to TUI in order
+    # Report results to TUI in order (only at depth 0)
     Enum.map(results, fn {tc, result, elapsed} ->
       detail = summarize_input(tc)
       silent = tc.name in @silent_tools
@@ -505,7 +517,7 @@ defmodule Golem.Runner do
         {:continue, text} ->
           is_error = String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
 
-          if not silent do
+          if show and not silent do
             if is_error,
               do: output().tool_error(tc.name, detail, text),
               else: output().tool_result(tc.name, detail, text, elapsed, nil)
@@ -514,36 +526,36 @@ defmodule Golem.Runner do
           {tc, {:text, text}}
 
         {:continue_with_image, %{text: text, base64: base64}} ->
-          if not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+          if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
           {tc, {:image, text, base64}}
       end
     end)
   end
 
   # Execute a single tool call (may be any type, including done/think_replan).
-  defp execute_single_tool(tc, depth) do
+  defp execute_single_tool(tc, depth, show) do
     detail = summarize_input(tc)
     silent = tc.name in @silent_tools
-    if not silent, do: output().tool_call(tc.name, detail)
+    if show and not silent, do: output().tool_call(tc.name, detail)
 
     start = System.monotonic_time(:millisecond)
 
     case Golem.ToolHandler.execute(tc, depth) do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
+        if show, do: output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
         {:done, summary, {tc, {:text, "Goal completed."}}}
 
       {:think_replan, reasoning} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        output().tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
+        if show, do: output().tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
         {:think_replan, reasoning, {tc, {:text, "Re-planning requested."}}}
 
       {:continue, result} ->
         elapsed = System.monotonic_time(:millisecond) - start
         is_error = String.starts_with?(result, "[error]") or String.starts_with?(result, "[exit code")
 
-        if not silent do
+        if show and not silent do
           if is_error,
             do: output().tool_error(tc.name, detail, result),
             else: output().tool_result(tc.name, detail, result, elapsed, nil)
@@ -553,7 +565,7 @@ defmodule Golem.Runner do
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
-        if not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+        if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
         {:continue, {tc, {:image, text, base64}}}
     end
   end
@@ -1019,6 +1031,8 @@ defmodule Golem.Runner do
 
   # --- Stuck Detection ---
 
+  @escalation_steps 5
+
   defp maybe_inject_stuck_warning(messages, executed, state) do
     # Count how many times each file was edited in recent history
     recent_history = Enum.take(state.history, -15)
@@ -1039,12 +1053,13 @@ defmodule Golem.Runner do
       |> Enum.map(fn {file, count} -> "#{Path.basename(file)} (#{count} edits)" end)
 
     if stuck_files != [] do
-      Logger.warning("Stuck detection: #{Enum.join(stuck_files, ", ")}")
-      messages ++ [
-        %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. You've been editing the same file(s) repeatedly without making progress. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`."}
-      ]
+      Logger.warning("Stuck detection: #{Enum.join(stuck_files, ", ")} — escalating to Opus for #{@escalation_steps} steps")
+      step = state.step + 1
+      {messages ++ [
+        %{role: "user", content: "[System] WARNING: You appear to be stuck in an edit loop on: #{Enum.join(stuck_files, ", ")}. You've been editing the same file(s) repeatedly without making progress. STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps to help you break out of this loop."}
+      ], step + @escalation_steps}
     else
-      messages
+      {messages, Map.get(state, :escalated_until, 0)}
     end
   end
 
@@ -1054,6 +1069,8 @@ defmodule Golem.Runner do
   # Uses a cheap LLM call to detect if the agent has wandered off-plan.
   @drift_check_interval 15
 
+  @max_consecutive_drifts 2
+
   defp maybe_inject_drift_warning(%{step: step, plan: plan, history: history, depth: depth} = state)
        when depth == 0 and plan != nil and rem(step, @drift_check_interval) == 0 and step > 0 do
     recent =
@@ -1062,31 +1079,43 @@ defmodule Golem.Runner do
       |> Enum.map(fn {tool, input, _result} -> "- [#{tool}] #{input}" end)
       |> Enum.join("\n")
 
+    consecutive = Map.get(state, :consecutive_drifts, 0)
+
     case check_drift(plan, recent) do
       {:drifting, explanation} ->
-        Logger.warning("Drift detected at step #{step}: #{String.slice(explanation, 0, 200)}")
+        new_consecutive = consecutive + 1
+        Logger.warning("Drift detected at step #{step} (#{new_consecutive} consecutive): #{String.slice(explanation, 0, 200)}")
 
-        state.messages ++
-          [
-            %{
-              role: "user",
-              content: """
-              [System] DRIFT WARNING: You appear to be working on tasks not in the plan.
+        msg =
+          if new_consecutive >= @max_consecutive_drifts do
+            """
+            [System] DRIFT WARNING (#{new_consecutive}x consecutive): You are persistently off-plan.
 
-              #{explanation}
+            #{explanation}
 
-              Get back on track. Check your progress checklist and resume the next uncompleted item. \
-              If the plan genuinely needs to change, use `think(request_replan: true)` instead of silently diverging.
-              """
-            }
-          ]
+            You MUST call `think(request_replan: true)` NOW. Include what you've actually been doing \
+            and why the current plan doesn't match. The planner will revise the plan to match reality. \
+            Do NOT continue without replanning.
+            """
+          else
+            """
+            [System] DRIFT WARNING: You appear to be working on tasks not in the plan.
+
+            #{explanation}
+
+            Get back on track. Check your progress checklist and resume the next uncompleted item. \
+            If the plan genuinely needs to change, use `think(request_replan: true)` instead of silently diverging.
+            """
+          end
+
+        {state.messages ++ [%{role: "user", content: msg}], new_consecutive}
 
       :on_track ->
-        state.messages
+        {state.messages, 0}
     end
   end
 
-  defp maybe_inject_drift_warning(state), do: state.messages
+  defp maybe_inject_drift_warning(state), do: {state.messages, Map.get(state, :consecutive_drifts, 0)}
 
   @drift_prompt """
   You are checking whether an autonomous agent is following its plan.

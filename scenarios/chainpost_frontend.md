@@ -20,6 +20,15 @@ Put everything in `/home/agent/chainpost-client/`. Install Rust and Tauri prereq
 
 The frontend connects to this running node. Do NOT rebuild or modify the backend.
 
+**IMPORTANT — Research before building:** Tauri 2 is new and different from Tauri 1. Before writing any code:
+1. Use `web_search` to find the official Tauri 2 project setup guide (how to create a new project with React + TypeScript)
+2. Use `web_search` to find Tauri 2 command syntax (it changed from Tauri 1 — `#[tauri::command]` patterns, IPC, permissions)
+3. Study the reference implementation at `/home/agent/cryptogram-client/` for the crypto and API patterns, but do NOT copy its Tauri 1 setup — search for the Tauri 2 equivalent
+
+Do NOT guess at Tauri 2 APIs from memory. Search first.
+
+**Project scaffolding:** Use `npm create vite@latest chainpost-client -- --template react-ts` for the React project. For Tauri, study the reference at `/home/agent/cryptogram-client/src-tauri/` for the directory structure and adapt it.
+
 ---
 
 ## Architecture
@@ -225,28 +234,51 @@ serde_json = "1"
 - [ ] Settings screen
 - [ ] Node URL configuration
 
-### Phase 7: Polish
-- [ ] Use `browse` to visually verify each screen
+### Phase 7: Integration Testing (MANDATORY)
+
+This phase is NOT optional. The frontend MUST work with the live backend before calling done.
+
+- [ ] Start the ChainPost backend: `cd /home/agent/chainpost && cargo run -- --api-port 3030 &`
+- [ ] Verify backend is running: `curl http://localhost:3030/api/info`
+- [ ] Write an integration test script that exercises the full flow against the live backend:
+  1. Register a new user (generate mnemonic → derive keypair → sign UserRegister tx → POST to API)
+  2. Verify the user exists via `GET /api/users/<username>`
+  3. Create a post (sign CreatePost tx → POST to API)
+  4. Verify the post appears via `GET /api/users/<username>/posts`
+  5. Register a second user, follow the first user, verify feed
+- [ ] Run the integration test — ALL assertions must pass
+- [ ] Use `browse` to open the frontend in Firefox and visually verify at least the auth and feed screens
+
+### Phase 8: Polish
 - [ ] Loading states and error handling
 - [ ] Responsive layout
-- [ ] README with screenshots and setup instructions
+- [ ] README with setup instructions
 
 ---
 
-## Visual Testing
+## Integration Testing
 
-Use the `browse` tool to open the Tauri dev server in Firefox on the virtual display and take screenshots to verify the UI looks correct. Check:
-- Auth screens render properly
-- Feed shows posts with correct layout
-- Profile page displays user info
-- Compose modal opens and submits
+The frontend is WORTHLESS if it doesn't work with the backend. Before calling `done`:
+
+1. The backend MUST be running at localhost:3030
+2. You MUST test the actual API calls the frontend makes — not just that the UI renders, but that clicking "Register" creates a real user, posting creates a real post, following works end-to-end
+3. If any API call returns an error, fix it before proceeding
+4. Test with `curl` or a script first (faster feedback), then verify visually with `browse`
+
+Do NOT call `done` without passing integration tests. The verification agent will also check this.
 
 ---
 
-## Notes
+## Reference Implementation
 
-The previous client ("cryptogram-client") used Vue 3 + Tauri. This rebuild uses React + Tauri 2. The UX flow should be similar:
-- BIP39 mnemonic for account creation/recovery
-- Ed25519 signing in the Tauri Rust backend
-- Pinia-style state management → React Context
-- Axios HTTP client → fetch
+A previous client exists at `/home/agent/cryptogram-client/` (Vue 3 + Tauri 1). **Study it before building** — it's a working implementation of the same concept:
+- `src-tauri/src/` — Tauri Rust commands for mnemonic generation, keypair derivation, and transaction signing. Adapt these for Tauri 2.
+- `src/` — Vue 3 frontend with screens, components, and API client. Translate the patterns to React.
+- `src/stores/` — Pinia stores for auth and settings. Map these to React Context.
+
+Key things to learn from the reference:
+- How transactions are structured and signed (the crypto flow)
+- The API client and which endpoints are used
+- The UX flow for registration, login, posting, and following
+
+This is a rebuild in React + Tauri 2, not a port. Use it for understanding, not copy-paste.

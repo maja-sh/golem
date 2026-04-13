@@ -299,7 +299,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "update_progress", input: %{"items" => items}}, _depth) do
+  def execute(%{name: "update_progress", input: %{"items" => items}}, depth) do
     parsed =
       Enum.map(items, fn item ->
         status =
@@ -316,9 +316,11 @@ defmodule Golem.ToolHandler do
     total = length(parsed)
     Logger.info("  [update_progress] #{completed}/#{total} completed")
 
-    Golem.Output.current().set_progress(parsed)
-    # Store in persistent_term so runner state can pick it up for saving
-    :persistent_term.put(:golem_progress, parsed)
+    # Only update TUI and persistent state for top-level agent
+    if depth == 0 do
+      Golem.Output.current().set_progress(parsed)
+      :persistent_term.put(:golem_progress, parsed)
+    end
     {:continue, "Progress updated (#{completed}/#{total} completed)."}
   end
 

@@ -24,17 +24,21 @@ defmodule Golem.TUI do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  # --- Public API ---
+  # --- Public API (Golem.Output callbacks) ---
 
+  @impl true
   def init_display(run_id, goal) do
     GenServer.call(__MODULE__, {:init, run_id, goal})
   end
 
+  @impl true
   def step_header(step, max_steps, cost_str) do
     GenServer.cast(__MODULE__, {:update, cost: cost_str, step: step, max_steps: max_steps})
   end
 
+  @impl true
   def agent_text(nil), do: :ok
+  @impl true
   def agent_text(text) do
     width = terminal_width() - 4  # leave room for "● " prefix + margin
     lines = wrap_text(text, width)
@@ -46,20 +50,24 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print, formatted})
   end
 
+  @impl true
   def tool_call(name, detail) do
     GenServer.cast(__MODULE__, {:update, action: "#{name} #{detail}"})
   end
 
+  @impl true
   def tool_result(name, detail, result, elapsed_ms, _tokens) do
     elapsed = format_elapsed(elapsed_ms)
     summary = result_oneliner(result)
+    time_part = if name == "think", do: [], else: [:faint, " (#{elapsed})", :reset]
     lines = [
-      [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset, :faint, " (#{elapsed})", :reset]
+      [:faint, "  #{tool_icon(name)} ", :reset, :white, tool_label(name, detail), :reset] ++ time_part
     ]
     lines = if summary != "", do: lines ++ [[:faint, "  └ #{summary}", :reset]], else: lines
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
+  @impl true
   def tool_error(name, detail, error_text) do
     # Show first meaningful line of error, wrapped
     first_line = error_text |> String.split("\n", trim: true) |> List.first("") |> trunc(100)
@@ -70,6 +78,7 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
+  @impl true
   def show_diff(path, old_content, new_content) do
     diff_lines = build_diff(path, old_content, new_content)
     if diff_lines != [] do
@@ -82,6 +91,7 @@ defmodule Golem.TUI do
     end
   end
 
+  @impl true
   def show_phase_costs(phase_costs) do
     lines = [[], [:faint, "  Cost breakdown:", :reset]] ++
       Enum.map(phase_costs, fn {name, cost} ->
@@ -90,14 +100,17 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print, lines})
   end
 
+  @impl true
   def set_progress(items) do
     GenServer.call(__MODULE__, {:set_progress, items})
   end
 
+  @impl true
   def planning(label \\ "Planning...") do
     GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
   end
 
+  @impl true
   def plan_created(plan) do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
@@ -125,6 +138,7 @@ defmodule Golem.TUI do
     ]})
   end
 
+  @impl true
   def run_complete(success, summary) do
     lines = [[]] ++
       if success do
@@ -135,6 +149,7 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
+  @impl true
   def run_paused(run_id) do
     GenServer.call(__MODULE__, {:print, [
       [],
@@ -142,10 +157,12 @@ defmodule Golem.TUI do
     ]})
   end
 
+  @impl true
   def run_error(reason) do
     GenServer.call(__MODULE__, {:print, [[:red, "✗ Error: #{inspect(reason)}", :reset]]})
   end
 
+  @impl true
   def stop_display do
     GenServer.call(__MODULE__, :stop)
   end
@@ -179,7 +196,10 @@ defmodule Golem.TUI do
 
   @impl true
   def handle_call({:init, run_id, goal}, _from, state) do
-    Logger.configure(level: :warning)
+    # Suppress console output — warnings still go to the file logger.
+    # Logger.warning bypasses the GenServer and corrupts cursor tracking.
+    :logger.set_handler_config(:default, :level, :none)
+    IO.write("\e[?25l")  # Hide cursor
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
     IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
     IO.puts("")
@@ -203,9 +223,10 @@ defmodule Golem.TUI do
 
   def handle_call({:print_raw, lines}, _from, state) do
     state = erase_status(state)
+    max_w = terminal_width() - 1
     Enum.each(lines, fn
       [] -> IO.puts("")
-      [raw] when is_binary(raw) -> IO.puts(raw)
+      [raw] when is_binary(raw) -> IO.puts(truncate_visible(raw, max_w))
       tokens -> print_line(tokens)
     end)
     state = draw_status(state)
@@ -236,7 +257,8 @@ defmodule Golem.TUI do
     state = erase_status(state)
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
     IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
-    Logger.configure(level: :info)
+    IO.write("\e[?25h")  # Restore cursor
+    :logger.set_handler_config(:default, :level, :debug)
     {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
   end
 
@@ -266,19 +288,19 @@ defmodule Golem.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
-    IO.write("\e[#{n}A")
-    for _ <- 1..n, do: IO.write("\e[2K\n")
-    IO.write("\e[#{n}A")
+    buf = "\e[#{n}A" <> String.duplicate("\e[2K\n", n) <> "\e[#{n}A"
+    IO.write(buf)
     %{state | status_lines: 0}
   end
 
   defp draw_status(%{active: false} = state), do: state
   defp draw_status(state) do
     lines = build_status_lines(state)
-    Enum.each(lines, fn line ->
-      IO.write("\e[2K")
-      IO.puts(IO.ANSI.format(line))
-    end)
+    buf =
+      lines
+      |> Enum.map(fn line -> ["\e[2K", IO.ANSI.format(line)] end)
+      |> Enum.intersperse("\n")
+    IO.write([buf, "\n"])
     %{state | status_lines: length(lines)}
   end
 
@@ -314,7 +336,33 @@ defmodule Golem.TUI do
   # --- Helpers ---
 
   defp print_line([]), do: IO.puts("")
-  defp print_line(tokens), do: IO.puts(IO.ANSI.format(tokens))
+  defp print_line(tokens) do
+    formatted = IO.ANSI.format(tokens) |> IO.chardata_to_string()
+    # Truncate visible width to terminal to prevent wrapping that breaks cursor tracking
+    IO.puts(truncate_visible(formatted, terminal_width() - 1))
+  end
+
+  # Truncate a string containing ANSI escapes to a visible width.
+  # Counts only visible characters, preserves escape sequences.
+  defp truncate_visible(str, max_width) do
+    {result, _visible} =
+      Regex.split(~r/(\e\[[0-9;]*m)/, str, include_captures: true)
+      |> Enum.reduce({"", 0}, fn segment, {acc, visible} ->
+        if String.starts_with?(segment, "\e[") do
+          # ANSI escape — always include, doesn't add visible width
+          {acc <> segment, visible}
+        else
+          remaining = max_width - visible
+          if remaining <= 0 do
+            {acc, visible}
+          else
+            taken = String.slice(segment, 0, remaining)
+            {acc <> taken, visible + String.length(taken)}
+          end
+        end
+      end)
+    result <> "\e[0m"
+  end
 
   defp terminal_width do
     case :io.columns() do
@@ -369,16 +417,16 @@ defmodule Golem.TUI do
   defp tool_icon("edit_file"), do: "~"
   defp tool_icon("glob"), do: "⌕"
   defp tool_icon("grep"), do: "⌕"
-  defp tool_icon("web_search"), do: "🔍"
+  defp tool_icon("web_search"), do: "?"
   defp tool_icon("web_fetch"), do: "↓"
-  defp tool_icon("screenshot"), do: "📷"
-  defp tool_icon("think"), do: "💭"
-  defp tool_icon("update_progress"), do: "📋"
+  defp tool_icon("screenshot"), do: "◉"
+  defp tool_icon("think"), do: "·"
+  defp tool_icon("update_progress"), do: "·"
   defp tool_icon("done"), do: "✓"
   defp tool_icon("sub_agent"), do: "●"
   defp tool_icon("ask_user"), do: "?"
-  defp tool_icon("browse"), do: "🌐"
-  defp tool_icon(_), do: "▶"
+  defp tool_icon("browse"), do: "◎"
+  defp tool_icon(_), do: "▸"
 
   defp tool_label("shell", cmd), do: trunc(cmd, 60)
   defp tool_label("write_file", path), do: "Write #{path}"

@@ -79,7 +79,7 @@ defmodule Golem.DaemonRunner do
         {:reply, {:ok, run_id},
          %{state | status: :running, run_id: run_id, task_pid: task.pid, goal: "resumed", started_at: DateTime.utc_now()}}
 
-      {:error, reason} ->
+      {:error, _reason} ->
         {:reply, {:error, :not_found}, state}
     end
   end
