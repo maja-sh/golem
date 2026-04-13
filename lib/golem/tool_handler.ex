@@ -330,14 +330,31 @@ defmodule Golem.ToolHandler do
         %{text: Map.get(item, "text", ""), status: status}
       end)
 
-    completed = Enum.count(parsed, &(&1.status == :completed))
-    total = length(parsed)
+    # Merge with persisted state: completed items can never go back to pending.
+    # This prevents compaction from resetting progress.
+    previous = :persistent_term.get(:golem_progress, [])
+    completed_texts = previous
+                      |> Enum.filter(&(&1.status == :completed))
+                      |> Enum.map(&(&1.text))
+                      |> MapSet.new()
+
+    merged =
+      Enum.map(parsed, fn item ->
+        if item.status != :completed and MapSet.member?(completed_texts, item.text) do
+          %{item | status: :completed}
+        else
+          item
+        end
+      end)
+
+    completed = Enum.count(merged, &(&1.status == :completed))
+    total = length(merged)
     Logger.info("  [update_progress] #{completed}/#{total} completed")
 
     # Only update TUI and persistent state for top-level agent
     if depth == 0 do
-      Golem.Output.current().set_progress(parsed)
-      :persistent_term.put(:golem_progress, parsed)
+      Golem.Output.current().set_progress(merged)
+      :persistent_term.put(:golem_progress, merged)
     end
     {:continue, "Progress updated (#{completed}/#{total} completed)."}
   end

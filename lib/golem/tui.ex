@@ -141,8 +141,11 @@ defmodule Golem.TUI do
   @impl true
   def sub_agent_status(goal, tool, detail, step, max_steps) do
     short_goal = trunc(goal, 40)
-    label = "#{tool_icon(tool)} #{tool_label(tool, detail)}" |> trunc(50)
-    GenServer.cast(__MODULE__, {:update, action: "↳ #{short_goal} — #{label} (#{step}/#{max_steps})"})
+    label = tool_label(tool, detail) |> trunc(55)
+    # Print a permanent condensed line for the tool action
+    GenServer.call(__MODULE__, {:print_and_update, [
+      [:faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " #{label}", :reset]
+    ], [action: "↳ #{short_goal} (#{step}/#{max_steps})"]})
   end
 
   @impl true

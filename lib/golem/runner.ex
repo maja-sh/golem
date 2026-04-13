@@ -196,6 +196,7 @@ defmodule Golem.Runner do
     prefix = depth_prefix(depth)
     Logger.info("#{prefix}---------- SUB-AGENT SPAWNED ----------")
     Logger.info("#{prefix}Goal: #{String.slice(goal, 0, 500)}")
+    if parent_depth == 0, do: output().sub_agent_start(goal)
 
     # Build directive message for the sub-agent
     context_section = if context && context != "", do: "\n\n## Additional Context\n\n#{context}", else: ""
@@ -249,6 +250,15 @@ defmodule Golem.Runner do
 
     result = loop(state, system)
     Logger.info("#{prefix}---------- SUB-AGENT FINISHED ----------")
+
+    # Report sub-agent completion to TUI
+    if parent_depth == 0 do
+      {success, steps} = case result do
+        {:ok, %{success: s}} -> {s, state.step}
+        _ -> {false, state.step}
+      end
+      output().sub_agent_result(goal, steps, success)
+    end
 
     # Extract files created/modified by the sub-agent for parent awareness
     case result do
@@ -677,14 +687,18 @@ defmodule Golem.Runner do
     end
   end
 
+  @sub_agent_silent_tools ~w(think update_progress)
+
   defp emit_sub_agent_status(state, tool, detail) do
-    output().sub_agent_status(
-      state.goal,
-      tool,
-      detail,
-      state.step,
-      state.max_steps
-    )
+    if tool not in @sub_agent_silent_tools do
+      output().sub_agent_status(
+        state.goal,
+        tool,
+        detail,
+        state.step,
+        state.max_steps
+      )
+    end
   end
 
   # Build assistant + user messages for multiple tool calls in one turn
