@@ -23,8 +23,7 @@ defmodule Golem.MixProject do
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:dotenv, "~> 3.0", only: [:dev, :test]},
-      {:nostrum, "~> 0.10", runtime: false},
-      {:owl, "~> 0.13"}
+      {:nostrum, "~> 0.10", runtime: false}
     ]
   end
 end

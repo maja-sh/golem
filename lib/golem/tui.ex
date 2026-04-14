@@ -107,7 +107,7 @@ defmodule Golem.TUI do
 
   @impl true
   def planning(label \\ "Planning...") do
-    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
+    GenServer.call(__MODULE__, {:print, [[], [:yellow, "+ #{label}", :reset], []]})
   end
 
   @impl true
@@ -142,11 +142,16 @@ defmodule Golem.TUI do
   def sub_agent_status(goal, tool, detail, step, max_steps) do
     short_goal = trunc(goal, 40)
     label = tool_label(tool, detail) |> trunc(55)
-    # Print a permanent condensed line for the tool action
     GenServer.call(__MODULE__, {:print_and_update, [
       [:faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " #{label}", :reset]
     ], [action: "↳ #{short_goal} (#{step}/#{max_steps})"]})
   end
+
+  @impl true
+  def tool_batch_result(_results, _elapsed), do: :ok
+
+  @impl true
+  def update_tokens(_count), do: :ok
 
   @impl true
   def run_complete(success, summary) do
@@ -206,7 +211,7 @@ defmodule Golem.TUI do
 
   @impl true
   def handle_call({:init, run_id, goal}, _from, state) do
-    # Suppress console output — warnings still go to the file logger.
+    # Suppress console logger — warnings still go to the file logger.
     # Logger.warning bypasses the GenServer and corrupts cursor tracking.
     :logger.set_handler_config(:default, :level, :none)
     IO.write("\e[?25l")  # Hide cursor
@@ -252,10 +257,6 @@ defmodule Golem.TUI do
   end
 
   def handle_call({:set_progress, items}, _from, state) do
-    # Erase old status, update items, redraw with correct line count.
-    # This is needed so status_lines stays accurate for future erase_status calls.
-    # The tick only updates the bottom line, so this is the only place
-    # where status_lines gets recalculated when progress changes.
     state = erase_status(state)
     state = %{state | progress: items}
     state = draw_status(state)
@@ -295,6 +296,12 @@ defmodule Golem.TUI do
   end
 
   # --- Status Area ---
+  #
+  # The status area is a block of lines pinned at the bottom of the terminal.
+  # It contains the progress checklist and the spinner line.
+  # Before printing any output, erase_status moves the cursor up and clears
+  # the lines. After printing, draw_status redraws them. This ensures the
+  # status area is always at the bottom and never interleaves with output.
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
@@ -338,7 +345,6 @@ defmodule Golem.TUI do
 
     bottom = build_bottom_line(state)
 
-    # Blank lines separate: content | checklist | status bar
     sep = if progress_lines != [], do: [[]], else: []
     [[]] ++ progress_lines ++ sep ++ [bottom]
   end
@@ -348,18 +354,15 @@ defmodule Golem.TUI do
   defp print_line([]), do: IO.puts("")
   defp print_line(tokens) do
     formatted = IO.ANSI.format(tokens) |> IO.chardata_to_string()
-    # Truncate visible width to terminal to prevent wrapping that breaks cursor tracking
     IO.puts(truncate_visible(formatted, terminal_width() - 1))
   end
 
   # Truncate a string containing ANSI escapes to a visible width.
-  # Counts only visible characters, preserves escape sequences.
   defp truncate_visible(str, max_width) do
     {result, _visible} =
       Regex.split(~r/(\e\[[0-9;]*m)/, str, include_captures: true)
       |> Enum.reduce({"", 0}, fn segment, {acc, visible} ->
         if String.starts_with?(segment, "\e[") do
-          # ANSI escape — always include, doesn't add visible width
           {acc <> segment, visible}
         else
           remaining = max_width - visible
