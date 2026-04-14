@@ -322,8 +322,9 @@ defmodule Golem.ToolHandler do
       Enum.map(items, fn item ->
         status =
           case Map.get(item, "status", "pending") do
-            # Agent cannot mark items completed — system controls that
-            s when s in ["completed", "complete", "done"] -> :in_progress
+            # Agent says "completed" → :done (unverified). Only the system
+            # sets :completed (verified) after done + verification passes.
+            s when s in ["completed", "complete", "done"] -> :done
             s when s in ["in_progress", "in-progress", "working", "active"] -> :in_progress
             _ -> :pending
           end
@@ -332,31 +333,34 @@ defmodule Golem.ToolHandler do
       end)
 
     # Merge with persisted state to prevent regressions:
-    # - completed items stay completed (from verification or resumed state)
-    # - in_progress items don't regress to pending (compaction safety)
+    # - :completed items stay completed (system-verified, from verification or resume)
+    # - :done items don't regress to in_progress or pending (compaction safety)
+    # - :in_progress items don't regress to pending (compaction safety)
     previous = :persistent_term.get(:golem_progress, [])
     preserved = Map.new(previous, &{&1.text, &1.status})
+
+    status_rank = %{pending: 0, in_progress: 1, done: 2, completed: 3}
 
     merged =
       Enum.map(parsed, fn item ->
         prev_status = Map.get(preserved, item.text)
-        cond do
-          prev_status == :completed -> %{item | status: :completed}
-          prev_status == :in_progress and item.status == :pending -> %{item | status: :in_progress}
-          true -> item
+        if prev_status && status_rank[prev_status] > status_rank[item.status] do
+          %{item | status: prev_status}
+        else
+          item
         end
       end)
 
-    in_progress = Enum.count(merged, &(&1.status == :in_progress))
+    done = Enum.count(merged, &(&1.status in [:done, :completed]))
     total = length(merged)
-    Logger.info("  [update_progress] #{in_progress}/#{total} in progress")
+    Logger.info("  [update_progress] #{done}/#{total} completed")
 
     # Only update TUI and persistent state for top-level agent
     if depth == 0 do
       Golem.Output.current().set_progress(merged)
       :persistent_term.put(:golem_progress, merged)
     end
-    {:continue, "Progress updated (#{in_progress}/#{total} in progress)."}
+    {:continue, "Progress updated (#{done}/#{total} completed)."}
   end
 
   def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do

@@ -167,7 +167,7 @@ defmodule Golem.Tools do
               type: "object",
               properties: %{
                 text: %{type: "string", description: "Short description of the step"},
-                status: %{type: "string", enum: ["pending", "in_progress"], description: "Current status"}
+                status: %{type: "string", enum: ["pending", "in_progress", "completed"], description: "Current status"}
               },
               required: ["text", "status"]
             }

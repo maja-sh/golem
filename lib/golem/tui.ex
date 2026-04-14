@@ -344,10 +344,11 @@ defmodule Golem.TUI do
       Enum.map(state.progress, fn item ->
         {icon, color} = case item.status do
           :completed -> {"✓", :green}
+          :done -> {"✓", :faint}
           :in_progress -> {"→", :yellow}
           :pending -> {"·", :faint}
         end
-        style = if item.status == :pending, do: :faint, else: :white
+        style = if item.status in [:pending, :done], do: :faint, else: :white
         [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
       end)
 

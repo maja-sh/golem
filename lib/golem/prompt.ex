@@ -81,7 +81,7 @@ defmodule Golem.Prompt do
     - When you start working on a step (mark it `in_progress`)
     - When the plan changes (update the full list)
 
-    Items have two statuses: `pending` (not started) and `in_progress` (working on it). Items are automatically marked completed by the system when the run finishes successfully — you do not control completion.
+    Items have three statuses: `pending` (not started), `in_progress` (working on it), and `completed` (done). Mark a step `completed` when you've finished working on it and moved to the next one. The system verifies completion independently — your `completed` status is displayed as unverified until the run passes final verification.
 
     Each call sends the FULL item list — include all items every time, with their current status. Keep items short (under 50 chars). 5-15 items is ideal.
 
