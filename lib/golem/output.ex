@@ -18,6 +18,8 @@ defmodule Golem.Output do
   @callback set_progress(items :: list()) :: :ok
   @callback show_phase_costs(costs :: list()) :: :ok
   @callback sub_agent_status(goal :: String.t(), tool :: String.t(), detail :: String.t(), step :: integer(), max_steps :: integer()) :: :ok
+  @callback tool_batch_result(results :: list(), elapsed :: integer()) :: :ok
+  @callback update_tokens(count :: integer()) :: :ok
   @callback run_complete(success :: boolean(), summary :: String.t()) :: :ok
   @callback run_paused(run_id :: String.t()) :: :ok
   @callback run_error(reason :: any()) :: :ok

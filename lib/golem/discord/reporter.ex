@@ -55,6 +55,12 @@ defmodule Golem.Discord.Reporter do
   def sub_agent_status(_goal, _tool, _detail, _step, _max_steps), do: :ok
 
   @impl true
+  def tool_batch_result(_results, _elapsed), do: :ok
+
+  @impl true
+  def update_tokens(_count), do: :ok
+
+  @impl true
   def set_progress(_items), do: :ok
 
   @impl true
