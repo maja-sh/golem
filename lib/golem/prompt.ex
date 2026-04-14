@@ -204,6 +204,21 @@ defmodule Golem.Prompt do
     - Don't over-plan phases that depend on unknown information. Plan what you know, defer what you don't.
     - Consider the container environment — it's a fresh Linux system, so dependencies need to be installed.
     - Plan sub-agent delegation explicitly. Each self-contained module (a screen, a service, a component library, a test suite) should be marked as a sub-agent task in the plan. Example: "- [ ] [sub_agent] Implement Feed screen (Feed.tsx, Post.tsx, ComposeModal.tsx)". The executor should use `sub_agent` for these, not build them inline. This keeps the main context clean and prevents fatigue on long runs.
+
+    ## Verification commands
+
+    For each checklist item where completion can be verified with a quick shell command (exit code 0 = pass), add a `verify:` line indented under the item:
+
+    ```
+    - [ ] Create project directory
+      verify: test -d /home/agent/project
+    - [ ] Install Flask and dependencies
+      verify: python3 -c "import flask"
+    - [ ] Write main application file
+      verify: test -f /home/agent/project/app.py && python3 -c "import ast; ast.parse(open('/home/agent/project/app.py').read())"
+    ```
+
+    Verification commands must be fast (under 10 seconds), deterministic, and side-effect free (read-only checks only). They run automatically when the executor marks an item as completed. If an item can't be verified with a simple command (e.g. "Research APIs", "Design architecture"), omit the verify line.
     """
   end
 

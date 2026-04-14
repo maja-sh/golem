@@ -24,6 +24,10 @@ defmodule Golem.ToolHandler do
       {:error, {:timeout, partial}} ->
         {:continue, truncate("[command timed out]\n#{partial}", 50_000)}
 
+      {:error, {:stall_timeout, partial}} ->
+        stall_s = div(Application.get_env(:golem, :stall_timeout, 120_000), 1000)
+        {:continue, truncate("[command stalled — no output for #{stall_s}s, likely waiting for input or running a foreground process. Use & to background long-running processes.]\n#{partial}", 50_000)}
+
       {:error, reason} ->
         {:continue, "[error] #{inspect(reason)}"}
     end
@@ -350,6 +354,35 @@ defmodule Golem.ToolHandler do
           item
         end
       end)
+
+    # Run verification for items that just transitioned to :done
+    verify_commands = :persistent_term.get(:golem_verify_commands, %{})
+
+    merged =
+      if depth == 0 and verify_commands != %{} do
+        Enum.map(merged, fn item ->
+          newly_done = item.status == :done and Map.get(preserved, item.text) not in [:done, :completed]
+
+          if newly_done do
+            case Golem.PlanParser.find_verify_command(verify_commands, item.text) do
+              nil -> item
+              cmd ->
+                case Golem.Sandbox.exec(cmd, timeout: 10_000, stall_timeout: :infinity) do
+                  {:ok, %{exit_code: 0}} ->
+                    Logger.info("  [verify] ✓ #{item.text}")
+                    %{item | status: :completed}
+                  _ ->
+                    Logger.info("  [verify] ✗ #{item.text}")
+                    item
+                end
+            end
+          else
+            item
+          end
+        end)
+      else
+        merged
+      end
 
     done = Enum.count(merged, &(&1.status in [:done, :completed]))
     total = length(merged)

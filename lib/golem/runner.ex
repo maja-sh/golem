@@ -101,6 +101,10 @@ defmodule Golem.Runner do
           run_id: run_id
         }
 
+        # Restore verify commands from saved state (or re-extract from plan)
+        verify_commands = Map.get(saved, :verify_commands, nil) || Golem.PlanParser.extract_verify_commands(saved.plan)
+        :persistent_term.put(:golem_verify_commands, verify_commands)
+
         # If no progress items, tell the agent to set them up
         state =
           if Map.get(saved, :progress, []) == [] and state.messages != [] do
@@ -154,6 +158,10 @@ defmodule Golem.Runner do
       {:ok, plan} ->
         if depth == 0, do: output().plan_created(plan)
         Logger.info("#{prefix}Plan created (logged to file)")
+
+        verify_commands = Golem.PlanParser.extract_verify_commands(plan)
+        if verify_commands != %{}, do: Logger.info("#{prefix}Extracted #{map_size(verify_commands)} verify commands from plan")
+        :persistent_term.put(:golem_verify_commands, verify_commands)
 
         state = %{
           goal: goal,
@@ -453,6 +461,7 @@ defmodule Golem.Runner do
                 Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
                 log_phase_costs(state)
                 maybe_save(state)
+                :persistent_term.put(:golem_verify_commands, %{})
                 {:ok, summary}
 
               {:reject, state} ->
@@ -803,6 +812,12 @@ defmodule Golem.Runner do
       case replan(state.goal, state.plan, reasoning, recent) do
         {:ok, new_plan} ->
           Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
+
+          # Merge new verify commands (additive — keep already-verified items)
+          new_verify = Golem.PlanParser.extract_verify_commands(new_plan)
+          existing_verify = :persistent_term.get(:golem_verify_commands, %{})
+          merged_verify = Map.merge(existing_verify, new_verify)
+          :persistent_term.put(:golem_verify_commands, merged_verify)
 
           messages =
             state.messages ++

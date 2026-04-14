@@ -48,6 +48,7 @@ defmodule Golem.Application do
       thinking_budget: 10_000,
       max_steps: 200,
       command_timeout: 900_000,
+      stall_timeout: 120_000,
       container_runtime: detect_runtime(),
       screenshot_dir: "screenshots",
       log_dir: "logs"

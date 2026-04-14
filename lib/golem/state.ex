@@ -47,6 +47,7 @@ defmodule Golem.State do
       errors: Map.get(state, :errors, []),
       agents_md: Map.get(state, :agents_md),
       progress: Map.get(state, :progress, []) |> Enum.map(fn item -> %{text: item.text, status: Atom.to_string(item.status)} end),
+      verify_commands: :persistent_term.get(:golem_verify_commands, %{}),
       phase_costs: Map.get(state, :phase_costs, []) |> Enum.map(fn {n, c} -> %{name: n, cost: c} end),
       last_completed: Map.get(state, :last_completed, 0),
       saved_at: DateTime.utc_now() |> DateTime.to_iso8601()
@@ -80,6 +81,7 @@ defmodule Golem.State do
           errors: data["errors"] || [],
           agents_md: data["agents_md"],
           progress: decode_progress(data["progress"]),
+          verify_commands: data["verify_commands"] || %{},
           phase_costs: decode_phase_costs(data["phase_costs"]),
           last_completed: data["last_completed"] || 0
         }

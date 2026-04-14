@@ -17,10 +17,15 @@ defmodule Golem.Sandbox do
 
   @doc """
   Execute a shell command in the container. Returns {:ok, %{output, exit_code}} or {:error, reason}.
+
+  Options:
+  - `:timeout` — hard time limit (default from config, typically 900s)
+  - `:stall_timeout` — max silence before returning stall error (default 60s, `:infinity` to disable)
   """
   def exec(command, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, default_timeout())
-    GenServer.call(__MODULE__, {:exec, command, timeout}, timeout + 5_000)
+    stall_timeout = Keyword.get(opts, :stall_timeout, default_stall_timeout())
+    GenServer.call(__MODULE__, {:exec, command, timeout, stall_timeout}, timeout + 5_000)
   catch
     :exit, _ -> {:error, :timeout}
   end
@@ -71,11 +76,11 @@ defmodule Golem.Sandbox do
     Process.flag(:trap_exit, true)
     container = Application.get_env(:golem, :container, "golem-vm")
     Logger.info("Sandbox initialized, container: #{container}")
-    {:ok, %{port: nil, container: container, buffer: "", mode: :idle, cwd: nil}}
+    {:ok, %{port: nil, container: container, buffer: "", mode: :idle, cwd: nil, stall_ms: nil}}
   end
 
   @impl true
-  def handle_call({:exec, command, timeout}, from, %{mode: :idle} = state) do
+  def handle_call({:exec, command, timeout, stall_timeout}, from, %{mode: :idle} = state) do
     state = ensure_port(state)
 
     case state.port do
@@ -92,11 +97,12 @@ defmodule Golem.Sandbox do
 
         Port.command(port, wrapped)
         timer = Process.send_after(self(), {:exec_timeout, ref}, timeout)
-        {:noreply, %{state | buffer: "", mode: {:exec, ref, from, timer}}}
+        stall_timer = start_stall_timer(ref, stall_timeout)
+        {:noreply, %{state | buffer: "", mode: {:exec, ref, from, timer, stall_timer}, stall_ms: stall_timeout}}
     end
   end
 
-  def handle_call({:exec, _command, _timeout}, _from, state) do
+  def handle_call({:exec, _command, _timeout, _stall_timeout}, _from, state) do
     {:reply, {:error, :busy}, state}
   end
 
@@ -156,15 +162,19 @@ defmodule Golem.Sandbox do
       end
 
     case state.mode do
-      {:exec, ref, from, timer} ->
+      {:exec, ref, from, timer, stall_timer} ->
         case parse_sentinel(buffer, ref) do
           {:ok, output, exit_code, new_cwd} ->
             Process.cancel_timer(timer)
+            cancel_stall_timer(stall_timer)
             GenServer.reply(from, {:ok, %{output: output, exit_code: exit_code}})
-            {:noreply, %{state | buffer: "", mode: :idle, cwd: new_cwd || state.cwd}}
+            {:noreply, %{state | buffer: "", mode: :idle, cwd: new_cwd || state.cwd, stall_ms: nil}}
 
           :incomplete ->
-            {:noreply, %{state | buffer: buffer}}
+            # Reset stall timer — we got output, so the command isn't stalled
+            cancel_stall_timer(stall_timer)
+            new_stall_timer = start_stall_timer(ref, state.stall_ms)
+            {:noreply, %{state | buffer: buffer, mode: {:exec, ref, from, timer, new_stall_timer}}}
         end
 
       :idle ->
@@ -176,15 +186,16 @@ defmodule Golem.Sandbox do
     Logger.warning("Sandbox port exited with status #{status}")
 
     case state.mode do
-      {:exec, _ref, from, timer} ->
+      {:exec, _ref, from, timer, stall_timer} ->
         Process.cancel_timer(timer)
+        cancel_stall_timer(stall_timer)
         GenServer.reply(from, {:error, :port_died})
 
       :idle ->
         :ok
     end
 
-    {:noreply, %{state | port: nil, buffer: "", mode: :idle}}
+    {:noreply, %{state | port: nil, buffer: "", mode: :idle, stall_ms: nil}}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
@@ -192,15 +203,16 @@ defmodule Golem.Sandbox do
       Logger.warning("Sandbox port process exited: #{inspect(reason)}")
 
       case state.mode do
-        {:exec, _ref, from, timer} ->
+        {:exec, _ref, from, timer, stall_timer} ->
           Process.cancel_timer(timer)
+          cancel_stall_timer(stall_timer)
           GenServer.reply(from, {:error, :port_died})
 
         :idle ->
           :ok
       end
 
-      {:noreply, %{state | port: nil, buffer: "", mode: :idle}}
+      {:noreply, %{state | port: nil, buffer: "", mode: :idle, stall_ms: nil}}
     else
       {:noreply, state}
     end
@@ -208,11 +220,25 @@ defmodule Golem.Sandbox do
 
   def handle_info({:exec_timeout, ref}, state) do
     case state.mode do
-      {:exec, ^ref, from, _timer} ->
+      {:exec, ^ref, from, _timer, stall_timer} ->
+        cancel_stall_timer(stall_timer)
         Logger.warning("Sandbox exec timed out, partial output: #{byte_size(state.buffer)} bytes")
-        # Return partial output on timeout instead of just an error
         GenServer.reply(from, {:error, {:timeout, state.buffer}})
-        {:noreply, %{state | buffer: "", mode: :idle}}
+        {:noreply, %{state | buffer: "", mode: :idle, stall_ms: nil}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:stall_timeout, ref}, state) do
+    case state.mode do
+      {:exec, ^ref, from, timer, _stall_timer} ->
+        Process.cancel_timer(timer)
+        stall_s = if is_integer(state.stall_ms), do: div(state.stall_ms, 1000), else: "?"
+        Logger.warning("Sandbox exec stalled — no output for #{stall_s}s, partial: #{byte_size(state.buffer)} bytes")
+        GenServer.reply(from, {:error, {:stall_timeout, state.buffer}})
+        {:noreply, %{state | buffer: "", mode: :idle, stall_ms: nil}}
 
       _ ->
         {:noreply, state}
@@ -321,4 +347,11 @@ defmodule Golem.Sandbox do
   defp escape(path), do: "'#{String.replace(path, "'", "'\\''")}'"
 
   defp default_timeout, do: Application.get_env(:golem, :command_timeout, 60_000)
+  defp default_stall_timeout, do: Application.get_env(:golem, :stall_timeout, 120_000)
+
+  defp start_stall_timer(_ref, :infinity), do: nil
+  defp start_stall_timer(ref, ms) when is_integer(ms), do: Process.send_after(self(), {:stall_timeout, ref}, ms)
+
+  defp cancel_stall_timer(nil), do: :ok
+  defp cancel_stall_timer(timer), do: Process.cancel_timer(timer)
 end
