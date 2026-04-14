@@ -313,9 +313,13 @@ defmodule Golem.TUI do
   defp draw_status(%{active: false} = state), do: state
   defp draw_status(state) do
     lines = build_status_lines(state)
+    max_w = terminal_width() - 1
     buf =
       lines
-      |> Enum.map(fn line -> ["\e[2K", IO.ANSI.format(line)] end)
+      |> Enum.map(fn line ->
+        formatted = IO.ANSI.format(line) |> IO.chardata_to_string()
+        ["\e[2K", truncate_visible(formatted, max_w)]
+      end)
       |> Enum.intersperse("\n")
     IO.write([buf, "\n"])
     %{state | status_lines: length(lines)}
