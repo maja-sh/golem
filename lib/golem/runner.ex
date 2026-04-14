@@ -443,6 +443,13 @@ defmodule Golem.Runner do
 
             case maybe_verify(summary, state) do
               {:accept, state} ->
+                # Promote all progress items to completed on verified success
+                if summary.success and state.depth == 0 do
+                  progress = :persistent_term.get(:golem_progress, [])
+                  completed = Enum.map(progress, &%{&1 | status: :completed})
+                  :persistent_term.put(:golem_progress, completed)
+                  output().set_progress(completed)
+                end
                 Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
                 log_phase_costs(state)
                 maybe_save(state)

@@ -79,21 +79,20 @@ defmodule Golem.Prompt do
     Use `update_progress` to keep the operator informed of your progress. Call it:
     - At the start of a run to set up initial items from the plan
     - When you start working on a step (mark it `in_progress`)
-    - When you finish a step (mark it `completed`)
     - When the plan changes (update the full list)
+
+    Items have two statuses: `pending` (not started) and `in_progress` (working on it). Items are automatically marked completed by the system when the run finishes successfully — you do not control completion.
 
     Each call sends the FULL item list — include all items every time, with their current status. Keep items short (under 50 chars). 5-15 items is ideal.
 
-    IMPORTANT: Call `update_progress` frequently — at minimum after completing each task. The operator watches the checklist to understand what you're doing. If you're working but not updating progress, the operator can't see your progress.
+    IMPORTANT: Call `update_progress` frequently. The operator watches the checklist to understand what you're doing.
 
     ## Verification gates
 
-    Before moving from one major phase to the next, you MUST run verification:
+    Before moving from one major phase to the next, run verification:
     1. Compile/build the project (e.g. `cargo check`, `mix compile`, `npm run build`)
     2. Run all tests (e.g. `cargo test`, `mix test`, `npm test`)
     3. Fix ALL errors and warnings before proceeding
-
-    Do NOT mark a phase as completed in update_progress until verification passes. If tests fail, fix them first. This is mandatory, not optional.
 
     ## Final verification before "done"
 
