@@ -1,0 +1,13 @@
+bitbucket:
+  workspace: hrdl
+
+default_branch: master
+
+projects:
+  - repo: hrdl/api
+    path: /home/agent/api
+    description: "Laravel JSON API"
+
+  - repo: hrdl/app
+    path: /home/agent/app
+    description: "Vue 2 SPA"

@@ -21,6 +21,12 @@ mix golem.resume <run_id>
 
 # Export files from container
 mix golem.export /home/agent/product ./output/product
+
+# Test project setup (clone repos, no agent run)
+mix golem.setup
+
+# Run a Jira ticket
+mix golem.run --jira SA-1111
 ```
 
 ## Architecture
@@ -61,6 +67,48 @@ See `config/config.exs`. Key settings:
 - `thinking_budget` — Extended thinking token budget
 - `max_steps` — Default step limit
 - `command_timeout` — Shell command timeout
+- `stall_timeout` — Shell stall detection timeout (default 120s)
+
+## Project Config
+
+Project setup is configured in `.golem/projects.yml`:
+
+```yaml
+bitbucket:
+  workspace: hrdl
+
+default_branch: master   # fallback for all projects
+
+projects:
+  - repo: hrdl/api
+    path: /home/agent/api
+    description: "Laravel JSON API"
+    setup: .golem/setup-api.sh    # optional setup script
+
+  - repo: hrdl/app
+    path: /home/agent/app
+    description: "Vue 2 SPA"
+    branch_from: main             # per-project override
+```
+
+Test the setup with `mix golem.setup` — clones all repos into the container and creates a test branch without running the agent.
+
+## Jira Integration
+
+Jira settings live in `.golem/jira.yml`:
+
+```yaml
+jira:
+  base_url: https://yoursite.atlassian.net
+```
+
+Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
+
+1. **Evaluate** — Opus assesses the ticket. Rejects if too vague or complex, comments on Jira with the reason.
+2. **Select projects** — Picks which repos from `projects.yml` are relevant to the ticket.
+3. **Setup** — Clones/pulls only selected repos, creates feature branch `golem/SA-1111-slug`.
+4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
+5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira.
 
 ## Environment Variables
 
@@ -69,25 +117,10 @@ Set in `.env` (loaded by dotenv):
 - `PERPLEXITY_API_KEY` — Required for web_search
 - `DISCORD_TOKEN` — Required for ask_user tool
 - `DISCORD_CHANNEL_ID` — Required for ask_user tool
-
-## Git Access (optional)
-
-To let the bot push/pull from GitHub or Bitbucket, generate a dedicated SSH key:
-
-```bash
-mkdir -p ssh
-ssh-keygen -t ed25519 -f ssh/id_ed25519 -N "" -C "golem-bot"
-```
-
-Then add the public key (`ssh/id_ed25519.pub`) to your GitHub/Bitbucket account. The `ssh/` directory is gitignored — keys stay local.
-
-Optionally set git identity in `.env`:
-```bash
-GIT_USER="Your Name"
-GIT_EMAIL=you@example.com
-```
-
-Recreate the container after setup: `podman rm -f golem-vm && ./containers/start.sh`
+- `JIRA_EMAIL` — Required for Jira/Bitbucket (Atlassian account email)
+- `JIRA_API_TOKEN` — Required for Jira (scoped API token)
+- `BITBUCKET_API_TOKEN` — Required for Bitbucket push/PR (scoped API token)
+- `GIT_USER` / `GIT_EMAIL` — Git identity for commits in container
 
 ## System Dependencies
 
