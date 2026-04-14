@@ -107,7 +107,7 @@ defmodule Golem.TUI do
 
   @impl true
   def planning(label \\ "Planning...") do
-    GenServer.call(__MODULE__, {:print, [[], [:yellow, "+ #{label}", :reset], []]})
+    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
   end
 
   @impl true
@@ -211,9 +211,12 @@ defmodule Golem.TUI do
 
   @impl true
   def handle_call({:init, run_id, goal}, _from, state) do
-    # Suppress console logger — warnings still go to the file logger.
-    # Logger.warning bypasses the GenServer and corrupts cursor tracking.
-    :logger.set_handler_config(:default, :level, :none)
+    # Suppress ALL console logger handlers — not just :default.
+    # Nostrum/Gun deps may add extra handlers. Any console output
+    # outside the GenServer corrupts cursor tracking.
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, :none)
+    end
     IO.write("\e[?25l")  # Hide cursor
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
     IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
@@ -269,7 +272,9 @@ defmodule Golem.TUI do
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
     IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
     IO.write("\e[?25h")  # Restore cursor
-    :logger.set_handler_config(:default, :level, :debug)
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, :debug)
+    end
     {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
   end
 
@@ -305,8 +310,10 @@ defmodule Golem.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
-    buf = "\e[#{n}A" <> String.duplicate("\e[2K\n", n) <> "\e[#{n}A"
-    IO.write(buf)
+    # Move cursor up to the top of the status area and clear everything
+    # below. \e[J is more robust than line-by-line clearing — it catches
+    # any extra content from line wrapping or external output.
+    IO.write("\e[#{n}A\e[J")
     %{state | status_lines: 0}
   end
 
