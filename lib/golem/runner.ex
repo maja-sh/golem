@@ -433,6 +433,7 @@ defmodule Golem.Runner do
         Logger.info("#{p}  (#{Golem.TUI.format_elapsed(llm_elapsed)} · #{length(tool_calls)} tools · ↓ #{Golem.TUI.format_tokens(output_tokens)})")
 
         costs = accumulate_costs(costs, response.usage, model)
+        if state.depth == 0, do: output().update_tokens(output_tokens)
 
         # Execute all tool calls, stopping early on done/think_replan
         case execute_tool_calls(tool_calls, state.depth, state) do
@@ -488,6 +489,7 @@ defmodule Golem.Runner do
         no_tool_count = Map.get(state, :no_tool_count, 0) + 1
         Logger.info("#{p}  Agent (no tool, #{no_tool_count}x): #{text}")
         costs = accumulate_costs(costs, response.usage, model)
+        if state.depth == 0, do: output().update_tokens(Map.get(response.usage, :output_tokens, 0))
 
         nudge =
           cond do
@@ -591,13 +593,18 @@ defmodule Golem.Runner do
 
   # Run a batch of read-only tools concurrently using Task.async.
   defp execute_concurrent_batch(batch, depth, show, state) do
-    # Show all tool_call headers first
-    if show do
-      Enum.each(batch, fn tc ->
-        silent = tc.name in @silent_tools
-        if not silent, do: output().tool_call(tc.name, summarize_input(tc))
-      end)
-    end
+    batch_start = System.monotonic_time(:millisecond)
+
+    # Show status while batch runs (not individual headers)
+    if show and length(batch) > 1 do
+      names = batch |> Enum.map(& &1.name) |> Enum.frequencies()
+      label = Enum.map_join(names, " + ", fn {n, c} -> if c > 1, do: "#{c}x #{n}", else: n end)
+      output().tool_call("batch", label)
+    else if show do
+      [tc] = batch
+      silent = tc.name in @silent_tools
+      if not silent, do: output().tool_call(tc.name, summarize_input(tc))
+    end end
 
     # Execute all in parallel
     tasks =
@@ -611,8 +618,23 @@ defmodule Golem.Runner do
       end)
 
     results = Task.await_many(tasks, :infinity)
+    batch_elapsed = System.monotonic_time(:millisecond) - batch_start
 
-    # Report results to TUI in order
+    # Collapsed display for multi-tool batches
+    if show and length(results) > 1 do
+      batch_summary =
+        Enum.map(results, fn {tc, result, _elapsed} ->
+          detail = summarize_input(tc)
+          is_error = case result do
+            {:continue, text} -> String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
+            _ -> false
+          end
+          {tc.name, detail, is_error}
+        end)
+      output().tool_batch_result(batch_summary, batch_elapsed)
+    end
+
+    # Build return entries + handle single-tool display and sub-agent status
     Enum.map(results, fn {tc, result, elapsed} ->
       detail = summarize_input(tc)
       silent = tc.name in @silent_tools
@@ -621,7 +643,8 @@ defmodule Golem.Runner do
         {:continue, text} ->
           is_error = String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
 
-          if show and not silent do
+          # Single-tool batch: show individual result (multi-tool already collapsed above)
+          if show and not silent and length(results) == 1 do
             if is_error,
               do: output().tool_error(tc.name, detail, text),
               else: output().tool_result(tc.name, detail, text, elapsed, nil)
@@ -635,7 +658,9 @@ defmodule Golem.Runner do
           {tc, {:text, text}}
 
         {:continue_with_image, %{text: text, base64: base64}} ->
-          if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+          if show and not silent and length(results) == 1 do
+            output().tool_result(tc.name, detail, text, elapsed, nil)
+          end
           if not show and not silent and state do
             emit_sub_agent_status(state, tc.name, detail)
           end
@@ -860,7 +885,7 @@ defmodule Golem.Runner do
           }
         ]
 
-    {:reject, %{state | messages: messages, done_rejections: rejections}}
+    {:reject, state |> Map.put(:messages, messages) |> Map.put(:done_rejections, rejections)}
   end
 
   # --- Microcompaction ---
