@@ -231,6 +231,7 @@ defmodule Golem.Sandbox do
             {:args, ["exec", "-i", "-u", "root", container, "/bin/bash"]},
             :binary,
             :use_stdio,
+            :stderr_to_stdout,
             :exit_status,
             :stream
           ])

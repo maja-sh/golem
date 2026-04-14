@@ -214,9 +214,11 @@ defmodule Golem.TUI do
     # Suppress ALL console logger handlers — not just :default.
     # Nostrum/Gun deps may add extra handlers. Any console output
     # outside the GenServer corrupts cursor tracking.
-    for id <- :logger.get_handler_ids(), id != :golem_file do
+    suppressed = for id <- :logger.get_handler_ids(), id != :golem_file do
       :logger.set_handler_config(id, :level, :none)
+      id
     end
+    tui_log("init handlers_suppressed=#{inspect(suppressed)} terminal_width=#{terminal_width()}")
     IO.write("\e[?25l")  # Hide cursor
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
     IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
@@ -233,13 +235,16 @@ defmodule Golem.TUI do
   end
 
   def handle_call({:print, lines}, _from, state) do
+    tui_log("print lines=#{length(lines)} status_lines=#{state.status_lines} progress=#{length(state.progress)}")
     state = erase_status(state)
     Enum.each(lines, &print_line/1)
     state = draw_status(state)
+    tui_log("print done status_lines=#{state.status_lines}")
     {:reply, :ok, state}
   end
 
   def handle_call({:print_raw, lines}, _from, state) do
+    tui_log("print_raw lines=#{length(lines)} status_lines=#{state.status_lines}")
     state = erase_status(state)
     max_w = terminal_width() - 1
     Enum.each(lines, fn
@@ -252,21 +257,26 @@ defmodule Golem.TUI do
   end
 
   def handle_call({:print_and_update, lines, updates}, _from, state) do
+    tui_log("print_and_update lines=#{length(lines)} status_lines=#{state.status_lines} progress=#{length(state.progress)}")
     state = erase_status(state)
     Enum.each(lines, &print_line/1)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
     state = draw_status(state)
+    tui_log("print_and_update done status_lines=#{state.status_lines}")
     {:reply, :ok, state}
   end
 
   def handle_call({:set_progress, items}, _from, state) do
+    tui_log("set_progress items=#{length(items)} status_lines=#{state.status_lines} progress_was=#{length(state.progress)}")
     state = erase_status(state)
     state = %{state | progress: items}
     state = draw_status(state)
+    tui_log("set_progress done status_lines=#{state.status_lines}")
     {:reply, :ok, state}
   end
 
   def handle_call(:stop, _from, state) do
+    tui_log("stop status_lines=#{state.status_lines}")
     if state.ticker, do: :timer.cancel(state.ticker)
     state = erase_status(state)
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
@@ -294,6 +304,7 @@ defmodule Golem.TUI do
 
   @impl true
   def handle_cast({:update, updates}, state) do
+    tui_log("cast:update status_lines=#{state.status_lines} keys=#{inspect(Keyword.keys(updates))}")
     state = erase_status(state)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
     state = draw_status(state)
@@ -310,9 +321,7 @@ defmodule Golem.TUI do
 
   defp erase_status(%{status_lines: 0} = state), do: state
   defp erase_status(%{status_lines: n} = state) do
-    # Move cursor up to the top of the status area and clear everything
-    # below. \e[J is more robust than line-by-line clearing — it catches
-    # any extra content from line wrapping or external output.
+    tui_log("erase n=#{n}")
     IO.write("\e[#{n}A\e[J")
     %{state | status_lines: 0}
   end
@@ -321,6 +330,15 @@ defmodule Golem.TUI do
   defp draw_status(state) do
     lines = build_status_lines(state)
     max_w = terminal_width() - 1
+    widths =
+      Enum.map(lines, fn line ->
+        formatted = IO.ANSI.format(line) |> IO.chardata_to_string()
+        visible_width(formatted)
+      end)
+    over = Enum.filter(Enum.zip(widths, 0..length(widths)), fn {w, _} -> w > max_w end)
+    if over != [] do
+      tui_log("draw WRAPPING lines=#{length(lines)} max_w=#{max_w} over=#{inspect(over)}")
+    end
     buf =
       lines
       |> Enum.map(fn line ->
@@ -329,6 +347,7 @@ defmodule Golem.TUI do
       end)
       |> Enum.intersperse("\n")
     IO.write([buf, "\n"])
+    tui_log("draw lines=#{length(lines)} progress=#{length(state.progress)} max_w=#{max_w}")
     %{state | status_lines: length(lines)}
   end
 
@@ -358,6 +377,18 @@ defmodule Golem.TUI do
 
     sep = if progress_lines != [], do: [[]], else: []
     [[]] ++ progress_lines ++ sep ++ [bottom]
+  end
+
+  # --- Debug Logging ---
+  # Writes directly to the :golem_file handler, bypassing console.
+
+  defp tui_log(msg) do
+    :logger.log(:info, "[TUI] #{msg}", %{})
+  end
+
+  defp visible_width(str) do
+    Regex.replace(~r/\e\[[0-9;]*m/, str, "")
+    |> String.length()
   end
 
   # --- Helpers ---
