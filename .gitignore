@@ -40,7 +40,6 @@ golem-*.tar
 # Bot SSH keys (private keys must never be committed)
 /ssh/
 
-# Jira integration config (contains org-specific settings)
-.golem/jira.yml
-.golem/*.sh
+# Project-specific config (org-specific settings, credentials)
+.golem/
 
