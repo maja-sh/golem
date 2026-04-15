@@ -176,7 +176,8 @@ defmodule Golem.ProjectSetup do
         path: p["path"],
         description: p["description"],
         setup: parse_setup(p["setup"]),
-        branch_from: p["branch_from"] || default_branch
+        branch_from: p["branch_from"] || default_branch,
+        instructions: p["instructions"]
       }
     end)
   end

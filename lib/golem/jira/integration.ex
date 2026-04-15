@@ -324,6 +324,19 @@ defmodule Golem.Jira.Integration do
         ""
       end
 
+    project_instructions =
+      config.projects
+      |> Enum.filter(& &1.instructions)
+      |> Enum.map(fn p -> "### #{p.repo}\n\n#{p.instructions}" end)
+      |> Enum.join("\n\n")
+
+    instructions_section =
+      if project_instructions != "" do
+        "\n\n## Project-Specific Instructions\n\nThese are mandatory instructions per project. Follow them exactly.\n\n#{project_instructions}"
+      else
+        ""
+      end
+
     """
     ## Project Layout
 
@@ -341,6 +354,7 @@ defmodule Golem.Jira.Integration do
     - Do NOT push — the orchestrator handles pushing after you're done.
     - Do NOT modify files outside the project directories listed above.
     #{project_docs_section}
+    #{instructions_section}
     """
   end
 

@@ -109,6 +109,7 @@ projects:
 | `description` | no | Human-readable project description, included in agent prompts |
 | `branch_from` | no | Base branch for this project (overrides `default_branch`) |
 | `setup` | no | List of setup steps to run after cloning (see below) |
+| `instructions` | no | Golem-specific instructions injected into the agent prompt. Use for verification steps, testing requirements, or project-specific workflows that don't belong in the repo's AGENTS.md |
 
 ### Setup step fields
 
