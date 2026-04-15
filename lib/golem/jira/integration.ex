@@ -6,20 +6,29 @@ defmodule Golem.Jira.Integration do
 
   require Logger
 
+  defp output, do: Golem.Output.current()
+
   @doc """
   Run the full Jira integration pipeline for a ticket key.
   """
   def run(ticket_key, opts \\ []) do
     Logger.info("Jira integration starting for #{ticket_key}")
+    output().planning("Fetching ticket #{ticket_key}...")
 
     with {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
          {:ok, ticket} <- Golem.Jira.fetch_ticket(ticket_key, config.jira_base_url),
+         :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
          {:ok, evaluation} <- evaluate_and_filter(ticket, config) do
 
       selected_config = filter_config(config, evaluation.selected_projects)
-      Logger.info("Selected projects: #{Enum.map_join(selected_config.projects, ", ", & &1.repo)}")
+      projects_label = Enum.map_join(selected_config.projects, ", ", & &1.repo)
+      Logger.info("Selected projects: #{projects_label}")
+      output().planning("Selected projects: #{projects_label}")
 
+      output().planning("Setting up projects...")
       with {:ok, branch} <- Golem.ProjectSetup.setup_projects(selected_config, ticket.key, ticket.summary) do
+        output().agent_text("Branch: #{branch}")
+
         goal = build_goal(ticket, selected_config)
         agents_md = build_agents_md(selected_config, branch, ticket)
 
@@ -28,6 +37,7 @@ defmodule Golem.Jira.Integration do
           |> Keyword.put(:agents_md, agents_md)
 
         Logger.info("Running agent for #{ticket_key}: #{ticket.summary}")
+        output().planning("Starting agent...")
 
         case Golem.run(goal, runner_opts) do
           {:ok, %{success: true} = result} ->
@@ -58,16 +68,19 @@ defmodule Golem.Jira.Integration do
 
   defp evaluate_and_filter(ticket, config) do
     Logger.info("Evaluating ticket #{ticket.key}...")
+    output().planning("Evaluating ticket...")
 
     case Golem.Jira.Evaluator.evaluate(ticket, config) do
       {:ok, %{decision: "reject", reason: reason}} ->
         Logger.info("Ticket #{ticket.key} rejected: #{reason}")
+        output().agent_text("Rejected: #{reason}")
         comment = "Golem evaluated this ticket and decided not to proceed.\n\n**Reason:** #{reason}"
         comment_on_ticket(config, ticket, comment)
         {:error, :ticket_rejected}
 
       {:ok, %{decision: "accept"} = eval} ->
         Logger.info("Ticket #{ticket.key} accepted: #{eval.reason}")
+        output().agent_text("Accepted: #{eval.reason}")
         {:ok, eval}
 
       {:error, reason} ->
@@ -84,6 +97,7 @@ defmodule Golem.Jira.Integration do
 
   defp handle_success(config, ticket, branch, result) do
     Logger.info("Agent succeeded for #{ticket.key}, pushing and creating PRs")
+    output().planning("Pushing branches and creating PRs...")
 
     pr_urls =
       config.projects

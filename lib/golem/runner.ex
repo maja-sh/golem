@@ -294,22 +294,104 @@ defmodule Golem.Runner do
     model = Application.get_env(:golem, :planner_model)
     max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
+    tools = Golem.Tools.for_planner()
+    system = Golem.Prompt.planner_system(:explore)
 
     messages = [
       %{role: "user", content: "Create a plan for this goal:\n\n#{goal}"}
     ]
 
-    case Golem.Claude.call(messages,
-           model: model,
-           max_tokens: max_tokens,
-           system: Golem.Prompt.planner_system(),
-           thinking_budget: thinking_budget
-         ) do
-      {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
-      {:ok, _} -> {:error, :no_plan_text}
-      {:error, reason} -> {:error, reason}
+    planner_loop(messages, model, max_tokens, thinking_budget, tools, system, 1)
+  end
+
+  @max_planner_steps 30
+
+  defp planner_loop(_messages, _model, _max_tokens, _tb, _tools, _system, step)
+       when step > @max_planner_steps do
+    {:error, :planner_max_steps}
+  end
+
+  defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, step) do
+    Logger.info("  [planner] step #{step}")
+
+    result = Golem.Claude.call(messages,
+      model: model,
+      max_tokens: max_tokens,
+      system: system,
+      tools: tools,
+      thinking_budget: thinking_budget
+    )
+
+    case result do
+      {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
+        # Show planner text in TUI
+        if response.text, do: output().agent_text(response.text)
+
+        # Check if create_plan was called
+        case Enum.find(tool_calls, &(&1.name == "create_plan")) do
+          %{input: %{"plan" => plan}} ->
+            {:ok, plan}
+
+          nil ->
+            # Execute read-only tools and continue the loop
+            tool_results = execute_planner_tools(tool_calls)
+
+            # Build the assistant message with tool_use blocks
+            assistant_content =
+              (if response.text, do: [%{type: "text", text: response.text}], else: []) ++
+              Enum.map(tool_calls, fn tc ->
+                %{type: "tool_use", id: tc.id, name: tc.name, input: tc.input}
+              end)
+
+            # Build tool_result messages
+            result_content =
+              Enum.map(tool_results, fn {id, result_text} ->
+                %{type: "tool_result", tool_use_id: id, content: result_text}
+              end)
+
+            updated = messages ++ [
+              %{role: "assistant", content: assistant_content},
+              %{role: "user", content: result_content}
+            ]
+
+            planner_loop(updated, model, max_tokens, thinking_budget, tools, system, step + 1)
+        end
+
+      # No tool calls — planner responded with text only (legacy behavior)
+      {:ok, %{text: text}} when is_binary(text) ->
+        {:ok, text}
+
+      {:ok, _} ->
+        {:error, :no_plan_text}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp execute_planner_tools(tool_calls) do
+    Enum.map(tool_calls, fn tc ->
+      output().tool_call(tc.name, summarize_planner_input(tc))
+
+      start = System.monotonic_time(:millisecond)
+      {tag, result_text} = Golem.ToolHandler.execute(tc, 0)
+      elapsed = System.monotonic_time(:millisecond) - start
+
+      # Truncate for display
+      display = String.slice(result_text, 0, 200)
+      output().tool_result(tc.name, summarize_planner_input(tc), display, elapsed, nil)
+
+      Logger.info("  [planner] #{tc.name} -> #{String.slice(result_text, 0, 100)}")
+      _ = tag
+      {tc.id, result_text}
+    end)
+  end
+
+  defp summarize_planner_input(%{name: "read_file", input: input}), do: input["path"] || ""
+  defp summarize_planner_input(%{name: "list_directory", input: input}), do: input["path"] || ""
+  defp summarize_planner_input(%{name: "glob", input: input}), do: input["pattern"] || ""
+  defp summarize_planner_input(%{name: "grep", input: input}), do: "#{input["pattern"]} #{input["path"] || ""}"
+  defp summarize_planner_input(%{name: name}), do: name
 
   defp replan(goal, current_plan, reasoning, recent_history) do
     model = Application.get_env(:golem, :planner_model)

@@ -161,6 +161,33 @@ defmodule Golem.Prompt do
   System prompt for the planner — creates and revises plans using Opus.
   """
   def planner_system do
+    planner_system_text()
+  end
+
+  def planner_system(:explore) do
+    """
+    #{planner_system_text()}
+
+    ## How you work
+
+    You have read-only tools to explore the codebase: `read_file`, `list_directory`, `glob`, and `grep`. Use them to understand the existing code before creating your plan.
+
+    **Your workflow:**
+    1. Read the goal and identify what parts of the codebase are relevant
+    2. Use your tools to explore — find existing patterns, understand the architecture, locate files you'll need to modify
+    3. Once you have enough context, call `create_plan` with your final plan
+
+    Be thorough in your exploration but focused — read the files that matter for this specific task. Look for:
+    - Existing patterns to follow (how similar features are implemented)
+    - Files that will need modification
+    - Test patterns and conventions
+    - Related components that your changes must integrate with
+
+    Between tool calls, briefly state what you're looking for (under 20 words). Do not narrate your findings — save the synthesis for the plan.
+    """
+  end
+
+  defp planner_system_text do
     """
     You are a planning agent. Your job is to create and revise actionable plans for an autonomous agent that works inside a Linux container.
 

@@ -25,6 +25,19 @@ defmodule Golem.Tools do
   """
   def all, do: for_depth(0)
 
+  @doc """
+  Returns read-only tools for the planner plus a create_plan tool to finalize.
+  """
+  def for_planner do
+    [
+      read_file_tool(),
+      list_directory_tool(),
+      glob_tool(),
+      grep_tool(),
+      create_plan_tool()
+    ]
+  end
+
   defp sub_agent_tool do
     tool("sub_agent", "Spawn a sub-agent to handle a self-contained sub-task. The sub-agent gets its own context window and works independently, then returns a summary. Use this for tasks that are complex enough to need many steps but don't need your full context — e.g. \"research how to set up nginx reverse proxy\", \"write the test suite for module X\", \"explore this directory and summarize the codebase\".", %{
       type: "object",
@@ -67,6 +80,63 @@ defmodule Golem.Tools do
     })
   end
 
+  defp read_file_tool do
+    tool("read_file", "Read a file from the container. For large files, use offset and limit to read specific line ranges instead of the whole file.", %{
+      type: "object",
+      properties: %{
+        path: %{type: "string", description: "Absolute file path"},
+        offset: %{type: "integer", description: "Start reading from this line number (1-based). Omit to start from the beginning."},
+        limit: %{type: "integer", description: "Maximum number of lines to return. Omit to read the entire file. Use this for large files to avoid flooding your context."}
+      },
+      required: ["path"]
+    })
+  end
+
+  defp list_directory_tool do
+    tool("list_directory", "List the contents of a directory with file types and sizes.", %{
+      type: "object",
+      properties: %{
+        path: %{type: "string", description: "Absolute directory path"}
+      },
+      required: ["path"]
+    })
+  end
+
+  defp glob_tool do
+    tool("glob", "Find files matching a glob pattern. Returns matching file paths.", %{
+      type: "object",
+      properties: %{
+        pattern: %{type: "string", description: "Glob pattern (e.g. **/*.py, src/**/*.ts, *.json)"},
+        path: %{type: "string", description: "Directory to search in (default: current working directory)"}
+      },
+      required: ["pattern"]
+    })
+  end
+
+  defp grep_tool do
+    tool("grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. Results are capped at 200 lines — use offset to paginate if needed.", %{
+      type: "object",
+      properties: %{
+        pattern: %{type: "string", description: "Regex pattern to search for"},
+        path: %{type: "string", description: "File or directory to search in (default: current working directory)"},
+        glob: %{type: "string", description: "Only search files matching this glob (e.g. *.py)"},
+        context: %{type: "integer", description: "Number of context lines before and after each match (default: 0)"},
+        offset: %{type: "integer", description: "Skip this many lines of output (for paginating large result sets). Default: 0."}
+      },
+      required: ["pattern"]
+    })
+  end
+
+  defp create_plan_tool do
+    tool("create_plan", "Finalize your plan after exploring the codebase. Call this once you've read enough code to create a concrete, actionable plan.", %{
+      type: "object",
+      properties: %{
+        plan: %{type: "string", description: "The full plan as a markdown checklist grouped into phases."}
+      },
+      required: ["plan"]
+    })
+  end
+
   defp base_tools do
     [
       tool("shell", "Run a shell command in the Linux container. Returns stdout/stderr and exit code.", %{
@@ -84,15 +154,7 @@ defmodule Golem.Tools do
         },
         required: ["path", "content"]
       }),
-      tool("read_file", "Read a file from the container. For large files, use offset and limit to read specific line ranges instead of the whole file.", %{
-        type: "object",
-        properties: %{
-          path: %{type: "string", description: "Absolute file path"},
-          offset: %{type: "integer", description: "Start reading from this line number (1-based). Omit to start from the beginning."},
-          limit: %{type: "integer", description: "Maximum number of lines to return. Omit to read the entire file. Use this for large files to avoid flooding your context."}
-        },
-        required: ["path"]
-      }),
+      read_file_tool(),
       tool("edit_file", "Make a targeted edit to a file. Finds old_string and replaces it with new_string. The old_string must match exactly (including whitespace/indentation). For creating new files, use write_file instead.", %{
         type: "object",
         properties: %{
@@ -102,32 +164,9 @@ defmodule Golem.Tools do
         },
         required: ["path", "old_string", "new_string"]
       }),
-      tool("list_directory", "List the contents of a directory with file types and sizes.", %{
-        type: "object",
-        properties: %{
-          path: %{type: "string", description: "Absolute directory path"}
-        },
-        required: ["path"]
-      }),
-      tool("glob", "Find files matching a glob pattern. Returns matching file paths.", %{
-        type: "object",
-        properties: %{
-          pattern: %{type: "string", description: "Glob pattern (e.g. **/*.py, src/**/*.ts, *.json)"},
-          path: %{type: "string", description: "Directory to search in (default: current working directory)"}
-        },
-        required: ["pattern"]
-      }),
-      tool("grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. Results are capped at 200 lines — use offset to paginate if needed.", %{
-        type: "object",
-        properties: %{
-          pattern: %{type: "string", description: "Regex pattern to search for"},
-          path: %{type: "string", description: "File or directory to search in (default: current working directory)"},
-          glob: %{type: "string", description: "Only search files matching this glob (e.g. *.py)"},
-          context: %{type: "integer", description: "Number of context lines before and after each match (default: 0)"},
-          offset: %{type: "integer", description: "Skip this many lines of output (for paginating large result sets). Default: 0."}
-        },
-        required: ["pattern"]
-      }),
+      list_directory_tool(),
+      glob_tool(),
+      grep_tool(),
       tool("web_search", "Search the web for information. Returns synthesized answers with source citations.", %{
         type: "object",
         properties: %{
