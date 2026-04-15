@@ -270,6 +270,29 @@ defmodule Golem.Jira.Integration do
       end)
       |> Enum.join("\n")
 
+    # Read actual AGENTS.md / CLAUDE.md from each project root
+    project_docs =
+      config.projects
+      |> Enum.flat_map(fn p ->
+        ["AGENTS.md", "CLAUDE.md"]
+        |> Enum.map(fn name ->
+          case Golem.Sandbox.exec("cat #{p.path}/#{name} 2>/dev/null", timeout: 5_000) do
+            {:ok, %{exit_code: 0, output: content}} when byte_size(content) > 0 ->
+              "## #{p.repo} — #{name}\n\n#{String.trim(content)}"
+            _ -> nil
+          end
+        end)
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n\n")
+
+    project_docs_section =
+      if project_docs != "" do
+        "\n\n## Project Documentation\n\n#{project_docs}"
+      else
+        ""
+      end
+
     """
     ## Project Layout
 
@@ -286,6 +309,7 @@ defmodule Golem.Jira.Integration do
     - Always prefix commit messages with `[#{ticket.key}]`.
     - Do NOT push — the orchestrator handles pushing after you're done.
     - Do NOT modify files outside the project directories listed above.
+    #{project_docs_section}
     """
   end
 
