@@ -86,13 +86,38 @@ projects:
     branch_from: main             # per-project override
     setup:
       - label: "install deps"
-        run: "apt-get install -y php8.4"       # runs as root
+        run: "apt-get install -y php8.4"
       - label: "composer install"
-        run: "composer install --no-interaction" # auto-cds into project path
-        user: agent                              # runs as container user
+        run: "composer install --no-interaction"
+        user: agent
 ```
 
-Setup steps auto-`cd` into the project's `path` before running. Steps without `user:` run as root (for system installs), steps with `user: agent` run as the container user (for project-level commands). Each `mix golem.setup` does a clean clone (removes existing dir first).
+### Top-level fields
+
+| Field | Required | Description |
+|---|---|---|
+| `bitbucket.workspace` | yes | Bitbucket workspace slug |
+| `default_branch` | no | Fallback base branch for all projects (default: `main`) |
+
+### Project fields
+
+| Field | Required | Description |
+|---|---|---|
+| `repo` | yes | Bitbucket repo path (e.g. `hrdl/api`) |
+| `path` | yes | Absolute path in the container where the repo is cloned |
+| `description` | no | Human-readable project description, included in agent prompts |
+| `branch_from` | no | Base branch for this project (overrides `default_branch`) |
+| `setup` | no | List of setup steps to run after cloning (see below) |
+
+### Setup step fields
+
+| Field | Required | Description |
+|---|---|---|
+| `label` | yes | Display name shown in the TUI during setup |
+| `run` | yes | Shell command to execute. Auto-`cd`s into the project's `path` before running |
+| `user` | no | Run as this user (e.g. `agent`). Omit to run as root |
+
+Setup steps without `user:` run as root (for system installs like `apt-get`). Steps with `user: agent` run as the container user (for project-level commands like `composer install`). Each `mix golem.setup` does a clean clone (removes existing dir first).
 
 Test the setup with `mix golem.setup` — clones all repos into the container and runs setup scripts.
 
