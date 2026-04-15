@@ -39,6 +39,40 @@ defmodule Golem.Jira do
   end
 
   @doc """
+  Transition a ticket to a target status by name.
+  Discovers the transition ID dynamically from available transitions.
+  """
+  def transition_ticket(key, target_name, base_url) do
+    url = "#{api_base(base_url)}/rest/api/3/issue/#{key}/transitions"
+
+    case Req.get(url, headers: auth_headers()) do
+      {:ok, %{status: 200, body: %{"transitions" => transitions}}} ->
+        target = String.downcase(target_name)
+
+        case Enum.find(transitions, fn t -> String.downcase(t["name"]) == target end) do
+          %{"id" => id} ->
+            case Req.post(url, json: %{transition: %{id: id}}, headers: auth_headers()) do
+              {:ok, %{status: status}} when status in [200, 204] -> :ok
+              {:ok, %{status: status, body: resp}} ->
+                {:error, "Transition failed (#{status}): #{inspect(resp)}"}
+              {:error, reason} ->
+                {:error, "Transition request failed: #{inspect(reason)}"}
+            end
+
+          nil ->
+            available = Enum.map_join(transitions, ", ", & &1["name"])
+            {:error, "No transition '#{target_name}' available. Available: #{available}"}
+        end
+
+      {:ok, %{status: status, body: resp}} ->
+        {:error, "Failed to fetch transitions (#{status}): #{inspect(resp)}"}
+
+      {:error, reason} ->
+        {:error, "Failed to fetch transitions: #{inspect(reason)}"}
+    end
+  end
+
+  @doc """
   Add a comment to a Jira ticket.
   """
   def add_comment(key, body_text, base_url) do

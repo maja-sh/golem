@@ -114,6 +114,13 @@ defmodule Golem.Jira.Integration do
     comment = build_success_comment(result.summary, pr_urls)
     comment_on_ticket(config, ticket, comment)
 
+    # Transition ticket to done status
+    transition_name = config.jira_done_transition
+    case Golem.Jira.transition_ticket(ticket.key, transition_name, config.jira_base_url) do
+      :ok -> Logger.info("Transitioned #{ticket.key} to '#{transition_name}'")
+      {:error, reason} -> Logger.warning("Failed to transition #{ticket.key}: #{reason}")
+    end
+
     {:ok, result}
   end
 

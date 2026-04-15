@@ -43,7 +43,10 @@ defmodule Golem.ProjectSetup do
   defp load_jira_config do
     case YamlElixir.read_from_file(@jira_path) do
       {:ok, config} ->
-        {:ok, %{jira_base_url: get_in(config, ["jira", "base_url"])}}
+        {:ok, %{
+          jira_base_url: get_in(config, ["jira", "base_url"]),
+          jira_done_transition: get_in(config, ["jira", "done_transition"]) || "Done"
+        }}
 
       {:error, reason} ->
         {:error, "Failed to read #{@jira_path}: #{inspect(reason)}"}
