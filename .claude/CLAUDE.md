@@ -141,14 +141,18 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 ## Environment Variables
 
 Set in `.env` (loaded by dotenv):
-- `ANTHROPIC_API_KEY` — Required
-- `PERPLEXITY_API_KEY` — Required for web_search
-- `DISCORD_TOKEN` — Required for ask_user tool
-- `DISCORD_CHANNEL_ID` — Required for ask_user tool
-- `JIRA_EMAIL` — Required for Jira/Bitbucket (Atlassian account email)
-- `JIRA_API_TOKEN` — Required for Jira (scoped API token)
-- `BITBUCKET_API_TOKEN` — Required for Bitbucket push/PR (scoped API token)
-- `GIT_USER` / `GIT_EMAIL` — Git identity for commits in container
+
+| Variable | Required | Description | Scopes / Notes |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | Claude API key | — |
+| `PERPLEXITY_API_KEY` | for web_search | Perplexity search API key | — |
+| `DISCORD_TOKEN` | for ask_user | Discord bot token | Send Messages, Read Message History |
+| `DISCORD_CHANNEL_ID` | for ask_user | Discord channel for ask_user | — |
+| `JIRA_EMAIL` | for Jira | Atlassian account email | Shared with Bitbucket basic auth |
+| `JIRA_API_TOKEN` | for Jira | Atlassian API token | `read:jira-work`, `write:jira-work` (read issues, post comments) |
+| `BITBUCKET_API_TOKEN` | for Bitbucket | Bitbucket app password | `Repositories: Read`, `Repositories: Write`, `Pull requests: Write` (clone, push, create PRs) |
+| `GIT_USER` | no | Git author name in container | Defaults to "Golem Bot" |
+| `GIT_EMAIL` | no | Git author email in container | Defaults to "golem@bot.local" |
 
 ## System Dependencies
 
