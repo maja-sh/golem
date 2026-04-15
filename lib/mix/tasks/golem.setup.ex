@@ -74,16 +74,11 @@ defmodule Mix.Tasks.Golem.Setup do
   end
 
   defp do_clone(project, clone_url) do
-    result =
-      case Golem.Sandbox.exec("test -d #{project.path}/.git", timeout: 5_000) do
-        {:ok, %{exit_code: 0}} ->
-          cmd = "cd #{project.path} && git fetch origin && git checkout #{project.branch_from} && git reset --hard origin/#{project.branch_from}"
-          run_step("pull #{project.branch_from}", cmd)
+    # Remove existing directory for a clean clone
+    Golem.Sandbox.exec("rm -rf #{project.path}", timeout: 60_000)
 
-        _ ->
-          cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path}"
-          run_step("clone (#{project.branch_from})", cmd)
-      end
+    cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path}"
+    result = run_step("clone (#{project.branch_from})", cmd)
 
     # Git runs as root via sandbox — fix ownership so agent user can work with the files
     with :ok <- result do
@@ -96,9 +91,9 @@ defmodule Mix.Tasks.Golem.Setup do
   defp do_setup(%{setup: nil}), do: :ok
   defp do_setup(%{setup: []}), do: :ok
 
-  defp do_setup(%{setup: steps}) when is_list(steps) do
+  defp do_setup(%{setup: steps, path: path}) when is_list(steps) do
     Enum.reduce_while(steps, :ok, fn {label, command, user}, :ok ->
-      cmd = wrap_user(command, user)
+      cmd = "cd #{path} && #{command}" |> wrap_user(user)
       case run_step(label, cmd, timeout: 300_000) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}

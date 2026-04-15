@@ -83,15 +83,18 @@ projects:
   - repo: hrdl/api
     path: /home/agent/api
     description: "Laravel JSON API"
-    setup: .golem/setup-api.sh    # optional setup script
-
-  - repo: hrdl/app
-    path: /home/agent/app
-    description: "Vue 2 SPA"
     branch_from: main             # per-project override
+    setup:
+      - label: "install deps"
+        run: "apt-get install -y php8.4"       # runs as root
+      - label: "composer install"
+        run: "composer install --no-interaction" # auto-cds into project path
+        user: agent                              # runs as container user
 ```
 
-Test the setup with `mix golem.setup` — clones all repos into the container and creates a test branch without running the agent.
+Setup steps auto-`cd` into the project's `path` before running. Steps without `user:` run as root (for system installs), steps with `user: agent` run as the container user (for project-level commands). Each `mix golem.setup` does a clean clone (removes existing dir first).
+
+Test the setup with `mix golem.setup` — clones all repos into the container and runs setup scripts.
 
 ## Jira Integration
 

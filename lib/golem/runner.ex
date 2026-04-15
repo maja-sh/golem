@@ -151,11 +151,11 @@ defmodule Golem.Runner do
           create_plan(goal)
 
         plan ->
-          {:ok, plan}
+          {:ok, plan, %{total_dollars: 0.0}}
       end
 
     case plan_result do
-      {:ok, plan} ->
+      {:ok, plan, planner_costs} ->
         if depth == 0, do: output().plan_created(plan)
         Logger.info("#{prefix}Plan created (logged to file)")
 
@@ -172,7 +172,7 @@ defmodule Golem.Runner do
           depth: depth,
           prefix: prefix,
           history: [],
-          costs: %{total_dollars: 0.0},
+          costs: planner_costs,
           errors: [],
           agents_md: opts[:agents_md],
           phase_costs: [],
@@ -296,22 +296,26 @@ defmodule Golem.Runner do
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
     tools = Golem.Tools.for_planner()
     system = Golem.Prompt.planner_system(:explore)
+    costs = %{total_dollars: 0.0}
 
     messages = [
       %{role: "user", content: "Create a plan for this goal:\n\n#{goal}"}
     ]
 
-    planner_loop(messages, model, max_tokens, thinking_budget, tools, system, 1)
+    planner_loop(messages, model, max_tokens, thinking_budget, tools, system, costs, 1)
   end
 
-  @max_planner_steps 30
+  defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, costs, step) do
+    max = Application.get_env(:golem, :planner_max_steps, 50)
 
-  defp planner_loop(_messages, _model, _max_tokens, _tb, _tools, _system, step)
-       when step > @max_planner_steps do
-    {:error, :planner_max_steps}
+    if step > max do
+      {:error, :planner_max_steps}
+    else
+      planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, step)
+    end
   end
 
-  defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, step) do
+  defp planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, step) do
     Logger.info("  [planner] step #{step}")
 
     result = Golem.Claude.call(messages,
@@ -324,13 +328,15 @@ defmodule Golem.Runner do
 
     case result do
       {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
+        costs = accumulate_costs(costs, response.usage, model)
+
         # Show planner text in TUI
         if response.text, do: output().agent_text(response.text)
 
         # Check if create_plan was called
         case Enum.find(tool_calls, &(&1.name == "create_plan")) do
           %{input: %{"plan" => plan}} ->
-            {:ok, plan}
+            {:ok, plan, costs}
 
           nil ->
             # Execute read-only tools and continue the loop
@@ -354,12 +360,13 @@ defmodule Golem.Runner do
               %{role: "user", content: result_content}
             ]
 
-            planner_loop(updated, model, max_tokens, thinking_budget, tools, system, step + 1)
+            planner_loop(updated, model, max_tokens, thinking_budget, tools, system, costs, step + 1)
         end
 
       # No tool calls — planner responded with text only (legacy behavior)
-      {:ok, %{text: text}} when is_binary(text) ->
-        {:ok, text}
+      {:ok, %{text: text} = response} when is_binary(text) ->
+        costs = accumulate_costs(costs, response.usage, model)
+        {:ok, text, costs}
 
       {:ok, _} ->
         {:error, :no_plan_text}

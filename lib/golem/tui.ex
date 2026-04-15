@@ -107,7 +107,7 @@ defmodule Golem.TUI do
 
   @impl true
   def planning(label \\ "Planning...") do
-    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]]})
+    GenServer.call(__MODULE__, {:print, [[], [:yellow, "+ #{label}", :reset]]})
   end
 
   @impl true

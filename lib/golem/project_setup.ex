@@ -65,7 +65,7 @@ defmodule Golem.ProjectSetup do
 
         IO.puts("\n--- #{project.repo} ---")
         with :ok <- clone_or_pull(project.path, clone_url, project.branch_from, true),
-             :ok <- run_setup_script(project.setup, true) do
+             :ok <- run_setup_script(project.setup, project.path, true) do
           IO.puts("  ✓ #{project.repo} ready")
           {:ok, project}
         else
@@ -192,24 +192,18 @@ defmodule Golem.ProjectSetup do
 
     with :ok <- clone_or_pull(project.path, clone_url, project.branch_from, false),
          :ok <- create_branch(project.path, branch, project.branch_from),
-         :ok <- run_setup_script(project.setup, false) do
+         :ok <- run_setup_script(project.setup, project.path, false) do
       :ok
     end
   end
 
   defp clone_or_pull(path, clone_url, branch_from, verbose) do
-    result =
-      case Golem.Sandbox.exec("test -d #{path}/.git", timeout: 5_000) do
-        {:ok, %{exit_code: 0}} ->
-          cmd = "cd #{path} && git fetch origin && git checkout #{branch_from} && git reset --hard origin/#{branch_from}"
-          run_cmd(cmd, timeout: 60_000, verbose: verbose)
+    # Remove existing directory for a clean clone
+    Golem.Sandbox.exec("rm -rf #{path}", timeout: 60_000)
 
-        _ ->
-          cmd = "git clone --branch #{branch_from} #{clone_url} #{path}"
-          # Redact token from display
-          display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
-          run_cmd(cmd, timeout: 120_000, verbose: verbose, display: display)
-      end
+    cmd = "git clone --branch #{branch_from} #{clone_url} #{path}"
+    display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
+    result = run_cmd(cmd, timeout: 120_000, verbose: verbose, display: display)
 
     # Git runs as root via sandbox — fix ownership so agent user can work with the files
     with :ok <- result do
@@ -235,13 +229,13 @@ defmodule Golem.ProjectSetup do
     end
   end
 
-  defp run_setup_script(nil, _verbose), do: :ok
-  defp run_setup_script([], _verbose), do: :ok
+  defp run_setup_script(nil, _path, _verbose), do: :ok
+  defp run_setup_script([], _path, _verbose), do: :ok
 
   # List of steps: [{label, command, user}, ...]
-  defp run_setup_script(steps, verbose) when is_list(steps) do
+  defp run_setup_script(steps, path, verbose) when is_list(steps) do
     Enum.reduce_while(steps, :ok, fn {label, command, user}, :ok ->
-      cmd = wrap_user(command, user)
+      cmd = "cd #{path} && #{command}" |> wrap_user(user)
       case run_cmd(cmd, timeout: 300_000, verbose: verbose, display: label) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}
@@ -250,7 +244,7 @@ defmodule Golem.ProjectSetup do
   end
 
   # Legacy: single script path
-  defp run_setup_script(script_path, verbose) when is_binary(script_path) do
+  defp run_setup_script(script_path, _path, verbose) when is_binary(script_path) do
     case File.read(script_path) do
       {:ok, content} ->
         if verbose, do: IO.puts("  Running setup script: #{script_path}")

@@ -45,6 +45,7 @@ defmodule Golem.Application do
       planner_model: "claude-opus-4-20250514",
       executor_model: "claude-sonnet-4-20250514",
       planner_max_tokens: 16_000,
+      planner_max_steps: 75,
       executor_max_tokens: 16_000,
       thinking_budget: 10_000,
       max_steps: 200,

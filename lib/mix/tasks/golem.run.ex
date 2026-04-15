@@ -26,6 +26,11 @@ defmodule Mix.Tasks.Golem.Run do
     # Start the application
     Mix.Task.run("app.start")
 
+    # Suppress console logger — keep only file logger
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, :none)
+    end
+
     if opts[:jira] do
       run_jira(opts[:jira], opts)
     else
@@ -44,7 +49,7 @@ defmodule Mix.Tasks.Golem.Run do
       {:ok, _} -> :ok
       {:error, :max_steps_reached} -> :ok
       {:error, reason} ->
-        Mix.shell().error("\n✗ Jira integration error: #{inspect(reason)}")
+        Mix.shell().error("\n✗ #{format_error(reason)}")
     end
   end
 
@@ -98,7 +103,7 @@ defmodule Mix.Tasks.Golem.Run do
       {:ok, _} -> :ok          # TUI handles it
       {:error, :max_steps_reached} -> :ok  # TUI handles it
       {:error, reason} ->
-        Mix.shell().error("\n✗ Error: #{inspect(reason)}")
+        Mix.shell().error("\n✗ #{format_error(reason)}")
     end
   end
 
@@ -109,6 +114,14 @@ defmodule Mix.Tasks.Golem.Run do
       nil -> String.trim(content)
     end
   end
+
+  defp format_error(:planner_max_steps), do: "Planner hit max exploration steps — increase :planner_max_steps config"
+  defp format_error(:ticket_rejected), do: "Ticket was rejected by evaluator"
+  defp format_error(:budget_exceeded), do: "Cost budget exceeded"
+  defp format_error(:stopped), do: "Run was stopped"
+  defp format_error({status, %{"error" => %{"message" => msg}}}) when is_integer(status), do: msg
+  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason), do: inspect(reason)
 
   defp list_scenarios do
     case File.ls("scenarios") do
