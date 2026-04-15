@@ -47,7 +47,7 @@ defmodule Golem.TUI do
       [first | rest] ->
         [[] | [[:cyan, "● ", :reset, first] | Enum.map(rest, &[:faint, "  ", :reset, &1])]]
     end
-    GenServer.call(__MODULE__, {:print, formatted})
+    GenServer.call(__MODULE__, {:print, formatted, :agent_text})
   end
 
   @impl true
@@ -107,7 +107,7 @@ defmodule Golem.TUI do
 
   @impl true
   def planning(label \\ "Planning...") do
-    GenServer.call(__MODULE__, {:print, [[], [:yellow, "+ #{label}", :reset]]})
+    GenServer.call(__MODULE__, {:print, [[:yellow, "+ #{label}", :reset]], :planning})
   end
 
   @impl true
@@ -115,8 +115,9 @@ defmodule Golem.TUI do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
     GenServer.call(__MODULE__, {:print, [
+      [],
       [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset]
-    ]})
+    ], :plan_created})
   end
 
   def replan_start, do: planning("Re-planning with Opus...")
@@ -149,6 +150,11 @@ defmodule Golem.TUI do
 
   @impl true
   def tool_batch_result(_results, _elapsed), do: :ok
+
+  @impl true
+  def update_cost(cost_str) do
+    GenServer.cast(__MODULE__, {:update, cost: cost_str})
+  end
 
   @impl true
   def update_tokens(_count), do: :ok
@@ -205,7 +211,7 @@ defmodule Golem.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil
+      ticker: nil, last_output: nil
     }}
   end
 
@@ -218,8 +224,17 @@ defmodule Golem.TUI do
       :logger.set_handler_config(id, :level, :none)
     end
     IO.write("\e[?25l")  # Hide cursor
+    width = terminal_width() - 4
+    goal_lines =
+      goal
+      |> String.split("\n", trim: true)
+      |> Enum.take(5)
+      |> Enum.flat_map(&wrap_text(&1, width))
+      |> Enum.map(fn line -> IO.ANSI.format([:faint, "  #{line}", :reset]) end)
+
+    IO.puts("")
     IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
-    IO.puts(IO.ANSI.format([:faint, "  #{goal}", :reset]))
+    Enum.each(goal_lines, &IO.puts/1)
     IO.puts("")
 
     {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
@@ -236,6 +251,25 @@ defmodule Golem.TUI do
     state = erase_status(state)
     Enum.each(lines, &print_line/1)
     state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:print, lines, output_type}, _from, state) do
+    state = erase_status(state)
+
+    # Add spacing based on what came before
+    lines =
+      case {output_type, state.last_output} do
+        # Planning after planning — no blank line (group them)
+        {:planning, :planning} -> lines
+        # Planning after anything else — blank line before
+        {:planning, _} -> [[] | lines]
+        # Agent text already includes its own leading blank line
+        _ -> lines
+      end
+
+    Enum.each(lines, &print_line/1)
+    state = draw_status(%{state | last_output: output_type})
     {:reply, :ok, state}
   end
 

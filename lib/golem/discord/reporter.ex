@@ -58,6 +58,9 @@ defmodule Golem.Discord.Reporter do
   def tool_batch_result(_results, _elapsed), do: :ok
 
   @impl true
+  def update_cost(_cost), do: :ok
+
+  @impl true
   def update_tokens(_count), do: :ok
 
   @impl true

@@ -164,7 +164,14 @@ defmodule Golem.Prompt do
     planner_system_text()
   end
 
-  def planner_system(:explore) do
+  def planner_system(:explore, agents_md \\ nil) do
+    agents_section =
+      if agents_md do
+        "\n\n## Project Instructions (from AGENTS.md)\n\n#{agents_md}"
+      else
+        ""
+      end
+
     """
     #{planner_system_text()}
 
@@ -174,16 +181,24 @@ defmodule Golem.Prompt do
 
     **Your workflow:**
     1. Read the goal and identify what parts of the codebase are relevant
-    2. Use your tools to explore — find existing patterns, understand the architecture, locate files you'll need to modify
-    3. Once you have enough context, call `create_plan` with your final plan
+    2. Use your tools to get the lay of the land — directory structures, file names, key patterns
+    3. Once you understand the architecture well enough to make a concrete plan, call `create_plan`
 
-    Be thorough in your exploration but focused — read the files that matter for this specific task. Look for:
-    - Existing patterns to follow (how similar features are implemented)
-    - Files that will need modification
-    - Test patterns and conventions
-    - Related components that your changes must integrate with
+    **What to explore:**
+    - Directory structure and file organization (`list_directory`, `glob`)
+    - How similar features are structured — find a reference implementation and skim it
+    - Key file paths the executor will need to modify
 
-    Between tool calls, briefly state what you're looking for (under 20 words). Do not narrate your findings — save the synthesis for the plan.
+    **What NOT to do:**
+    - Don't read entire files line by line. Skim structure, don't study implementation details.
+    - Don't read more than 2-3 files in full. Use `grep` to locate patterns, `read_file` with `offset`/`limit` for targeted sections.
+    - Don't explore exhaustively. The executor has the same read tools and will explore further as it works.
+    - Your job is to create a *roadmap*, not to understand every line of code. Plan at the level of "modify X to add Y following the pattern in Z."
+
+    As you explore, AGENTS.md and CLAUDE.md files found in directories you visit will be automatically appended to tool results. These contain project-specific instructions and conventions — pay attention to them.
+
+    Between tool calls, briefly state what you're looking for (under 10 words). Do not narrate findings.
+    #{agents_section}
     """
   end
 

@@ -128,10 +128,10 @@ defmodule Golem.Tools do
   end
 
   defp create_plan_tool do
-    tool("create_plan", "Finalize your plan after exploring the codebase. Call this once you've read enough code to create a concrete, actionable plan.", %{
+    tool("create_plan", "Finalize your plan after exploring the codebase. Call this once you've read enough code to create a concrete, actionable plan. Every step that creates or modifies files MUST include a `verify:` line with a shell command that exits 0 on success (e.g. `verify: test -f /path/to/file`, `verify: cd /path && php artisan test --filter=SomeTest`). This is required — the system uses these to track progress.", %{
       type: "object",
       properties: %{
-        plan: %{type: "string", description: "The full plan as a markdown checklist grouped into phases."}
+        plan: %{type: "string", description: "The full plan as a markdown checklist grouped into phases. Each step must have an indented `verify:` line with a shell command."}
       },
       required: ["plan"]
     })

@@ -15,10 +15,12 @@ defmodule Golem.Jira.Integration do
     Logger.info("Jira integration starting for #{ticket_key}")
     output().planning("Fetching ticket #{ticket_key}...")
 
+    skip_eval = Keyword.get(opts, :skip_eval, false)
+
     with {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
          {:ok, ticket} <- Golem.Jira.fetch_ticket(ticket_key, config.jira_base_url),
          :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
-         {:ok, evaluation} <- evaluate_and_filter(ticket, config) do
+         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval) do
 
       selected_config = filter_config(config, evaluation.selected_projects)
       projects_label = Enum.map_join(selected_config.projects, ", ", & &1.repo)
@@ -65,6 +67,16 @@ defmodule Golem.Jira.Integration do
   end
 
   # --- Evaluation ---
+
+  defp evaluate_or_skip(_ticket, config, true) do
+    output().planning("Skipping evaluation (--force)")
+    all_repos = Enum.map(config.projects, & &1.repo)
+    {:ok, %{selected_projects: all_repos}}
+  end
+
+  defp evaluate_or_skip(ticket, config, false) do
+    evaluate_and_filter(ticket, config)
+  end
 
   defp evaluate_and_filter(ticket, config) do
     Logger.info("Evaluating ticket #{ticket.key}...")
