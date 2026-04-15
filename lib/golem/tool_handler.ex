@@ -405,7 +405,7 @@ defmodule Golem.ToolHandler do
     tasks =
       Enum.map(agents, fn agent ->
         goal = Map.fetch!(agent, "goal")
-        context = Map.get(agent, "context", "")
+        context = Map.get(agent, "context", "") |> enrich_sub_agent_context(goal)
         Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth, parent_state) end)
       end)
 
@@ -496,6 +496,9 @@ defmodule Golem.ToolHandler do
     parent_state = Process.get(:golem_parent_state)
     Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
+    # Auto-enrich context with directory listings for paths mentioned in the goal
+    context = enrich_sub_agent_context(context, goal)
+
     result = Golem.Runner.run_sub_agent(goal, context, depth, parent_state)
     merge_sub_agent_costs(result)
 
@@ -526,6 +529,47 @@ defmodule Golem.ToolHandler do
   def execute(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
+  end
+
+  # --- Sub-Agent Context Enrichment ---
+
+  # Extract file paths from the goal text and include directory listings
+  # so sub-agents know what exists before they start writing.
+  defp enrich_sub_agent_context(context, goal) do
+    # Find absolute paths mentioned in the goal
+    paths =
+      Regex.scan(~r{(/home/\S+?)(?:[\s,\)\]\}]|$)}, goal)
+      |> Enum.map(fn [_, path] -> path end)
+      |> Enum.uniq()
+
+    # Get unique directories
+    dirs =
+      paths
+      |> Enum.map(&Path.dirname/1)
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 == "/" or &1 == "."))
+
+    if dirs == [] do
+      context
+    else
+      listings =
+        dirs
+        |> Enum.map(fn dir ->
+          case Golem.Sandbox.exec("ls -la #{dir} 2>/dev/null | head -30", timeout: 5_000) do
+            {:ok, %{exit_code: 0, output: output}} when byte_size(output) > 0 ->
+              "### #{dir}\n```\n#{String.trim(output)}\n```"
+            _ -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join("\n\n")
+
+      if listings != "" do
+        context <> "\n\n## Directory context (auto-generated)\n\nThese are the files that already exist in the directories you'll be working in. Study them before writing new files.\n\n#{listings}"
+      else
+        context
+      end
+    end
   end
 
   # --- Cost Merging ---
