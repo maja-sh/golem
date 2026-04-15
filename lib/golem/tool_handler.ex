@@ -411,6 +411,7 @@ defmodule Golem.ToolHandler do
 
     # Await all results (generous timeout — sub-agents can take a while)
     results = Task.await_many(tasks, :infinity)
+    Enum.each(results, &merge_sub_agent_costs/1)
 
     # Format results summary
     summaries =
@@ -495,13 +496,16 @@ defmodule Golem.ToolHandler do
     parent_state = Process.get(:golem_parent_state)
     Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
-    case Golem.Runner.run_sub_agent(goal, context, depth, parent_state) do
-      {:ok, %{success: true, summary: summary} = result} ->
-        files = format_file_list(result)
+    result = Golem.Runner.run_sub_agent(goal, context, depth, parent_state)
+    merge_sub_agent_costs(result)
+
+    case result do
+      {:ok, %{success: true, summary: summary} = r} ->
+        files = format_file_list(r)
         {:continue, "Sub-agent completed successfully: #{summary}#{files}\n\nIMPORTANT: Do NOT rewrite these files — read them first with `read_file` if you need to understand or modify what the sub-agent produced."}
 
-      {:ok, %{success: false, summary: summary} = result} ->
-        files = format_file_list(result)
+      {:ok, %{success: false, summary: summary} = r} ->
+        files = format_file_list(r)
         {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}\n\nRead these files with `read_file` before making changes."}
 
       {:error, :max_steps_reached} ->
@@ -523,6 +527,18 @@ defmodule Golem.ToolHandler do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
+
+  # --- Cost Merging ---
+
+  # Merge sub-agent costs into the parent's running total via process dictionary.
+  # The parent runner reads this back after tool execution.
+  defp merge_sub_agent_costs({:ok, %{costs: sub_costs}}) do
+    existing = Process.get(:golem_sub_agent_costs, 0.0)
+    sub_total = Map.get(sub_costs, :total_dollars, 0.0)
+    Process.put(:golem_sub_agent_costs, existing + sub_total)
+  end
+
+  defp merge_sub_agent_costs(_), do: :ok
 
   # --- Edit Helpers ---
 

@@ -268,7 +268,8 @@ defmodule Golem.Runner do
       output().sub_agent_result(goal, steps, success)
     end
 
-    # Extract files created/modified by the sub-agent for parent awareness
+    # Extract files from the sub-agent for parent awareness
+    # Costs are already in summary.costs from the loop
     case result do
       {:ok, summary} ->
         files = extract_modified_files(state)
@@ -664,7 +665,14 @@ defmodule Golem.Runner do
         if state.depth == 0, do: output().update_tokens(output_tokens)
 
         # Execute all tool calls, stopping early on done/think_replan
-        case execute_tool_calls(tool_calls, state.depth, state) do
+        Process.delete(:golem_sub_agent_costs)
+        tool_result = execute_tool_calls(tool_calls, state.depth, state)
+
+        # Merge any sub-agent costs into this run's total
+        sub_costs = Process.get(:golem_sub_agent_costs, 0.0)
+        costs = Map.update!(costs, :total_dollars, &(&1 + sub_costs))
+
+        case tool_result do
           {:done, summary, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
             state = %{state | messages: messages, step: step, costs: costs, history: update_history(state.history, executed)}
@@ -682,7 +690,7 @@ defmodule Golem.Runner do
                 log_phase_costs(state)
                 maybe_save(state)
                 :persistent_term.put(:golem_verify_commands, %{})
-                {:ok, summary}
+                {:ok, Map.put(summary, :costs, costs)}
 
               {:reject, state} ->
                 maybe_save(state)
@@ -1073,29 +1081,15 @@ defmodule Golem.Runner do
       {:accept, state}
     else
       Logger.info("#{state.prefix}  Verifying before accepting done (attempt #{rejections + 1})...")
-      if state.depth == 0, do: output().planning("Running verification checks...")
+      if state.depth == 0, do: output().planning("Running verification agent...")
 
-      case Golem.Verify.run_checks() do
-        {:ok, nil} ->
-          # No project detected — nothing to verify
+      case Golem.Verify.run_agent(state.goal) do
+        :ok ->
+          Logger.info("#{state.prefix}  Verification passed")
           {:accept, state}
 
-        {:ok, project_path} ->
-          # Compile + tests passed. Now run a fresh sub-agent for deeper review.
-          Logger.info("#{state.prefix}  Programmatic checks passed, running verification agent...")
-          if state.depth == 0, do: output().planning("Running verification agent...")
-
-          case Golem.Verify.run_agent(project_path) do
-            :ok ->
-              Logger.info("#{state.prefix}  Verification passed")
-              {:accept, state}
-
-            {:error, issues} ->
-              reject_done(state, "Verification agent found issues:\n\n#{issues}")
-          end
-
         {:error, issues} ->
-          reject_done(state, issues)
+          reject_done(state, "Verification agent found issues:\n\n#{issues}")
       end
     end
   end
@@ -1112,6 +1106,21 @@ defmodule Golem.Runner do
       output().planning("Verification failed — sending agent back to fix (#{rejections}/#{@max_done_rejections})")
     end
 
+    # List files already created so the agent doesn't recreate them
+    created_files = extract_modified_files(state)
+    files_section =
+      if created_files != [] do
+        file_list = Enum.map_join(created_files, "\n", &"- #{&1}")
+        """
+
+        ## Files already created/modified (do NOT recreate these)
+
+        #{file_list}
+        """
+      else
+        ""
+      end
+
     messages =
       state.messages ++
         [
@@ -1122,7 +1131,10 @@ defmodule Golem.Runner do
 
             #{issues}
 
-            Fix ALL of these issues, then call `done` again. Do not skip any.
+            IMPORTANT: Only fix the specific issues listed above. Do NOT recreate files or re-run sub-agents for work that is already done. \
+            Read existing files with `read_file` first to understand what's already there, then make targeted `edit_file` changes.
+            #{files_section}
+            Fix ALL of the issues above, then call `done` again.
             """
           }
         ]

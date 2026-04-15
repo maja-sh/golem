@@ -128,15 +128,17 @@ defmodule Golem.TUI do
 
   def sub_agent_start(goal) do
     GenServer.call(__MODULE__, {:print, [
+      [],
       [:magenta, "  ● Sub-agent: ", :reset, :faint, trunc(goal, 70), :reset]
-    ]})
+    ], :sub_agent})
   end
 
   def sub_agent_result(_goal, steps, success) do
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
     GenServer.call(__MODULE__, {:print, [
+      [],
       [color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset]
-    ]})
+    ], :sub_agent})
   end
 
   @impl true
@@ -250,7 +252,7 @@ defmodule Golem.TUI do
   def handle_call({:print, lines}, _from, state) do
     state = erase_status(state)
     Enum.each(lines, &print_line/1)
-    state = draw_status(state)
+    state = draw_status(%{state | last_output: :other})
     {:reply, :ok, state}
   end
 
@@ -289,7 +291,7 @@ defmodule Golem.TUI do
     state = erase_status(state)
     Enum.each(lines, &print_line/1)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
-    state = draw_status(state)
+    state = draw_status(%{state | last_output: :other})
     {:reply, :ok, state}
   end
 

@@ -46,7 +46,7 @@ defmodule Golem.Jira.Integration do
             handle_success(selected_config, ticket, branch, result)
 
           {:ok, %{success: false} = result} ->
-            handle_rejection(selected_config, ticket, result)
+            handle_rejection(selected_config, ticket, branch, result)
 
           {:error, :max_steps_reached} = err ->
             comment_on_ticket(selected_config, ticket, "Golem run paused — max steps reached. Resume manually.")
@@ -109,16 +109,7 @@ defmodule Golem.Jira.Integration do
 
   defp handle_success(config, ticket, branch, result) do
     Logger.info("Agent succeeded for #{ticket.key}, pushing and creating PRs")
-    output().planning("Pushing branches and creating PRs...")
-
-    pr_urls =
-      config.projects
-      |> Enum.map(fn project -> push_and_pr(config, project, ticket, branch) end)
-      |> Enum.filter(fn
-        {:ok, _url} -> true
-        _ -> false
-      end)
-      |> Enum.map(fn {:ok, url} -> url end)
+    pr_urls = push_all(config, ticket, branch)
 
     comment = build_success_comment(result.summary, pr_urls)
     comment_on_ticket(config, ticket, comment)
@@ -126,17 +117,32 @@ defmodule Golem.Jira.Integration do
     {:ok, result}
   end
 
-  defp handle_rejection(config, ticket, result) do
+  defp handle_rejection(config, ticket, branch, result) do
     Logger.info("Agent rejected #{ticket.key}: #{result.summary}")
+    pr_urls = push_all(config, ticket, branch)
+
+    pr_section = case pr_urls do
+      [] -> ""
+      urls -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(urls, "\n", &"- #{&1}")
+    end
 
     comment = """
     Golem could not complete this ticket.
 
-    **Reason:** #{result.summary}
+    **Reason:** #{result.summary}#{pr_section}
     """
 
     comment_on_ticket(config, ticket, comment)
     {:ok, result}
+  end
+
+  defp push_all(config, ticket, branch) do
+    output().planning("Pushing branches and creating PRs...")
+
+    config.projects
+    |> Enum.map(fn project -> push_and_pr(config, project, ticket, branch) end)
+    |> Enum.filter(&match?({:ok, _}, &1))
+    |> Enum.map(fn {:ok, url} -> url end)
   end
 
   defp handle_error(config, ticket, reason) do
@@ -177,6 +183,12 @@ defmodule Golem.Jira.Integration do
   end
 
   defp maybe_commit_remaining(path, ticket) do
+    # Clean up temp files the agent may have left behind
+    Golem.Sandbox.exec(
+      "cd #{path} && git ls-files --others --exclude-standard | grep -E '\\.(sh|tmp|bak|log|patch)$' | xargs -r rm -f",
+      timeout: 10_000
+    )
+
     case Golem.Sandbox.exec("cd #{path} && git status --porcelain", timeout: 10_000) do
       {:ok, %{exit_code: 0, output: output}} when byte_size(output) > 0 ->
         message = "[#{ticket.key}] remaining changes"
