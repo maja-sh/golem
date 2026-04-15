@@ -232,19 +232,40 @@ defmodule Golem.Jira.Integration do
       end)
       |> Enum.join("\n")
 
+    labels_section =
+      case ticket.labels do
+        [] -> nil
+        labels -> "**Labels:** #{Enum.join(labels, ", ")}"
+      end
+
     comments_section =
       case ticket.comments do
         [] -> nil
         comments ->
           formatted = Enum.map_join(comments, "\n\n", fn c ->
-            "**#{c.author}:**\n#{c.body}"
+            "> **#{c.author}:**\n> #{String.replace(c.body, "\n", "\n> ")}"
           end)
-          "## Comments\n\n#{formatted}"
+          """
+          ## Instructions from Comments
+
+          The following comments contain important context and instructions from the team. \
+          Pay close attention — these often specify implementation approach, UI patterns to follow, \
+          or constraints that are not in the ticket description.
+
+          #{formatted}
+          """
       end
 
     parts = [
-      "## #{ticket.key}: #{ticket.summary}",
-      ticket.description,
+      """
+      ## #{ticket.key}: #{ticket.summary}
+
+      Everything below is the ticket as written by the team. The description, acceptance criteria, \
+      and especially the comments are your primary instructions. Follow them closely — if a comment \
+      says "use the same pattern as X", find X and replicate it.
+      """,
+      labels_section,
+      if(ticket.description && ticket.description != "", do: "## Description\n\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "## Acceptance Criteria\n\n#{ticket.acceptance_criteria}"),
       comments_section,
       """
@@ -252,7 +273,9 @@ defmodule Golem.Jira.Integration do
 
       #{project_list}
 
-      Map each step in your plan to the specific project directory where the changes belong. If the ticket has acceptance criteria, ensure every criterion has a corresponding plan step.
+      Map each step in your plan to the specific project directory where the changes belong. \
+      If the ticket has acceptance criteria, ensure every criterion has a corresponding plan step. \
+      If comments reference existing patterns or components, find and study them before planning.
       """
     ]
 

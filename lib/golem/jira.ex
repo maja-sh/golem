@@ -23,6 +23,7 @@ defmodule Golem.Jira do
           acceptance_criteria: extract_acceptance_criteria(fields),
           issue_type: get_in(fields, ["issuetype", "name"]),
           priority: get_in(fields, ["priority", "name"]),
+          labels: fields["labels"] || [],
           comments: extract_comments(fields)
         }}
 
@@ -183,6 +184,10 @@ defmodule Golem.Jira do
       body = adf_to_text(comment["body"])
       created = comment["created"] || ""
       %{author: author, body: body, created: created}
+    end)
+    |> Enum.reject(fn c ->
+      # Filter out Golem's own comments
+      String.starts_with?(c.body, "Golem ")
     end)
   end
 
