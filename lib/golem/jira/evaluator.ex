@@ -80,12 +80,23 @@ defmodule Golem.Jira.Evaluator do
       end)
       |> Enum.join("\n")
 
+    comments_section =
+      case Map.get(ticket, :comments, []) do
+        [] -> nil
+        comments ->
+          formatted = Enum.map_join(comments, "\n\n", fn c ->
+            "**#{c.author}:** #{c.body}"
+          end)
+          "**Comments:**\n#{formatted}"
+      end
+
     parts = [
       "## Ticket: #{ticket.key}",
       "**Summary:** #{ticket.summary}",
       "**Type:** #{ticket.issue_type} | **Priority:** #{ticket.priority}",
       if(ticket.description && ticket.description != "", do: "**Description:**\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "**Acceptance Criteria:**\n#{ticket.acceptance_criteria}"),
+      comments_section,
       "## Available Projects\n\n#{project_list}"
     ]
 

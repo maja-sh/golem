@@ -23,7 +23,8 @@ defmodule Golem.MixProject do
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:dotenv, "~> 3.0", only: [:dev, :test]},
-      {:nostrum, "~> 0.10", runtime: false}
+      {:nostrum, "~> 0.10", runtime: false},
+      {:yaml_elixir, "~> 2.9"}
     ]
   end
 end

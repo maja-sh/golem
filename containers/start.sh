@@ -2,19 +2,28 @@
 # Start the golem-vm container with persistent storage.
 # Agent's home directory survives container restarts.
 
+if command -v podman &>/dev/null; then
+  RUNTIME=podman
+elif command -v docker &>/dev/null; then
+  RUNTIME=docker
+else
+  echo "Error: neither podman nor docker found" >&2
+  exit 1
+fi
+
 CONTAINER_NAME="${1:-golem-vm}"
 IMAGE="${2:-golem-vm:latest}"
 
 # Check if container already exists
-if podman container exists "$CONTAINER_NAME" 2>/dev/null; then
+if $RUNTIME container inspect "$CONTAINER_NAME" &>/dev/null; then
   # Check if it's running
-  STATUS=$(podman inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null)
+  STATUS=$($RUNTIME inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null)
   if [ "$STATUS" = "running" ]; then
     echo "Container $CONTAINER_NAME is already running."
     exit 0
   else
     echo "Starting existing container $CONTAINER_NAME..."
-    podman start "$CONTAINER_NAME"
+    $RUNTIME start "$CONTAINER_NAME"
     exit 0
   fi
 fi
@@ -34,7 +43,7 @@ GIT_ENV=""
 [ -n "$GIT_USER" ]  && GIT_ENV="$GIT_ENV -e GIT_USER=$GIT_USER"
 [ -n "$GIT_EMAIL" ] && GIT_ENV="$GIT_ENV -e GIT_EMAIL=$GIT_EMAIL"
 
-podman run -d \
+$RUNTIME run -d \
   --name "$CONTAINER_NAME" \
   --privileged \
   -v golem-data:/home/agent \

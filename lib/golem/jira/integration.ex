@@ -194,10 +194,21 @@ defmodule Golem.Jira.Integration do
       end)
       |> Enum.join("\n")
 
+    comments_section =
+      case ticket.comments do
+        [] -> nil
+        comments ->
+          formatted = Enum.map_join(comments, "\n\n", fn c ->
+            "**#{c.author}:**\n#{c.body}"
+          end)
+          "## Comments\n\n#{formatted}"
+      end
+
     parts = [
       "## #{ticket.key}: #{ticket.summary}",
       ticket.description,
       if(ticket.acceptance_criteria, do: "## Acceptance Criteria\n\n#{ticket.acceptance_criteria}"),
+      comments_section,
       """
       ## Projects
 

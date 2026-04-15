@@ -41,6 +41,7 @@ defmodule Golem.Application do
   defp ensure_defaults do
     defaults = [
       container: "golem-vm",
+      container_user: "agent",
       planner_model: "claude-opus-4-20250514",
       executor_model: "claude-sonnet-4-20250514",
       planner_max_tokens: 16_000,

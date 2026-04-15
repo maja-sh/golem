@@ -22,7 +22,8 @@ defmodule Golem.Jira do
           description: adf_to_text(fields["description"]),
           acceptance_criteria: extract_acceptance_criteria(fields),
           issue_type: get_in(fields, ["issuetype", "name"]),
-          priority: get_in(fields, ["priority", "name"])
+          priority: get_in(fields, ["priority", "name"]),
+          comments: extract_comments(fields)
         }}
 
       {:ok, %{status: 404}} ->
@@ -172,6 +173,18 @@ defmodule Golem.Jira do
   end
 
   # --- Helpers ---
+
+  defp extract_comments(fields) do
+    fields
+    |> get_in(["comment", "comments"])
+    |> List.wrap()
+    |> Enum.map(fn comment ->
+      author = get_in(comment, ["author", "displayName"]) || "Unknown"
+      body = adf_to_text(comment["body"])
+      created = comment["created"] || ""
+      %{author: author, body: body, created: created}
+    end)
+  end
 
   defp extract_acceptance_criteria(fields) do
     # Common custom field names for acceptance criteria

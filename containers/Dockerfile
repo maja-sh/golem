@@ -19,11 +19,16 @@ RUN apt-get update && apt-get install -y \
     xvfb scrot xdotool imagemagick x11-utils \
     # Browser for testing web UIs
     firefox \
+    # Container runtime (for running project services via compose)
+    podman podman-compose fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
 
 # Create agent user with passwordless sudo
 RUN useradd -m -s /bin/bash agent && \
     echo "agent ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Configure podman to resolve short image names via Docker Hub
+RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/registries.conf
 
 COPY entrypoint.sh /entrypoint.sh
 COPY scaffold-tauri2.sh /usr/local/bin/scaffold-tauri2

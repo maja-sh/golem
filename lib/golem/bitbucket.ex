@@ -37,11 +37,11 @@ defmodule Golem.Bitbucket do
 
   @doc """
   Build an HTTPS clone URL with API token credentials.
-  Uses the x-token-auth format required by Bitbucket API tokens.
+  Uses the x-bitbucket-api-token-auth format required by Bitbucket API tokens.
   """
   def clone_url(workspace, repo_slug) do
     token = System.get_env("BITBUCKET_API_TOKEN") || raise "BITBUCKET_API_TOKEN not set"
-    "https://x-token-auth:#{token}@bitbucket.org/#{workspace}/#{repo_slug}.git"
+    "https://x-bitbucket-api-token-auth:#{token}@bitbucket.org/#{workspace}/#{repo_slug}.git"
   end
 
   defp auth_headers do

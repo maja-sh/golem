@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Golem.Run do
       mix golem.run --scenario smoke_maze
       mix golem.run --plan plan.md "Build a web scraper in Python"
       mix golem.run --max-steps 50 "Set up a Phoenix project"
+      mix golem.run --jira SA-1111
   """
 
   use Mix.Task
@@ -18,10 +19,36 @@ defmodule Mix.Tasks.Golem.Run do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [plan: :string, max_steps: :integer, scenario: :string],
-        aliases: [p: :plan, s: :max_steps, S: :scenario]
+        strict: [plan: :string, max_steps: :integer, scenario: :string, jira: :string],
+        aliases: [p: :plan, s: :max_steps, S: :scenario, j: :jira]
       )
 
+    # Start the application
+    Mix.Task.run("app.start")
+
+    if opts[:jira] do
+      run_jira(opts[:jira], opts)
+    else
+      run_standard(opts, rest)
+    end
+  end
+
+  defp run_jira(ticket_key, opts) do
+    runner_opts =
+      case opts[:max_steps] do
+        nil -> []
+        n -> [max_steps: n]
+      end
+
+    case Golem.Jira.Integration.run(ticket_key, runner_opts) do
+      {:ok, _} -> :ok
+      {:error, :max_steps_reached} -> :ok
+      {:error, reason} ->
+        Mix.shell().error("\n✗ Jira integration error: #{inspect(reason)}")
+    end
+  end
+
+  defp run_standard(opts, rest) do
     goal =
       case opts[:scenario] do
         nil ->
@@ -42,11 +69,9 @@ defmodule Mix.Tasks.Golem.Run do
     if goal == "" do
       Mix.shell().error("Usage: mix golem.run \"your goal here\"")
       Mix.shell().error("       mix golem.run --scenario smoke_maze")
+      Mix.shell().error("       mix golem.run --jira SA-1111")
       exit({:shutdown, 1})
     end
-
-    # Start the application
-    Mix.Task.run("app.start")
 
     # Load plan from file if provided
     runner_opts =
