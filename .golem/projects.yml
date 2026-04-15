@@ -11,7 +11,7 @@ projects:
       - label: "add php ppa"
         run: "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq software-properties-common && add-apt-repository -y ppa:ondrej/php 2>/dev/null; apt-get update -qq"
       - label: "install php 8.4"
-        run: "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php8.4 php8.4-dev php8.4-curl php8.4-mbstring php8.4-gd php8.4-bcmath php8.4-mysql php8.4-pgsql php8.4-sqlite3 php8.4-redis php8.4-opcache php8.4-readline php8.4-xml php8.4-zip php8.4-grpc php8.4-imagick sqlite3 unzip"
+        run: "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq php8.4 php8.4-dev php8.4-curl php8.4-mbstring php8.4-gd php8.4-bcmath php8.4-mysql php8.4-pgsql php8.4-sqlite3 php8.4-redis php8.4-opcache php8.4-readline php8.4-xml php8.4-zip php8.4-grpc php8.4-imagick sqlite3 unzip poppler-utils"
       - label: "install composer"
         run: "command -v composer || curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer"
       - label: "composer install"
