@@ -59,6 +59,7 @@ shell, write_file, read_file, edit_file, list_directory, glob, grep, web_search,
 - **State persistence**: Saved every 10 steps and on max_steps. Resume with `Golem.resume(id)`.
 - **Sub-agents**: Isolated context, 50-step cap, depth capped at 3.
 - **Container**: Agent runs as root. Xvfb on :99 for GUI. Volume `golem-data` for persistence.
+- **Git worktrees**: Main clones in `/repos/`, per-task worktrees in `/tasks/{ticket}/`. Enables concurrent task execution.
 
 ## Config
 
@@ -120,6 +121,27 @@ projects:
 Setup steps without `user:` run as root (for system installs like `apt-get`). Steps with `user: agent` run as the container user (for project-level commands like `composer install`). Each `mix golem.setup` does a clean clone (removes existing dir first).
 
 Test the setup with `mix golem.setup` — clones all repos into the container and runs setup scripts.
+
+## Git Worktrees (Concurrent Tasks)
+
+When running Jira tasks, golem uses git worktrees so multiple tasks can run simultaneously in the same container:
+
+```
+/home/agent/repos/api          ← persistent main clone (always on default branch)
+/home/agent/repos/app          ← persistent main clone
+
+/home/agent/tasks/SA-1111/api  ← worktree for SA-1111
+/home/agent/tasks/SA-1111/app  ← worktree for SA-1111
+
+/home/agent/tasks/SA-2222/api  ← worktree for SA-2222 (runs concurrently)
+/home/agent/tasks/SA-2222/app  ← worktree for SA-2222
+```
+
+- Main clones in `/repos/` are created once and reused (only `git fetch` on subsequent runs)
+- Each task gets isolated worktrees via `git worktree add` — separate working directories, shared `.git`
+- Setup steps run per-worktree (each task gets its own `vendor/`, `node_modules/`, `.env`)
+- Worktrees can be cleaned up after completion with `Golem.ProjectSetup.cleanup_worktrees(ticket_key)`
+- `mix golem.setup` still clones directly to project `path` for testing (does not use worktrees)
 
 ## Jira Integration
 
