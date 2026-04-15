@@ -28,11 +28,12 @@ defmodule Golem.Jira.Integration do
       output().planning("Selected projects: #{projects_label}")
 
       output().planning("Setting up projects...")
-      with {:ok, branch} <- Golem.ProjectSetup.setup_projects(selected_config, ticket.key, ticket.summary) do
+      with {:ok, branch, task_config} <- Golem.ProjectSetup.setup_projects(selected_config, ticket.key, ticket.summary) do
         output().agent_text("Branch: #{branch}")
 
-        goal = build_goal(ticket, selected_config)
-        agents_md = build_agents_md(selected_config, branch, ticket)
+        # Use task_config which has worktree paths instead of main clone paths
+        goal = build_goal(ticket, task_config)
+        agents_md = build_agents_md(task_config, branch, ticket)
 
         runner_opts =
           opts
@@ -43,17 +44,17 @@ defmodule Golem.Jira.Integration do
 
         case Golem.run(goal, runner_opts) do
           {:ok, %{success: true} = result} ->
-            handle_success(selected_config, ticket, branch, result)
+            handle_success(task_config, ticket, branch, result)
 
           {:ok, %{success: false} = result} ->
-            handle_rejection(selected_config, ticket, branch, result)
+            handle_rejection(task_config, ticket, branch, result)
 
           {:error, :max_steps_reached} = err ->
-            comment_on_ticket(selected_config, ticket, "Golem run paused — max steps reached. Resume manually.")
+            comment_on_ticket(task_config, ticket, "Golem run paused — max steps reached. Resume manually.")
             err
 
           {:error, reason} = err ->
-            handle_error(selected_config, ticket, reason)
+            handle_error(task_config, ticket, reason)
             err
         end
       end

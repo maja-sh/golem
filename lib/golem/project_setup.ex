@@ -87,9 +87,17 @@ defmodule Golem.ProjectSetup do
     end
   end
 
+  @repos_dir "/home/agent/repos"
+  @tasks_dir "/home/agent/tasks"
+
   @doc """
-  Set up all projects in the container: configure git credentials,
-  clone or pull repos, create feature branches, run setup scripts.
+  Set up all projects in the container using git worktrees.
+
+  Main clones live in #{@repos_dir}/{slug} (persistent, always on default branch).
+  Each task gets isolated worktrees in #{@tasks_dir}/{ticket_key}/{slug}.
+  Setup scripts run against the worktree paths.
+
+  Returns `{:ok, branch, updated_projects}` where updated_projects has worktree paths.
   """
   def setup_projects(config, ticket_key, summary) do
     branch = build_branch_name(ticket_key, summary)
@@ -99,19 +107,46 @@ defmodule Golem.ProjectSetup do
 
     results =
       Enum.map(config.projects, fn project ->
-        case setup_project(project, branch, config.bitbucket_workspace) do
-          :ok -> {:ok, project}
-          {:error, reason} -> {:error, project.repo, reason}
+        case setup_project_worktree(project, branch, ticket_key, config.bitbucket_workspace) do
+          {:ok, worktree_path} ->
+            {:ok, %{project | path: worktree_path}}
+          {:error, reason} ->
+            {:error, project.repo, reason}
         end
       end)
 
     errors = for {:error, repo, reason} <- results, do: "#{repo}: #{reason}"
 
     if errors == [] do
-      {:ok, branch}
+      updated_projects = for {:ok, project} <- results, do: project
+      {:ok, branch, %{config | projects: updated_projects}}
     else
       {:error, "Project setup failed:\n#{Enum.join(errors, "\n")}"}
     end
+  end
+
+  @doc """
+  Clean up worktrees for a completed task.
+  """
+  def cleanup_worktrees(ticket_key) do
+    task_dir = "#{@tasks_dir}/#{ticket_key}"
+
+    # Remove worktrees from their parent repos first
+    case Golem.Sandbox.exec("ls #{task_dir} 2>/dev/null", timeout: 5_000) do
+      {:ok, %{exit_code: 0, output: output}} when byte_size(output) > 0 ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.each(fn slug ->
+          worktree_path = "#{task_dir}/#{slug}"
+          repo_path = "#{@repos_dir}/#{slug}"
+          Golem.Sandbox.exec("cd #{repo_path} && git worktree remove --force #{worktree_path} 2>/dev/null", timeout: 10_000)
+        end)
+      _ -> :ok
+    end
+
+    # Remove the task directory
+    Golem.Sandbox.exec("rm -rf #{task_dir}", timeout: 30_000)
+    :ok
   end
 
   @doc """
@@ -189,15 +224,50 @@ defmodule Golem.ProjectSetup do
     end
   end
 
-  defp setup_project(project, branch, workspace) do
+  defp setup_project_worktree(project, branch, ticket_key, workspace) do
     repo_slug = project.repo |> String.split("/") |> List.last()
     clone_url = Golem.Bitbucket.clone_url(workspace, repo_slug)
+    repo_path = "#{@repos_dir}/#{repo_slug}"
+    worktree_path = "#{@tasks_dir}/#{ticket_key}/#{repo_slug}"
+    cuser = container_user()
 
-    with :ok <- clone_or_pull(project.path, clone_url, project.branch_from, false),
-         :ok <- create_branch(project.path, branch, project.branch_from),
-         :ok <- run_setup_script(project.setup, project.path, false) do
-      :ok
+    with :ok <- ensure_main_clone(repo_path, clone_url, project.branch_from),
+         :ok <- create_worktree(repo_path, worktree_path, branch, project.branch_from),
+         :ok <- run_cmd("chown -R #{cuser}:#{cuser} #{worktree_path}", timeout: 60_000, verbose: false),
+         :ok <- run_setup_script(project.setup, worktree_path, false) do
+      {:ok, worktree_path}
     end
+  end
+
+  # Ensure the main clone exists and is up to date. Reuses existing clone.
+  defp ensure_main_clone(repo_path, clone_url, branch_from) do
+    cuser = container_user()
+
+    case Golem.Sandbox.exec("test -d #{repo_path}/.git", timeout: 5_000) do
+      {:ok, %{exit_code: 0}} ->
+        # Pull latest
+        run_cmd("cd #{repo_path} && git fetch origin", timeout: 60_000, verbose: false)
+
+      _ ->
+        # Fresh clone
+        run_cmd("mkdir -p #{@repos_dir}", timeout: 5_000, verbose: false)
+        cmd = "git clone --branch #{branch_from} #{clone_url} #{repo_path}"
+        display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
+        with :ok <- run_cmd(cmd, timeout: 120_000, verbose: false, display: display) do
+          run_cmd("chown -R #{cuser}:#{cuser} #{repo_path}", timeout: 60_000, verbose: false)
+        end
+    end
+  end
+
+  # Create a worktree for the feature branch
+  defp create_worktree(repo_path, worktree_path, branch, branch_from) do
+    # Clean up existing worktree if present
+    Golem.Sandbox.exec("cd #{repo_path} && git worktree remove --force #{worktree_path} 2>/dev/null; rm -rf #{worktree_path}", timeout: 30_000)
+    run_cmd("mkdir -p #{Path.dirname(worktree_path)}", timeout: 5_000, verbose: false)
+
+    # Create branch from latest origin and add worktree
+    cmd = "cd #{repo_path} && git branch -D #{branch} 2>/dev/null; git worktree add -b #{branch} #{worktree_path} origin/#{branch_from}"
+    run_cmd(cmd, timeout: 30_000, verbose: false)
   end
 
   defp clone_or_pull(path, clone_url, branch_from, verbose) do
@@ -212,23 +282,6 @@ defmodule Golem.ProjectSetup do
     with :ok <- result do
       cuser = container_user()
       run_cmd("chown -R #{cuser}:#{cuser} #{path}", timeout: 60_000, verbose: false)
-    end
-  end
-
-  defp create_branch(path, branch, _branch_from) do
-    case Golem.Sandbox.exec("cd #{path} && git checkout -b #{branch}", timeout: 10_000) do
-      {:ok, %{exit_code: 0}} -> :ok
-      {:ok, %{output: out}} ->
-        if String.contains?(out, "already exists") do
-          case Golem.Sandbox.exec("cd #{path} && git checkout #{branch}", timeout: 10_000) do
-            {:ok, %{exit_code: 0}} -> :ok
-            {:ok, %{output: out2}} -> {:error, "git checkout failed: #{String.slice(out2, 0, 200)}"}
-            {:error, reason} -> {:error, inspect(reason)}
-          end
-        else
-          {:error, "git branch create failed: #{String.slice(out, 0, 200)}"}
-        end
-      {:error, reason} -> {:error, inspect(reason)}
     end
   end
 
