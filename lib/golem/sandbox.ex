@@ -75,7 +75,7 @@ defmodule Golem.Sandbox do
   def init(_opts) do
     Process.flag(:trap_exit, true)
     container = Application.get_env(:golem, :container, "golem-vm")
-    Logger.info("Sandbox initialized, container: #{container}")
+    Logger.debug("Sandbox initialized, container: #{container}")
     {:ok, %{port: nil, container: container, buffer: "", mode: :idle, cwd: nil, stall_ms: nil}}
   end
 

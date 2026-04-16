@@ -7,6 +7,11 @@ defmodule Golem.Application do
     ensure_defaults()
     setup_file_logger()
 
+    # Set console handler to info level — debug goes to file only
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, :info)
+    end
+
     # Set output backend — daemon mode uses Discord, CLI uses TUI
     unless Application.get_env(:golem, :output_backend) do
       Application.put_env(:golem, :output_backend, Golem.TUI)
