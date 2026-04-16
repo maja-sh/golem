@@ -59,8 +59,13 @@ defmodule Golem.MCP do
         {:ok, %{servers: %{}, tools: [], status: []}}
 
       {:ok, servers} ->
-        {connected, tools, status} = connect_servers(servers)
-        {:ok, %{servers: connected, tools: tools, status: status}}
+        try do
+          {connected, tools, status} = connect_servers(servers)
+          {:ok, %{servers: connected, tools: tools, status: status}}
+        rescue
+          e ->
+            {:ok, %{servers: %{}, tools: [], status: [{:error, "Connection error: #{Exception.message(e)}"}]}}
+        end
 
       {:error, reason} ->
         # Don't log here — status API reports this to the TUI/CLI
@@ -112,7 +117,7 @@ defmodule Golem.MCP do
   @impl true
   def terminate(_reason, state) do
     for {_name, %{transport: :stdio, port: port}} <- state.servers do
-      if Port.info(port), do: Port.close(port)
+      catch_port_close(port)
     end
   end
 
@@ -177,7 +182,7 @@ defmodule Golem.MCP do
 
               {:error, reason} ->
                 Logger.debug("[mcp] #{config.name}: tool discovery failed: #{inspect(reason)}")
-                if server[:port] && Port.info(server.port), do: Port.close(server.port)
+                if server[:port], do: catch_port_close(server.port)
                 {:failed, config.name, "Tool discovery failed: #{inspect(reason)}"}
             end
 
@@ -236,7 +241,7 @@ defmodule Golem.MCP do
           {:ok, server}
 
         {:error, reason} ->
-          Port.close(port)
+          catch_port_close(port)
           {:error, reason}
       end
     else
@@ -426,6 +431,14 @@ defmodule Golem.MCP do
 
   defp format_result({:error, %{"message" => msg}}), do: "[MCP error] #{msg}"
   defp format_result({:error, reason}), do: "[MCP error] #{inspect(reason)}"
+
+  defp catch_port_close(port) do
+    if Port.info(port), do: Port.close(port)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
 
   # --- Env Var Expansion ---
 
