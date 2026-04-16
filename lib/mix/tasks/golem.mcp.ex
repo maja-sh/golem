@@ -15,6 +15,11 @@ defmodule Mix.Tasks.Golem.Mcp do
   def run(_args) do
     Mix.Task.run("app.start")
 
+    # Suppress console logger
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, :none)
+    end
+
     # Give MCP servers a moment to connect
     Process.sleep(2000)
 
@@ -22,7 +27,7 @@ defmodule Mix.Tasks.Golem.Mcp do
 
     if tools == [] do
       IO.puts("No MCP servers configured.")
-      IO.puts("Create .golem/mcp.yml to add servers. See CLAUDE.md for config format.")
+      IO.puts("Create .golem/mcp.yml to add servers. See README for config format.")
     else
       # Group tools by server
       grouped =
