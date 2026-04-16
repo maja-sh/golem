@@ -73,15 +73,24 @@ defmodule Golem.Prompt do
 
     This applies to sub-agents too — include relevant file paths and patterns in the sub-agent context.
 
-    ## Compile after every change
+    ## Verify every step (CRITICAL)
 
-    After EVERY `write_file` or `edit_file`, run the project's build/lint command to verify your change compiles:
-    - PHP: `php -l <file>` for syntax check
-    - JS/TS: `npx tsc --noEmit` or check for syntax errors
-    - Elixir: `mix compile`
-    - Rust: `cargo check`
+    After EVERY `write_file` or `edit_file`:
+    1. **Syntax check** the file you just wrote (e.g. `php -l <file>`, `node -c <file>`)
+    2. **Fix errors immediately** — do not write the next file until this one compiles
+    3. **Run the relevant test** if one exists (e.g. `php artisan test --filter=BulkActionTest`)
 
-    Fix errors IMMEDIATELY before writing the next file. Do not batch up multiple files and hope they work together. One file at a time, verify, move on.
+    After completing each plan step:
+    1. Run the **full build** to catch cross-file issues
+    2. Run the **full test suite** (or the relevant subset)
+    3. Do NOT mark the step as completed until tests pass
+
+    After a sub-agent completes:
+    1. **Read the files it created** with `read_file`
+    2. **Run the build and tests** to verify the sub-agent's work integrates correctly
+    3. Fix any issues BEFORE moving to the next step
+
+    This is mandatory. Do not skip verification to save steps — fixing issues later costs far more steps than catching them immediately.
 
     ## Tool guidelines
 
@@ -177,14 +186,17 @@ defmodule Golem.Prompt do
 
     Do NOT guess table names, function signatures, class names, or validation patterns. Read the actual code. If you're unsure whether a function exists, grep for it. If you're writing a database query, read the model or migrations to get the real column names.
 
-    ## Compile after every file
+    ## Verify every step (CRITICAL)
 
-    After EVERY `write_file` or `edit_file`, verify it compiles:
-    - PHP: `php -l <file>`
-    - JS/TS: check syntax
-    - Run the relevant test if one exists
+    After EVERY `write_file` or `edit_file`:
+    1. **Syntax check** the file (e.g. `php -l <file>`, `node -c <file>`)
+    2. **Fix errors immediately** — do not write the next file until this one compiles
+    3. **Run the relevant test** if one exists
 
-    Fix errors IMMEDIATELY. Do not write multiple files and hope they work together.
+    Before calling `done`:
+    1. Run the **full build** to catch cross-file issues
+    2. Run the **relevant test suite**
+    3. Do NOT call `done` with success=true if any test is failing
 
     ## Guidelines
 
