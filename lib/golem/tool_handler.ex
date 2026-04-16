@@ -358,30 +358,32 @@ defmodule Golem.ToolHandler do
     # Run verification for items that just transitioned to :done
     verify_commands = :persistent_term.get(:golem_verify_commands, %{})
 
-    merged =
-      if depth == 0 and verify_commands != %{} do
-        Enum.map(merged, fn item ->
+    {merged, unverified} =
+      if depth == 0 do
+        Enum.map_reduce(merged, [], fn item, unverified ->
           newly_done = item.status == :done and Map.get(preserved, item.text) not in [:done, :completed]
 
           if newly_done do
             case Golem.PlanParser.find_verify_command(verify_commands, item.text) do
-              nil -> item
+              nil ->
+                # No verify command — flag as unverified so we can warn the agent
+                {item, [item.text | unverified]}
               cmd ->
                 case Golem.Sandbox.exec(cmd, timeout: 10_000, stall_timeout: :infinity) do
                   {:ok, %{exit_code: 0}} ->
                     Logger.info("  [verify] ✓ #{item.text}")
-                    %{item | status: :completed}
+                    {%{item | status: :completed}, unverified}
                   _ ->
                     Logger.info("  [verify] ✗ #{item.text}")
-                    item
+                    {item, [item.text | unverified]}
                 end
             end
           else
-            item
+            {item, unverified}
           end
         end)
       else
-        merged
+        {merged, []}
       end
 
     done = Enum.count(merged, &(&1.status in [:done, :completed]))
@@ -393,7 +395,16 @@ defmodule Golem.ToolHandler do
       Golem.Output.current().set_progress(merged)
       :persistent_term.put(:golem_progress, merged)
     end
-    {:continue, "Progress updated (#{done}/#{total} completed)."}
+
+    # Warn agent about unverified steps
+    verification_warning =
+      if unverified != [] do
+        steps = Enum.map_join(Enum.reverse(unverified), "\n", &"- #{&1}")
+        "\n\n[System] The following steps were marked completed but have NOT been verified:\n#{steps}\nRun the build and relevant tests NOW to verify these steps before continuing."
+      else
+        ""
+      end
+    {:continue, "Progress updated (#{done}/#{total} completed).#{verification_warning}"}
   end
 
   def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
