@@ -85,6 +85,7 @@ defmodule Golem.Prompt do
 
     ## Tool guidelines
 
+    - When you need to analyze large files, search across many files, transform data, or do complex validation, write a short script (Python, PHP, bash) and run it. This is faster and more reliable than chaining shell commands or making many individual tool calls.
     - Keep shell commands focused. Prefer multiple small commands over one giant pipeline.
     - For file creation, use `write_file`. For targeted edits to existing files, use `edit_file` — it's much more efficient than rewriting the whole file.
     - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
