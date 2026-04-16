@@ -36,6 +36,7 @@ defmodule Golem.Claude do
       messages
       |> Enum.reject(&empty_message?/1)
       |> Enum.map(&normalize_message/1)
+      |> add_cache_breakpoints()
 
     body =
       %{model: model, max_tokens: max_tokens, messages: normalized}
@@ -413,6 +414,45 @@ defmodule Golem.Claude do
   end
 
   defp normalize_message(msg), do: msg
+
+  # Add cache_control breakpoint to the last content block of the last
+  # user message. This caches the entire conversation prefix so subsequent
+  # turns only pay for new tokens. No context is lost — Claude sees the
+  # same conversation, Anthropic just serves cached tokens at 90% discount.
+  defp add_cache_breakpoints([]), do: []
+
+  defp add_cache_breakpoints(messages) do
+    # Find the index of the last user message
+    last_user_idx =
+      messages
+      |> Enum.with_index()
+      |> Enum.filter(fn {msg, _} -> msg[:role] == "user" or msg["role"] == "user" end)
+      |> List.last()
+
+    case last_user_idx do
+      {_msg, idx} ->
+        List.update_at(messages, idx, &mark_last_block/1)
+
+      nil ->
+        messages
+    end
+  end
+
+  defp mark_last_block(%{content: content} = msg) when is_list(content) and content != [] do
+    updated = List.update_at(content, -1, &put_cache_control/1)
+    %{msg | content: updated}
+  end
+
+  defp mark_last_block(%{"content" => content} = msg) when is_list(content) and content != [] do
+    updated = List.update_at(content, -1, &put_cache_control/1)
+    Map.put(msg, "content", updated)
+  end
+
+  defp mark_last_block(msg), do: msg
+
+  defp put_cache_control(block) when is_map(block) do
+    Map.put(block, :cache_control, %{type: "ephemeral"})
+  end
 
   defp maybe_put(map, _key, nil), do: map
 
