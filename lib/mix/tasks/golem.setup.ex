@@ -80,11 +80,11 @@ defmodule Mix.Tasks.Golem.Setup do
     result =
       case Golem.Sandbox.exec("test -d #{project.path}/.git", timeout: 5_000) do
         {:ok, %{exit_code: 0}} ->
-          cmd = "cd #{project.path} && git fetch origin && git checkout #{project.branch_from} && git reset --hard origin/#{project.branch_from}"
+          cmd = "cd #{project.path} && git fetch origin 2>/dev/null && git checkout #{project.branch_from} 2>/dev/null && git reset --hard origin/#{project.branch_from} 2>/dev/null"
           run_step("pull #{project.branch_from}", cmd, timeout: 120_000)
 
         _ ->
-          cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path}"
+          cmd = "git clone --progress --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
           run_step("clone (#{project.branch_from})", cmd, timeout: 300_000)
       end
 
@@ -120,7 +120,7 @@ defmodule Mix.Tasks.Golem.Setup do
     end
   end
 
-  defp run_step(label, cmd, opts \\ []) do
+  defp run_step(label, cmd, opts) do
     timeout = Keyword.get(opts, :timeout, 120_000)
 
     case Golem.Sandbox.exec(cmd, timeout: timeout) do
