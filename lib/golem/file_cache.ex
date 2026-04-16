@@ -38,6 +38,13 @@ defmodule Golem.FileCache do
   end
 
   @doc """
+  Remove a file from the cache (e.g. after a sub-agent modified it).
+  """
+  def delete(path) do
+    Agent.update(__MODULE__, &Map.delete(&1, path))
+  end
+
+  @doc """
   Find lines near a target string in cached content.
   Returns context to help the agent fix a failed edit.
   """

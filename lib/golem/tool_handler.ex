@@ -540,14 +540,16 @@ defmodule Golem.ToolHandler do
 
         case result do
           {:ok, %{success: true, summary: summary} = r} ->
+            invalidate_sub_agent_files(r)
             files = format_file_list(r)
-            response = "Sub-agent completed successfully: #{summary}#{files}\n\nIMPORTANT: Do NOT rewrite these files — read them first with `read_file` if you need to understand or modify what the sub-agent produced."
+            response = "Sub-agent completed successfully: #{summary}#{files}" <> stale_file_warning(r)
             record_completed_sub_agent(goal, response)
             {:continue, response}
 
           {:ok, %{success: false, summary: summary} = r} ->
+            invalidate_sub_agent_files(r)
             files = format_file_list(r)
-            {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}\n\nRead these files with `read_file` before making changes."}
+            {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}" <> stale_file_warning(r)}
 
           {:error, :max_steps_reached} ->
             {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
@@ -579,6 +581,30 @@ defmodule Golem.ToolHandler do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
+
+  # --- Sub-Agent File Invalidation ---
+
+  # After a sub-agent modifies files, invalidate the parent's cached
+  # knowledge of those files so it doesn't use stale content in edit_file.
+  defp invalidate_sub_agent_files(%{files: files}) when is_list(files) do
+    Enum.each(files, &Golem.FileCache.delete/1)
+  end
+
+  defp invalidate_sub_agent_files(_), do: :ok
+
+  defp stale_file_warning(%{files: files}) when is_list(files) and files != [] do
+    """
+
+    WARNING: The following files were created or modified by the sub-agent. \
+    Any file content you saw BEFORE this sub-agent ran is now STALE. \
+    You MUST use `read_file` before using `edit_file` on any of these files — \
+    your old_string will not match if you use memorized content.
+
+    Modified files: #{Enum.join(files, ", ")}
+    """
+  end
+
+  defp stale_file_warning(_), do: ""
 
   # --- Sub-Agent Deduplication ---
 
