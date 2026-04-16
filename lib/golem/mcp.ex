@@ -70,7 +70,7 @@ defmodule Golem.MCP do
             {:reply, {:error, "MCP server '#{server_name}' not connected"}, state}
 
           server ->
-            result = rpc_call(server.port, "tools/call", %{name: tool_name, arguments: arguments}, server)
+            result = rpc_call(server, "tools/call", %{name: tool_name, arguments: arguments})
             text = format_result(result)
             {:reply, {:ok, text}, state}
         end
@@ -96,9 +96,8 @@ defmodule Golem.MCP do
 
   @impl true
   def terminate(_reason, state) do
-    # Close all server ports
-    for {_name, server} <- state.servers do
-      if Port.info(server.port), do: Port.close(server.port)
+    for {_name, %{transport: :stdio, port: port}} <- state.servers do
+      if Port.info(port), do: Port.close(port)
     end
   end
 
@@ -108,12 +107,22 @@ defmodule Golem.MCP do
     case YamlElixir.read_from_file(@config_path) do
       {:ok, %{"servers" => servers}} when is_list(servers) ->
         Enum.map(servers, fn s ->
-          %{
-            name: s["name"],
-            command: s["command"],
-            args: s["args"] || [],
-            env: s["env"] || %{}
-          }
+          base = %{name: s["name"]}
+
+          if s["url"] do
+            Map.merge(base, %{
+              transport: :http,
+              url: s["url"],
+              headers: s["headers"] || %{}
+            })
+          else
+            Map.merge(base, %{
+              transport: :stdio,
+              command: s["command"],
+              args: s["args"] || [],
+              env: s["env"] || %{}
+            })
+          end
         end)
 
       _ ->
@@ -126,7 +135,8 @@ defmodule Golem.MCP do
   defp connect_servers(servers) do
     results =
       Enum.map(servers, fn config ->
-        Logger.info("[mcp] Connecting to #{config.name} (#{config.command})...")
+        label = if config.transport == :http, do: config.url, else: config.command
+        Logger.info("[mcp] Connecting to #{config.name} (#{label})...")
 
         case start_server(config) do
           {:ok, server} ->
@@ -160,7 +170,7 @@ defmodule Golem.MCP do
     {connected, tools}
   end
 
-  defp start_server(config) do
+  defp start_server(%{transport: :stdio} = config) do
     executable = System.find_executable(config.command)
 
     if executable do
@@ -178,18 +188,16 @@ defmodule Golem.MCP do
           {:line, 1_048_576}
         ])
 
-      server = %{port: port, id_counter: 0, pending: %{}, buffer: ""}
+      server = %{transport: :stdio, port: port}
 
-      # Send initialize
-      case rpc_call(port, "initialize", %{
+      case rpc_call_stdio(port, "initialize", %{
         protocolVersion: "2024-11-05",
         capabilities: %{},
         clientInfo: %{name: "golem", version: "0.1.0"}
-      }, server) do
+      }) do
         {:ok, _result} ->
-          # Send initialized notification (no response expected)
           send_notification(port, "notifications/initialized", %{})
-          {:ok, %{server | id_counter: 2}}
+          {:ok, server}
 
         {:error, reason} ->
           Port.close(port)
@@ -200,8 +208,26 @@ defmodule Golem.MCP do
     end
   end
 
+  defp start_server(%{transport: :http} = config) do
+    server = %{transport: :http, url: config.url, headers: config.headers}
+
+    case rpc_call_http(server, "initialize", %{
+      protocolVersion: "2024-11-05",
+      capabilities: %{},
+      clientInfo: %{name: "golem", version: "0.1.0"}
+    }) do
+      {:ok, _result} ->
+        # Send initialized notification
+        rpc_notify_http(server, "notifications/initialized", %{})
+        {:ok, server}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp discover_tools(server, server_name) do
-    case rpc_call(server.port, "tools/list", %{}, server) do
+    case rpc_call(server, "tools/list", %{}) do
       {:ok, %{"tools" => tools}} ->
         claude_tools =
           Enum.map(tools, fn tool ->
@@ -223,42 +249,38 @@ defmodule Golem.MCP do
     end
   end
 
-  # --- JSON-RPC ---
+  # --- JSON-RPC Dispatch ---
 
-  defp rpc_call(port, method, params, _server) do
+  defp rpc_call(%{transport: :stdio, port: port}, method, params) do
+    rpc_call_stdio(port, method, params)
+  end
+
+  defp rpc_call(%{transport: :http} = server, method, params) do
+    rpc_call_http(server, method, params)
+  end
+
+  # --- stdio Transport ---
+
+  defp rpc_call_stdio(port, method, params) do
     id = :erlang.unique_integer([:positive])
 
-    request = %{
-      jsonrpc: "2.0",
-      id: id,
-      method: method,
-      params: params
-    }
+    request = %{jsonrpc: "2.0", id: id, method: method, params: params}
+    Port.command(port, Jason.encode!(request) <> "\n")
 
-    json = Jason.encode!(request)
-    Port.command(port, json <> "\n")
-
-    # Synchronous wait for response with matching id
-    receive_response(port, id, @call_timeout)
+    receive_stdio_response(port, id, @call_timeout)
   end
 
   defp send_notification(port, method, params) do
-    notification = %{
-      jsonrpc: "2.0",
-      method: method,
-      params: params
-    }
-
+    notification = %{jsonrpc: "2.0", method: method, params: params}
     Port.command(port, Jason.encode!(notification) <> "\n")
   end
 
-  defp receive_response(port, expected_id, timeout) do
+  defp receive_stdio_response(port, expected_id, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
-
-    receive_loop(port, expected_id, deadline, "")
+    receive_stdio_loop(port, expected_id, deadline, "")
   end
 
-  defp receive_loop(port, expected_id, deadline, buffer) do
+  defp receive_stdio_loop(port, expected_id, deadline, buffer) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     if remaining <= 0 do
@@ -276,20 +298,17 @@ defmodule Golem.MCP do
               {:error, error}
 
             {:ok, %{"method" => _}} ->
-              # Server notification — ignore, keep waiting
-              receive_loop(port, expected_id, deadline, "")
+              receive_stdio_loop(port, expected_id, deadline, "")
 
             {:ok, _other} ->
-              # Response for different id — ignore, keep waiting
-              receive_loop(port, expected_id, deadline, "")
+              receive_stdio_loop(port, expected_id, deadline, "")
 
             {:error, _} ->
-              # Partial JSON, accumulate buffer
-              receive_loop(port, expected_id, deadline, data)
+              receive_stdio_loop(port, expected_id, deadline, data)
           end
 
         {^port, {:data, {:noeol, chunk}}} ->
-          receive_loop(port, expected_id, deadline, buffer <> chunk)
+          receive_stdio_loop(port, expected_id, deadline, buffer <> chunk)
 
         {^port, {:exit_status, code}} ->
           {:error, "MCP server exited with code #{code}"}
@@ -297,6 +316,42 @@ defmodule Golem.MCP do
         remaining -> {:error, :timeout}
       end
     end
+  end
+
+  # --- HTTP Transport ---
+
+  defp rpc_call_http(server, method, params) do
+    id = :erlang.unique_integer([:positive])
+    request = %{jsonrpc: "2.0", id: id, method: method, params: params}
+
+    headers =
+      [{"content-type", "application/json"}, {"accept", "application/json"}] ++
+      Enum.map(server.headers, fn {k, v} -> {k, to_string(v)} end)
+
+    case Req.post(server.url, json: request, headers: headers, receive_timeout: @call_timeout) do
+      {:ok, %{status: 200, body: %{"result" => result}}} ->
+        {:ok, result}
+
+      {:ok, %{status: 200, body: %{"error" => error}}} ->
+        {:error, error}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, "HTTP #{status}: #{inspect(body)}"}
+
+      {:error, reason} ->
+        {:error, "HTTP request failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp rpc_notify_http(server, method, params) do
+    request = %{jsonrpc: "2.0", method: method, params: params}
+
+    headers =
+      [{"content-type", "application/json"}] ++
+      Enum.map(server.headers, fn {k, v} -> {k, to_string(v)} end)
+
+    Req.post(server.url, json: request, headers: headers, receive_timeout: 5_000)
+    :ok
   end
 
   # --- Helpers ---

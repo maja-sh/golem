@@ -165,24 +165,40 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 
 External tool servers can be connected via `.golem/mcp.yml` using the stdio transport:
 
+### stdio transport (local subprocess)
+
 ```yaml
 servers:
   - name: elastic
     command: npx
-    args: ["-y", "@elastic/mcp-server"]
+    args: ["-y", "@elastic/mcp-server-elasticsearch"]
     env:
       ELASTICSEARCH_URL: "https://your-cluster.es.io"
       ELASTICSEARCH_API_KEY: "your-key"
 ```
 
+### HTTP transport (remote server)
+
+```yaml
+servers:
+  - name: remote-tools
+    url: "http://localhost:3000/mcp"
+    headers:
+      Authorization: "Bearer your-token"
+```
+
+### Server fields
+
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | Server identifier. Tools are namespaced as `mcp_{name}_{tool}` |
-| `command` | yes | Executable to spawn (must be in PATH) |
-| `args` | no | Command-line arguments |
-| `env` | no | Environment variables passed to the server process |
+| `command` | stdio | Executable to spawn (must be in PATH) |
+| `args` | no | Command-line arguments (stdio only) |
+| `env` | no | Environment variables (stdio only) |
+| `url` | http | URL of the MCP HTTP endpoint |
+| `headers` | no | HTTP headers (e.g. auth tokens, http only) |
 
-MCP tools are available to both the planner (for research) and executor (for runtime checks). The server is spawned on startup, tools are discovered via `tools/list`, and calls are routed through `tools/call` over JSON-RPC/stdio.
+Use `command` for stdio or `url` for HTTP — not both. MCP tools are available to both the planner (for research) and executor (for runtime checks). Check status with `mix golem.mcp`.
 
 ## Environment Variables
 
