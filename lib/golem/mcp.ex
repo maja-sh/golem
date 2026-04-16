@@ -63,7 +63,7 @@ defmodule Golem.MCP do
         {:ok, %{servers: connected, tools: tools, status: status}}
 
       {:error, reason} ->
-        Logger.error("[mcp] Config error: #{reason}")
+        # Don't log here — status API reports this to the TUI/CLI
         {:ok, %{servers: %{}, tools: [], status: [{:error, reason}]}}
     end
   end
@@ -145,7 +145,11 @@ defmodule Golem.MCP do
         {:ok, []}
 
       {:error, %YamlElixir.ParsingError{} = e} ->
-        {:error, "Failed to parse #{@config_path}: #{Exception.message(e)}"}
+        raw = case File.read(@config_path) do
+          {:ok, content} -> "\n\n#{content}"
+          _ -> ""
+        end
+        {:error, "Failed to parse #{@config_path}: #{Exception.message(e)}#{raw}"}
 
       {:error, reason} ->
         if reason == :enoent or (is_map(reason) and reason[:reason] == :enoent) do
@@ -162,23 +166,23 @@ defmodule Golem.MCP do
     results =
       Enum.map(servers, fn config ->
         label = if config.transport == :http, do: config.url, else: config.command
-        Logger.info("[mcp] Connecting to #{config.name} (#{label})...")
+        Logger.debug("[mcp] Connecting to #{config.name} (#{label})...")
 
         case start_server(config) do
           {:ok, server} ->
             case discover_tools(server, config.name) do
               {:ok, tools} ->
-                Logger.info("[mcp] #{config.name}: #{length(tools)} tools discovered")
+                Logger.debug("[mcp] #{config.name}: #{length(tools)} tools discovered")
                 {:ok, config.name, server, tools}
 
               {:error, reason} ->
-                Logger.error("[mcp] #{config.name}: tool discovery failed: #{inspect(reason)}")
+                Logger.debug("[mcp] #{config.name}: tool discovery failed: #{inspect(reason)}")
                 if server[:port] && Port.info(server.port), do: Port.close(server.port)
                 {:failed, config.name, "Tool discovery failed: #{inspect(reason)}"}
             end
 
           {:error, reason} ->
-            Logger.error("[mcp] #{config.name}: failed to start: #{inspect(reason)}")
+            Logger.debug("[mcp] #{config.name}: failed to start: #{inspect(reason)}")
             {:failed, config.name, to_string(reason)}
         end
       end)
