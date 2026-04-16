@@ -30,7 +30,8 @@ defmodule Mix.Tasks.Golem.Setup do
 
         puts([:yellow, "+ Loading config...", :reset])
         for p <- config.projects do
-          desc = if p.description, do: " — #{p.description}", else: ""
+          short_desc = if p.description, do: p.description |> String.split("\n", trim: true) |> hd() |> String.slice(0, 60), else: nil
+          desc = if short_desc, do: " — #{short_desc}", else: ""
           puts([:faint, "  #{p.repo}#{desc} (#{p.branch_from})", :reset])
         end
         puts([])
@@ -74,15 +75,20 @@ defmodule Mix.Tasks.Golem.Setup do
   end
 
   defp do_clone(project, clone_url) do
-    # Remove existing directory for a clean clone
-    Golem.Sandbox.exec("rm -rf #{project.path}", timeout: 60_000)
+    cuser = Application.get_env(:golem, :container_user, "agent")
 
-    cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path}"
-    result = run_step("clone (#{project.branch_from})", cmd)
+    result =
+      case Golem.Sandbox.exec("test -d #{project.path}/.git", timeout: 5_000) do
+        {:ok, %{exit_code: 0}} ->
+          cmd = "cd #{project.path} && git fetch origin && git checkout #{project.branch_from} && git reset --hard origin/#{project.branch_from}"
+          run_step("pull #{project.branch_from}", cmd, timeout: 120_000)
 
-    # Git runs as root via sandbox — fix ownership so agent user can work with the files
+        _ ->
+          cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path}"
+          run_step("clone (#{project.branch_from})", cmd, timeout: 300_000)
+      end
+
     with :ok <- result do
-      cuser = Application.get_env(:golem, :container_user, "agent")
       Golem.Sandbox.exec("chown -R #{cuser}:#{cuser} #{project.path}", timeout: 60_000)
       :ok
     end
