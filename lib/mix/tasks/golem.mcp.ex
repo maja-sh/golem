@@ -24,52 +24,33 @@ defmodule Mix.Tasks.Golem.Mcp do
     Process.sleep(2000)
 
     status = Golem.MCP.status()
-    tools = Golem.MCP.tools()
+
+    IO.puts(IO.ANSI.format([:bright, "MCP servers", :reset]))
 
     if status == [] do
-      IO.puts("No MCP servers configured.")
-      IO.puts("Create .golem/mcp.yml to add servers. See README for config format.")
-      return_status(status)
-    end
+      IO.puts(IO.ANSI.format([:faint, "  No servers configured. Create .golem/mcp.yml to add servers.", :reset]))
+    else
+      for entry <- status do
+        case entry do
+          {:ok, name, tool_count} ->
+            IO.puts(IO.ANSI.format([
+              :faint, "  ", :reset,
+              name,
+              :faint, " · ", :green, "✓ connected", :reset,
+              :faint, " · #{tool_count} tools", :reset
+            ]))
 
-    # Handle config-level errors
-    config_errors = Enum.filter(status, &match?({:error, _}, &1))
-    for {:error, reason} <- config_errors do
-      IO.puts(IO.ANSI.format([:red, "✗ Config error: ", :reset, reason]))
-    end
+          {:error, name, reason} ->
+            IO.puts(IO.ANSI.format([
+              :faint, "  ", :reset,
+              name,
+              :faint, " · ", :red, "✗ #{reason}", :reset
+            ]))
 
-    # Handle per-server status
-    server_status = Enum.reject(status, &match?({:error, _}, &1))
-
-    for entry <- server_status do
-      case entry do
-        {:ok, name, tool_count} ->
-          IO.puts(IO.ANSI.format([:green, "✓ #{name}", :reset, :faint, " — #{tool_count} tools", :reset]))
-
-          server_tools =
-            tools
-            |> Enum.filter(fn t -> String.starts_with?(t.name, "mcp_#{name}_") end)
-            |> Enum.sort_by(& &1.name)
-
-          for tool <- server_tools do
-            desc = tool.description |> String.replace("[#{name}] ", "") |> String.slice(0, 70)
-            IO.puts(IO.ANSI.format([:faint, "  #{tool.name}", :reset]))
-            IO.puts(IO.ANSI.format([:faint, "    #{desc}", :reset]))
-          end
-
-        {:error, name, reason} ->
-          IO.puts(IO.ANSI.format([:red, "✗ #{name}", :reset, :faint, " — #{reason}", :reset]))
+          {:error, reason} ->
+            IO.puts(IO.ANSI.format([:red, "  ✗ #{reason}", :reset]))
+        end
       end
-
-      IO.puts("")
-    end
-
-    return_status(status)
-  end
-
-  defp return_status(status) do
-    if Enum.any?(status, &match?({:error, _, _}, &1)) or Enum.any?(status, &match?({:error, _}, &1)) do
-      exit({:shutdown, 1})
     end
   end
 end
