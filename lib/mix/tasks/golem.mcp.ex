@@ -25,6 +25,7 @@ defmodule Mix.Tasks.Golem.Mcp do
 
     status = Golem.MCP.status()
 
+    IO.puts("")
     IO.puts(IO.ANSI.format([:bright, "MCP servers", :reset]))
 
     if status == [] do
@@ -36,7 +37,7 @@ defmodule Mix.Tasks.Golem.Mcp do
             IO.puts(IO.ANSI.format([
               :faint, "  ", :reset,
               name,
-              :faint, " · ", :green, "✓ connected", :reset,
+              :faint, " · ", :bright, :green, "✓ connected", :reset,
               :faint, " · #{tool_count} tools", :reset
             ]))
 
@@ -44,13 +45,15 @@ defmodule Mix.Tasks.Golem.Mcp do
             IO.puts(IO.ANSI.format([
               :faint, "  ", :reset,
               name,
-              :faint, " · ", :red, "✗ #{reason}", :reset
+              :faint, " · ", :bright, :red, "✗ #{reason}", :reset
             ]))
 
           {:error, reason} ->
-            IO.puts(IO.ANSI.format([:red, "  ✗ #{reason}", :reset]))
+            IO.puts(IO.ANSI.format([:bright, :red, "  ✗ #{reason}", :reset]))
         end
       end
     end
+
+    IO.puts("")
   end
 end
