@@ -112,15 +112,15 @@ defmodule Golem.MCP do
           if s["url"] do
             Map.merge(base, %{
               transport: :http,
-              url: s["url"],
-              headers: s["headers"] || %{}
+              url: expand_env(s["url"]),
+              headers: expand_env_map(s["headers"] || %{})
             })
           else
             Map.merge(base, %{
               transport: :stdio,
               command: s["command"],
-              args: s["args"] || [],
-              env: s["env"] || %{}
+              args: Enum.map(s["args"] || [], &expand_env/1),
+              env: expand_env_map(s["env"] || %{})
             })
           end
         end)
@@ -390,6 +390,22 @@ defmodule Golem.MCP do
 
   defp format_result({:error, %{"message" => msg}}), do: "[MCP error] #{msg}"
   defp format_result({:error, reason}), do: "[MCP error] #{inspect(reason)}"
+
+  # --- Env Var Expansion ---
+
+  defp expand_env(val) when is_binary(val) do
+    Regex.replace(~r/\$\{(\w+)\}/, val, fn _, var ->
+      System.get_env(var) || "${#{var}}"
+    end)
+  end
+
+  defp expand_env(val), do: val
+
+  defp expand_env_map(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {k, expand_env(to_string(v))} end)
+  end
+
+  defp expand_env_map(other), do: other
 
   defp buffer_data(state, _port, _data), do: state
 end
