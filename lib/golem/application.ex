@@ -49,6 +49,7 @@ defmodule Golem.Application do
       executor_max_tokens: 16_000,
       thinking_budget: 10_000,
       max_steps: 200,
+      max_cost: 10.0,
       command_timeout: 900_000,
       stall_timeout: 120_000,
       container_runtime: detect_runtime(),

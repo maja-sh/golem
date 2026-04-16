@@ -19,8 +19,8 @@ defmodule Mix.Tasks.Golem.Run do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [plan: :string, max_steps: :integer, scenario: :string, jira: :string, force: :boolean],
-        aliases: [p: :plan, s: :max_steps, S: :scenario, j: :jira, f: :force]
+        strict: [plan: :string, max_steps: :integer, scenario: :string, jira: :string, force: :boolean, budget: :float, model: :string],
+        aliases: [p: :plan, s: :max_steps, S: :scenario, j: :jira, f: :force, b: :budget, m: :model]
       )
 
     # Start the application
@@ -31,6 +31,12 @@ defmodule Mix.Tasks.Golem.Run do
       :logger.set_handler_config(id, :level, :none)
     end
 
+    # Apply model override — sets both planner and executor
+    if model = opts[:model] do
+      Application.put_env(:golem, :planner_model, model)
+      Application.put_env(:golem, :executor_model, model)
+    end
+
     if opts[:jira] do
       run_jira(opts[:jira], opts)
     else
@@ -39,6 +45,9 @@ defmodule Mix.Tasks.Golem.Run do
   end
 
   defp run_jira(ticket_key, opts) do
+    # Set budget override before running (applies globally)
+    if opts[:budget], do: Application.put_env(:golem, :max_cost, opts[:budget])
+
     runner_opts =
       (case opts[:max_steps] do
         nil -> []
@@ -55,6 +64,7 @@ defmodule Mix.Tasks.Golem.Run do
   end
 
   defp run_standard(opts, rest) do
+    if opts[:budget], do: Application.put_env(:golem, :max_cost, opts[:budget])
     goal =
       case opts[:scenario] do
         nil ->
