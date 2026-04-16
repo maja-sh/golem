@@ -13,6 +13,16 @@ defmodule Golem.Jira.Integration do
   """
   def run(ticket_key, opts \\ []) do
     Logger.info("Jira integration starting for #{ticket_key}")
+
+    # Show MCP server status
+    for entry <- Golem.MCP.status() do
+      case entry do
+        {:ok, name, count} -> output().planning("MCP #{name}: #{count} tools")
+        {:error, name, reason} -> output().planning("MCP #{name}: ✗ #{reason}")
+        {:error, reason} -> output().planning("MCP config error: #{reason}")
+      end
+    end
+
     output().planning("Fetching ticket #{ticket_key}...")
 
     skip_eval = Keyword.get(opts, :skip_eval, false)

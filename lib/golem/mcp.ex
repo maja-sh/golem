@@ -36,6 +36,13 @@ defmodule Golem.MCP do
     :exit, _ -> []
   end
 
+  @doc "Returns connection status for all configured servers."
+  def status do
+    GenServer.call(__MODULE__, :status, 10_000)
+  catch
+    :exit, _ -> []
+  end
+
   @doc "Call an MCP tool. Returns {:ok, result_text} or {:error, reason}."
   def call_tool(namespaced_name, arguments) do
     GenServer.call(__MODULE__, {:call_tool, namespaced_name, arguments}, @call_timeout)
@@ -47,19 +54,27 @@ defmodule Golem.MCP do
 
   @impl true
   def init(_opts) do
-    servers = load_config()
+    case load_config() do
+      {:ok, []} ->
+        {:ok, %{servers: %{}, tools: [], status: []}}
 
-    if servers == [] do
-      {:ok, %{servers: %{}, tools: []}}
-    else
-      {connected, tools} = connect_servers(servers)
-      {:ok, %{servers: connected, tools: tools}}
+      {:ok, servers} ->
+        {connected, tools, status} = connect_servers(servers)
+        {:ok, %{servers: connected, tools: tools, status: status}}
+
+      {:error, reason} ->
+        Logger.error("[mcp] Config error: #{reason}")
+        {:ok, %{servers: %{}, tools: [], status: [{:error, reason}]}}
     end
   end
 
   @impl true
   def handle_call(:tools, _from, state) do
     {:reply, state.tools, state}
+  end
+
+  def handle_call(:status, _from, state) do
+    {:reply, state.status, state}
   end
 
   def handle_call({:call_tool, namespaced_name, arguments}, _from, state) do
@@ -106,7 +121,7 @@ defmodule Golem.MCP do
   defp load_config do
     case YamlElixir.read_from_file(@config_path) do
       {:ok, %{"servers" => servers}} when is_list(servers) ->
-        Enum.map(servers, fn s ->
+        configs = Enum.map(servers, fn s ->
           base = %{name: s["name"]}
 
           if s["url"] do
@@ -124,9 +139,20 @@ defmodule Golem.MCP do
             })
           end
         end)
+        {:ok, configs}
 
-      _ ->
-        []
+      {:ok, _} ->
+        {:ok, []}
+
+      {:error, %YamlElixir.ParsingError{} = e} ->
+        {:error, "Failed to parse #{@config_path}: #{Exception.message(e)}"}
+
+      {:error, reason} ->
+        if reason == :enoent or (is_map(reason) and reason[:reason] == :enoent) do
+          {:ok, []}
+        else
+          {:error, "Failed to read #{@config_path}: #{inspect(reason)}"}
+        end
     end
   end
 
@@ -147,13 +173,13 @@ defmodule Golem.MCP do
 
               {:error, reason} ->
                 Logger.error("[mcp] #{config.name}: tool discovery failed: #{inspect(reason)}")
-                if Port.info(server.port), do: Port.close(server.port)
-                :error
+                if server[:port] && Port.info(server.port), do: Port.close(server.port)
+                {:failed, config.name, "Tool discovery failed: #{inspect(reason)}"}
             end
 
           {:error, reason} ->
             Logger.error("[mcp] #{config.name}: failed to start: #{inspect(reason)}")
-            :error
+            {:failed, config.name, to_string(reason)}
         end
       end)
 
@@ -167,7 +193,13 @@ defmodule Golem.MCP do
       |> Enum.filter(&match?({:ok, _, _, _}, &1))
       |> Enum.flat_map(fn {:ok, _name, _server, tools} -> tools end)
 
-    {connected, tools}
+    status =
+      Enum.map(results, fn
+        {:ok, name, _server, tools} -> {:ok, name, length(tools)}
+        {:failed, name, reason} -> {:error, name, reason}
+      end)
+
+    {connected, tools, status}
   end
 
   defp start_server(%{transport: :stdio} = config) do
