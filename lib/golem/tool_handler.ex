@@ -401,23 +401,53 @@ defmodule Golem.ToolHandler do
     parent_state = Process.get(:golem_parent_state)
     Logger.info("  [parallel_sub_agents] #{count} agents")
 
-    # Spawn all sub-agents concurrently
-    tasks =
-      Enum.map(agents, fn agent ->
-        goal = Map.fetch!(agent, "goal")
-        context = Map.get(agent, "context", "") |> enrich_sub_agent_context(goal)
-        Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth, parent_state) end)
+    # Split agents into cached hits and ones that need to run
+    {cached, to_run} =
+      Enum.split_with(agents, fn agent ->
+        match?({:hit, _}, find_completed_sub_agent(Map.fetch!(agent, "goal")))
       end)
 
-    # Await all results (generous timeout — sub-agents can take a while)
-    results = Task.await_many(tasks, :infinity)
-    Enum.each(results, &merge_sub_agent_costs/1)
+    if cached != [] do
+      Logger.info("  [parallel_sub_agents] #{length(cached)} already completed, #{length(to_run)} to run")
+    end
 
-    # Format results summary
-    summaries =
-      results
-      |> Enum.zip(agents)
-      |> Enum.map(fn {result, agent} ->
+    # Run only the uncached agents
+    run_results =
+      if to_run != [] do
+        tasks =
+          Enum.map(to_run, fn agent ->
+            goal = Map.fetch!(agent, "goal")
+            context = Map.get(agent, "context", "") |> enrich_sub_agent_context(goal)
+            Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth, parent_state) end)
+          end)
+
+        results = Task.await_many(tasks, :infinity)
+        Enum.each(results, &merge_sub_agent_costs/1)
+
+        # Record successful results
+        Enum.zip(to_run, results)
+        |> Enum.each(fn {agent, result} ->
+          case result do
+            {:ok, %{success: true, summary: s} = r} ->
+              files = format_file_list(r)
+              record_completed_sub_agent(Map.fetch!(agent, "goal"), "✓ #{s}#{files}")
+            _ -> :ok
+          end
+        end)
+
+        Enum.zip(to_run, results)
+      else
+        []
+      end
+
+    # Build combined summary
+    all_summaries =
+      Enum.map(cached, fn agent ->
+        goal = Map.fetch!(agent, "goal")
+        {:hit, prev} = find_completed_sub_agent(goal)
+        "✓ #{goal}: [cached] #{String.slice(prev, 0, 100)}"
+      end) ++
+      Enum.map(run_results, fn {agent, result} ->
         goal = Map.get(agent, "goal", "unknown")
         case result do
           {:ok, %{success: true, summary: s}} -> "✓ #{goal}: #{s}"
@@ -425,10 +455,10 @@ defmodule Golem.ToolHandler do
           {:error, reason} -> "✗ #{goal}: error — #{inspect(reason)}"
         end
       end)
-      |> Enum.join("\n")
 
-    succeeded = Enum.count(results, &match?({:ok, %{success: true}}, &1))
-    {:continue, "#{succeeded}/#{count} sub-agents succeeded:\n#{summaries}"}
+    succeeded = length(cached) + Enum.count(run_results, fn {_, r} -> match?({:ok, %{success: true}}, r) end)
+    total = length(cached) + length(to_run)
+    {:continue, "#{succeeded}/#{total} sub-agents succeeded:\n#{Enum.join(all_summaries, "\n")}"}
   end
 
   def execute(%{name: "screenshot", input: _input}, _depth) do
@@ -496,26 +526,35 @@ defmodule Golem.ToolHandler do
     parent_state = Process.get(:golem_parent_state)
     Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
-    # Auto-enrich context with directory listings for paths mentioned in the goal
-    context = enrich_sub_agent_context(context, goal)
+    # Check if a similar sub-agent already ran successfully
+    case find_completed_sub_agent(goal) do
+      {:hit, cached} ->
+        Logger.info("  [sub_agent] SKIPPED — similar goal already completed")
+        {:continue, cached}
 
-    result = Golem.Runner.run_sub_agent(goal, context, depth, parent_state)
-    merge_sub_agent_costs(result)
+      :miss ->
+        context = enrich_sub_agent_context(context, goal)
 
-    case result do
-      {:ok, %{success: true, summary: summary} = r} ->
-        files = format_file_list(r)
-        {:continue, "Sub-agent completed successfully: #{summary}#{files}\n\nIMPORTANT: Do NOT rewrite these files — read them first with `read_file` if you need to understand or modify what the sub-agent produced."}
+        result = Golem.Runner.run_sub_agent(goal, context, depth, parent_state)
+        merge_sub_agent_costs(result)
 
-      {:ok, %{success: false, summary: summary} = r} ->
-        files = format_file_list(r)
-        {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}\n\nRead these files with `read_file` before making changes."}
+        case result do
+          {:ok, %{success: true, summary: summary} = r} ->
+            files = format_file_list(r)
+            response = "Sub-agent completed successfully: #{summary}#{files}\n\nIMPORTANT: Do NOT rewrite these files — read them first with `read_file` if you need to understand or modify what the sub-agent produced."
+            record_completed_sub_agent(goal, response)
+            {:continue, response}
 
-      {:error, :max_steps_reached} ->
-        {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
+          {:ok, %{success: false, summary: summary} = r} ->
+            files = format_file_list(r)
+            {:continue, "Sub-agent did not achieve its goal: #{summary}#{files}\n\nRead these files with `read_file` before making changes."}
 
-      {:error, reason} ->
-        {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
+          {:error, :max_steps_reached} ->
+            {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
+
+          {:error, reason} ->
+            {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
+        end
     end
   end
 
@@ -539,6 +578,52 @@ defmodule Golem.ToolHandler do
   def execute(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
+  end
+
+  # --- Sub-Agent Deduplication ---
+
+  # Track completed sub-agent goals to prevent re-running the same work
+  # after verification rejection. Uses fuzzy matching since the agent may
+  # rephrase the goal slightly on retry.
+
+  defp find_completed_sub_agent(goal) do
+    completed = :persistent_term.get(:golem_completed_sub_agents, %{})
+    normalized = normalize_goal(goal)
+
+    # Exact match first
+    case Map.get(completed, normalized) do
+      nil ->
+        # Fuzzy: check if any completed goal shares >60% of words
+        Enum.find_value(completed, :miss, fn {prev_goal, result} ->
+          if goal_similarity(normalized, prev_goal) > 0.6 do
+            {:hit, result}
+          end
+        end)
+
+      result ->
+        {:hit, result}
+    end
+  end
+
+  defp record_completed_sub_agent(goal, result) do
+    completed = :persistent_term.get(:golem_completed_sub_agents, %{})
+    :persistent_term.put(:golem_completed_sub_agents, Map.put(completed, normalize_goal(goal), result))
+  end
+
+  defp normalize_goal(goal) do
+    goal
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9\s]+/, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp goal_similarity(a, b) do
+    words_a = MapSet.new(String.split(a))
+    words_b = MapSet.new(String.split(b))
+    intersection = MapSet.intersection(words_a, words_b) |> MapSet.size()
+    union = MapSet.union(words_a, words_b) |> MapSet.size()
+    if union == 0, do: 0.0, else: intersection / union
   end
 
   # --- Sub-Agent Context Enrichment ---

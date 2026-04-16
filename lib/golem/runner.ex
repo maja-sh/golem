@@ -162,6 +162,7 @@ defmodule Golem.Runner do
         verify_commands = Golem.PlanParser.extract_verify_commands(plan)
         if verify_commands != %{}, do: Logger.info("#{prefix}Extracted #{map_size(verify_commands)} verify commands from plan")
         :persistent_term.put(:golem_verify_commands, verify_commands)
+        :persistent_term.put(:golem_completed_sub_agents, %{})
 
         state = %{
           goal: goal,
