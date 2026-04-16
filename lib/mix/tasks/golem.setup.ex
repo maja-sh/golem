@@ -15,7 +15,9 @@ defmodule Mix.Tasks.Golem.Setup do
   @shortdoc "Test project setup (clone repos, run setup scripts, no agent run)"
 
   @impl true
-  def run(_args) do
+  def run(args) do
+    {opts, _, _} = OptionParser.parse(args, strict: [destroy: :boolean])
+
     Mix.Task.run("app.start")
 
     # Suppress console logger — keep only file logger
@@ -23,6 +25,39 @@ defmodule Mix.Tasks.Golem.Setup do
       :logger.set_handler_config(id, :level, :none)
     end
 
+    if opts[:destroy] do
+      do_destroy()
+    else
+      do_setup()
+    end
+  end
+
+  defp do_destroy do
+    case Golem.ProjectSetup.load_config() do
+      {:ok, config} ->
+        puts([:cyan, "● ", :reset, :bright, "Destroying projects", :reset])
+        puts([])
+
+        for p <- config.projects do
+          case Golem.Sandbox.exec("rm -rf #{p.path}", timeout: 60_000) do
+            {:ok, %{exit_code: 0}} ->
+              puts([:green, "  ✓ ", :reset, :faint, "#{p.repo} removed", :reset])
+            _ ->
+              puts([:red, "  ✗ ", :reset, :faint, "#{p.repo} failed to remove", :reset])
+          end
+        end
+
+        # Also remove worktree repos and task dirs
+        Golem.Sandbox.exec("rm -rf /home/agent/repos /home/agent/tasks", timeout: 60_000)
+        puts([:green, "  ✓ ", :reset, :faint, "worktrees cleaned up", :reset])
+        puts([])
+
+      {:error, reason} ->
+        puts([:red, "✗ Failed to load config: #{inspect(reason)}", :reset])
+    end
+  end
+
+  defp do_setup do
     case Golem.ProjectSetup.load_config() do
       {:ok, config} ->
         puts([:cyan, "● ", :reset, :bright, "Project setup", :reset])
