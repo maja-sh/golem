@@ -219,9 +219,14 @@ defmodule Golem.MCP do
         config.env
         |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(to_string(v))} end)
 
+      # Wrap command to redirect stderr to /dev/null — MCP servers
+      # (especially mcp-remote) dump debug output and API keys to stderr
+      shell = System.find_executable("sh")
+      escaped_args = Enum.map_join([executable | config.args], " ", &shell_escape/1)
+
       port =
-        Port.open({:spawn_executable, executable}, [
-          {:args, config.args},
+        Port.open({:spawn_executable, shell}, [
+          {:args, ["-c", "#{escaped_args} 2>/dev/null"]},
           {:env, env},
           :binary,
           :use_stdio,
@@ -431,6 +436,10 @@ defmodule Golem.MCP do
 
   defp format_result({:error, %{"message" => msg}}), do: "[MCP error] #{msg}"
   defp format_result({:error, reason}), do: "[MCP error] #{inspect(reason)}"
+
+  defp shell_escape(arg) do
+    "'#{String.replace(arg, "'", "'\\''")}'"
+  end
 
   defp catch_port_close(port) do
     if Port.info(port), do: Port.close(port)
