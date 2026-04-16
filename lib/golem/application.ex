@@ -22,6 +22,7 @@ defmodule Golem.Application do
       Golem.Sandbox,
       Golem.FileCache,
       Golem.TUI,
+      Golem.MCP,
       Golem.DaemonRunner
     ]
 

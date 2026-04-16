@@ -17,7 +17,7 @@ defmodule Golem.Tools do
       (if depth < @max_agent_depth, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []) ++
         (if discord_available?(), do: [ask_user_tool()], else: [])
 
-    base ++ extras
+    base ++ extras ++ mcp_tools()
   end
 
   @doc """
@@ -35,7 +35,7 @@ defmodule Golem.Tools do
       glob_tool(),
       grep_tool(),
       create_plan_tool()
-    ]
+    ] ++ mcp_tools()
   end
 
   defp sub_agent_tool do
@@ -262,6 +262,10 @@ defmodule Golem.Tools do
 
   defp discord_available? do
     System.get_env("DISCORD_TOKEN") != nil
+  end
+
+  defp mcp_tools do
+    Golem.MCP.tools()
   end
 
   defp tool(name, description, input_schema) do

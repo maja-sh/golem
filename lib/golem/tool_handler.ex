@@ -526,6 +526,16 @@ defmodule Golem.ToolHandler do
     {:done, %{success: success, summary: summary}}
   end
 
+  # MCP tools — namespaced as mcp_{server}_{tool}
+  def execute(%{name: "mcp_" <> _ = name, input: input}, _depth) do
+    Logger.info("  [mcp] #{name}")
+
+    case Golem.MCP.call_tool(name, input) do
+      {:ok, text} -> {:continue, truncate(text, 50_000)}
+      {:error, reason} -> {:continue, "[MCP error] #{inspect(reason)}"}
+    end
+  end
+
   def execute(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}

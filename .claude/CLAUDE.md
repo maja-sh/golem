@@ -161,6 +161,29 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
 5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira.
 
+## MCP Servers
+
+External tool servers can be connected via `.golem/mcp.yml` using the stdio transport:
+
+```yaml
+servers:
+  - name: elastic
+    command: npx
+    args: ["-y", "@elastic/mcp-server"]
+    env:
+      ELASTICSEARCH_URL: "https://your-cluster.es.io"
+      ELASTICSEARCH_API_KEY: "your-key"
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Server identifier. Tools are namespaced as `mcp_{name}_{tool}` |
+| `command` | yes | Executable to spawn (must be in PATH) |
+| `args` | no | Command-line arguments |
+| `env` | no | Environment variables passed to the server process |
+
+MCP tools are available to both the planner (for research) and executor (for runtime checks). The server is spawned on startup, tools are discovered via `tools/list`, and calls are routed through `tools/call` over JSON-RPC/stdio.
+
 ## Environment Variables
 
 Set in `.env` (loaded by dotenv):
