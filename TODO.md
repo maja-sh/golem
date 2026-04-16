@@ -26,17 +26,16 @@
 - [x] AGENTS.md/CLAUDE.md auto-discovery during planning and execution
 - [x] Jira comments and labels in agent prompts
 - [x] Per-project `instructions` field in projects.yml
+- [x] Prompt cache breakpoints on messages (90% input cost reduction)
+- [x] Sub-agent deduplication (prevent re-running completed goals)
+- [x] File cache invalidation after sub-agent runs
+- [x] Per-step verification enforcement in prompts
+- [x] Ticket type and priority in agent goal
 
 ## High Priority
 
-### Prompt cache breakpoints on messages
-The planner and executor send growing conversation history without cache markers. Adding `cache_control` to the last 1-2 messages before each API call could cut input costs by 80-90%. The system prompt is already cached but messages are not.
-
 ### Smarter context compaction in planner
 After reading 20 files, the planner sends all of them every turn. Could summarize older file reads into a compact digest to reduce token usage.
-
-### Incremental test execution
-The agent writes multiple files then tests at the end. Should run the relevant test after each file change. Added to the prompt but could be enforced in code by auto-running a test command after `write_file`.
 
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
@@ -52,8 +51,8 @@ Trigger runs from Jira webhooks (ticket moved to "Ready for Dev" → auto-start)
 ### Run dashboard
 Web UI showing active runs, cost, progress. Phoenix LiveView would be natural in Elixir.
 
-### Smarter sub-agent delegation
-Track which sub-agent goals have been completed and prevent re-delegation of the same task after verification rejection.
+### Parallel project setup
+Run project clone/setup in parallel during `mix golem.setup`. System-level steps (apt-get) run once sequentially, then per-project steps (composer, npm) run in parallel. Needs dynamic TUI to show per-project status updating in place. dpkg lock contention is the main constraint.
 
 ### GitHub Support
 - GitHub API client (create PRs, post comments)
