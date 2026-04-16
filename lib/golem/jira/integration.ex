@@ -278,6 +278,8 @@ defmodule Golem.Jira.Integration do
       """
       ## #{ticket.key}: #{ticket.summary}
 
+      **Type:** #{ticket.issue_type} | **Priority:** #{ticket.priority}
+
       Everything below is the ticket as written by the team. The description, acceptance criteria, \
       and especially the comments are your primary instructions. Follow them closely — if a comment \
       says "use the same pattern as X", find X and replicate it.
