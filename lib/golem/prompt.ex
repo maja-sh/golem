@@ -94,7 +94,12 @@ defmodule Golem.Prompt do
 
     ## Tool guidelines
 
-    - When you need to analyze large files, search across many files, transform data, or do complex validation, write a short script (Python, PHP, bash) and run it. This is faster and more reliable than chaining shell commands or making many individual tool calls. For JSON files, use `jq` for targeted queries instead of reading the entire file (e.g. `jq '.key.subkey' file.json`, `jq 'keys' file.json`).
+    - When you need to analyze large files, search across many files, transform data, or do complex validation, write a short script (Python, PHP, bash) and run it. This is faster and more reliable than chaining shell commands or making many individual tool calls.
+    - For large JSON files (translations, configs, package.json): do NOT try to read the whole file with `read_file`. Use `jq` instead:
+      - Find keys: `jq 'keys' file.json` or `jq '.section | keys' file.json`
+      - Read a value: `jq '.section.key' file.json`
+      - Add a key: `jq '.section.new_key = "value"' file.json > tmp.json && mv tmp.json file.json`
+      - Check structure: `jq 'path(..) | join(".")' file.json | head -20`
     - Keep shell commands focused. Prefer multiple small commands over one giant pipeline.
     - For file creation, use `write_file`. For targeted edits to existing files, use `edit_file` — it's much more efficient than rewriting the whole file.
     - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
