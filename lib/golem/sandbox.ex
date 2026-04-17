@@ -44,7 +44,7 @@ defmodule Golem.Sandbox do
   """
   def read_file(container_path) do
     # Use exec to cat the file — simpler than podman cp out
-    case exec("cat #{escape(container_path)}", timeout: 10_000) do
+    case exec("cat #{escape(container_path)}", timeout: 30_000, stall_timeout: :infinity) do
       {:ok, %{exit_code: 0, output: content}} -> {:ok, content}
       {:ok, %{output: err}} -> {:error, err}
       error -> error
