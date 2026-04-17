@@ -119,7 +119,7 @@ defmodule Mix.Tasks.Golem.Setup do
           run_step("pull #{project.branch_from}", cmd, timeout: 120_000)
 
         _ ->
-          cmd = "git clone --progress --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
+          cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path} 2>/dev/null"
           run_step("clone (#{project.branch_from})", cmd, timeout: 300_000)
       end
 
