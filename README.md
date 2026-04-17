@@ -165,6 +165,23 @@ Test scenarios live in `scenarios/`. Run with `--scenario <name>`:
 | `chainpost_backend` | Hard | 200-400 | Rust blockchain microblogging |
 | `chainpost_frontend` | Hard | 150-300 | Tauri + React desktop client |
 
+## Per-run event log
+
+Each run writes a structured event log to `runs/<id>/events.jsonl` — one JSON object per line, covering every tool call, API call, sub-agent, compaction, and warning. Use it for post-mortems, replay, or as the basis for a dashboard.
+
+```bash
+# Everything that happened
+jq . runs/<id>/events.jsonl | less
+
+# Cost per step
+jq 'select(.type == "api_call") | [.step, .payload.input_tokens, .payload.cache_read]' runs/<id>/events.jsonl
+
+# All shell commands that failed
+jq 'select(.type == "tool_result" and .payload.error == true and .payload.name == "shell") | .payload.preview' runs/<id>/events.jsonl
+```
+
+The prose log at `logs/golem.log` is intentionally minimal — only warnings and errors. For per-step detail, read the events file.
+
 ## Tests
 
 ```bash

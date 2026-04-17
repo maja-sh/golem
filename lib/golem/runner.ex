@@ -36,9 +36,17 @@ defmodule Golem.Runner do
     # Initialize TUI first (suppresses console logger)
     if depth == 0, do: output().init_display(run_id, goal)
 
-    Logger.info("#{prefix}========== RUN STARTED (#{run_id}) ==========")
-    Logger.info("#{prefix}Goal: #{goal}")
-    Logger.info("#{prefix}Depth: #{depth}, Max steps: #{max_steps}")
+    # Bind this process to the run so event emissions route to the
+    # right events.jsonl.
+    if depth == 0, do: Golem.Events.set_run(run_id)
+
+    Golem.Events.emit(:run_start, %{
+      goal: goal,
+      max_steps: max_steps,
+      depth: depth,
+      planner_model: Application.get_env(:golem, :planner_model),
+      executor_model: Application.get_env(:golem, :executor_model)
+    })
 
     result = do_run(goal, opts, max_steps, depth, prefix, run_id)
 
@@ -52,13 +60,23 @@ defmodule Golem.Runner do
       output().stop_display()
     end
 
-    # Always log to file
     case result do
-      {:ok, %{success: true} = s} -> Logger.info("#{prefix}RUN SUCCEEDED: #{s.summary}")
-      {:ok, %{success: false} = s} -> Logger.info("#{prefix}RUN FAILED: #{s.summary}")
-      {:error, :max_steps_reached} -> Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
-      {:error, reason} -> Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
+      {:ok, %{success: true} = s} ->
+        Golem.Events.emit(:run_end, %{success: true, summary: s.summary, cost: Map.get(s, :costs, %{})})
+
+      {:ok, %{success: false} = s} ->
+        Golem.Events.emit(:run_end, %{success: false, summary: s.summary, cost: Map.get(s, :costs, %{})})
+
+      {:error, :max_steps_reached} ->
+        Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
+        Golem.Events.emit(:run_paused, %{run_id: run_id})
+
+      {:error, reason} ->
+        Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
+        Golem.Events.emit(:run_error, %{reason: inspect(reason)})
     end
+
+    if depth == 0, do: Golem.Events.clear_run()
 
     result
   end
@@ -73,16 +91,16 @@ defmodule Golem.Runner do
         new_max = saved.step + extra_steps
         prefix = depth_prefix(saved.depth)
 
-        Logger.info("#{prefix}========== RESUMING RUN #{run_id} ==========")
-        Logger.info("#{prefix}Continuing from step #{saved.step}, new max: #{new_max}")
-
         if saved.depth == 0 do
           output().init_display(run_id, saved.goal)
           output().planning("Resuming from step #{saved.step}...")
           # Restore progress checklist
           progress = Map.get(saved, :progress, [])
           if progress != [], do: output().set_progress(progress)
+          Golem.Events.set_run(run_id)
         end
+
+        Golem.Events.emit(:run_resumed, %{from_step: saved.step, new_max: new_max})
 
         state = %{
           goal: saved.goal,
@@ -133,13 +151,23 @@ defmodule Golem.Runner do
           output().stop_display()
         end
 
-        # Always log to file
         case result do
-          {:ok, %{success: true} = s} -> Logger.info("#{prefix}RUN SUCCEEDED: #{s.summary}")
-          {:ok, %{success: false} = s} -> Logger.info("#{prefix}RUN FAILED: #{s.summary}")
-          {:error, :max_steps_reached} -> Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
-          {:error, reason} -> Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
+          {:ok, %{success: true} = s} ->
+            Golem.Events.emit(:run_end, %{success: true, summary: s.summary, cost: Map.get(s, :costs, %{})})
+
+          {:ok, %{success: false} = s} ->
+            Golem.Events.emit(:run_end, %{success: false, summary: s.summary, cost: Map.get(s, :costs, %{})})
+
+          {:error, :max_steps_reached} ->
+            Logger.warning("#{prefix}RUN PAUSED — resume: #{run_id}")
+            Golem.Events.emit(:run_paused, %{run_id: run_id})
+
+          {:error, reason} ->
+            Logger.error("#{prefix}RUN ERROR: #{inspect(reason)}")
+            Golem.Events.emit(:run_error, %{reason: inspect(reason)})
         end
+
+        if saved.depth == 0, do: Golem.Events.clear_run()
 
         result
 
@@ -164,10 +192,19 @@ defmodule Golem.Runner do
     case plan_result do
       {:ok, plan, planner_costs} ->
         if depth == 0, do: output().plan_created(plan)
-        Logger.info("#{prefix}Plan created (logged to file)")
 
         verify_commands = Golem.PlanParser.extract_verify_commands(plan)
-        if verify_commands != %{}, do: Logger.info("#{prefix}Extracted #{map_size(verify_commands)} verify commands from plan")
+
+        phases = Regex.scan(~r/^## /m, plan) |> length()
+        step_count = Regex.scan(~r/- \[ \]/m, plan) |> length()
+        Golem.Events.emit(:plan_created, %{
+          depth: depth,
+          plan: plan,
+          phases: phases,
+          step_count: step_count,
+          verify_count: map_size(verify_commands),
+          planner_cost: Map.get(planner_costs, :total_dollars, 0.0)
+        })
         :persistent_term.put(:golem_verify_commands, verify_commands)
         :persistent_term.put(:golem_completed_sub_agents, %{})
 
@@ -210,9 +247,13 @@ defmodule Golem.Runner do
   def run_sub_agent(goal, context, parent_depth, parent_state \\ nil) do
     depth = parent_depth + 1
     prefix = depth_prefix(depth)
-    Logger.info("#{prefix}---------- SUB-AGENT SPAWNED ----------")
-    Logger.info("#{prefix}Goal: #{String.slice(goal, 0, 500)}")
     if parent_depth == 0, do: output().sub_agent_start(goal)
+
+    Golem.Events.emit(:sub_agent_start, %{
+      depth: depth,
+      goal: String.slice(goal, 0, 500),
+      has_context: context != nil and context != ""
+    })
 
     # Build directive message for the sub-agent
     context_section = if context && context != "", do: "\n\n## Additional Context\n\n#{context}", else: ""
@@ -265,7 +306,6 @@ defmodule Golem.Runner do
     }
 
     result = loop(state, system)
-    Logger.info("#{prefix}---------- SUB-AGENT FINISHED ----------")
 
     # Report sub-agent completion to TUI
     if parent_depth == 0 do
@@ -275,6 +315,18 @@ defmodule Golem.Runner do
       end
       output().sub_agent_result(goal, steps, success)
     end
+
+    Golem.Events.emit(:sub_agent_end, %{
+      depth: depth,
+      goal: String.slice(goal, 0, 500),
+      success: match?({:ok, %{success: true}}, result),
+      steps: state.step,
+      summary: case result do
+        {:ok, %{summary: s}} -> String.slice(s || "", 0, 500)
+        {:error, reason} -> "error: #{inspect(reason)}"
+        _ -> ""
+      end
+    })
 
     # Extract files from the sub-agent for parent awareness
     # Costs are already in summary.costs from the loop
@@ -334,7 +386,6 @@ defmodule Golem.Runner do
   end
 
   defp planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
-    Logger.info("  [planner] step #{step}")
 
     result = Golem.Claude.call(messages,
       model: model,
@@ -517,7 +568,7 @@ defmodule Golem.Runner do
     content =
       new_docs
       |> Enum.map(fn {path, content} ->
-        Logger.info("  [planner] auto-discovered #{path}")
+        Golem.Events.emit(:agents_md_discovered, %{path: path})
         "## #{path}\n\n#{String.trim(content)}"
       end)
       |> Enum.join("\n\n")
@@ -609,8 +660,14 @@ defmodule Golem.Runner do
     costs = Map.get(state, :costs, %{total_dollars: 0.0})
     errors = Map.get(state, :errors, [])
     cost_str = "$#{format_cost(costs)}"
-    Logger.info("#{p}--- Step #{step}/#{state.max_steps} | #{cost_str} ---")
     if state.depth == 0, do: output().step_header(step, state.max_steps, cost_str)
+
+    Golem.Events.emit(:step, %{
+      step: step,
+      depth: state.depth,
+      max_steps: state.max_steps,
+      cost: Map.get(costs, :total_dollars, 0.0)
+    })
 
     # Rebuild system prompt with current error memory and AGENTS.md
     agents_md = Map.get(state, :agents_md)
@@ -619,7 +676,6 @@ defmodule Golem.Runner do
     # Escalate to Opus when stuck, drop back after a few steps
     model =
       if Map.get(state, :escalated_until, 0) > step do
-        Logger.info("#{p}  [escalated to Opus]")
         Application.get_env(:golem, :planner_model)
       else
         Application.get_env(:golem, :executor_model)
@@ -662,9 +718,21 @@ defmodule Golem.Runner do
         input_tokens = Map.get(response.usage, :input_tokens, 0)
         if input_tokens > 0, do: :persistent_term.put(:golem_last_input_tokens, input_tokens)
 
+        Golem.Events.emit(:api_call, %{
+          step: step,
+          depth: state.depth,
+          model: model,
+          elapsed_ms: llm_elapsed,
+          input_tokens: input_tokens,
+          output_tokens: output_tokens,
+          cache_read: Map.get(response.usage, :cache_read, 0),
+          cache_create: Map.get(response.usage, :cache_create, 0),
+          tool_count: length(tool_calls)
+        })
+
         if response.text do
-          Logger.info("#{p}  Agent: #{response.text}")
           if state.depth == 0, do: output().agent_text(response.text)
+          Golem.Events.emit(:agent_text, %{step: step, depth: state.depth, text: response.text})
         end
 
         if is_nil(response.text) and state.depth == 0 do
@@ -673,8 +741,6 @@ defmodule Golem.Runner do
             output().agent_text("Running #{count} actions (#{Golem.TUI.format_elapsed(llm_elapsed)})")
           end
         end
-
-        Logger.info("#{p}  (#{Golem.TUI.format_elapsed(llm_elapsed)} · #{length(tool_calls)} tools · ↓ #{Golem.TUI.format_tokens(output_tokens)})")
 
         costs = accumulate_costs(costs, response.usage, model)
         if state.depth == 0, do: output().update_tokens(output_tokens)
@@ -701,7 +767,6 @@ defmodule Golem.Runner do
                   :persistent_term.put(:golem_progress, completed)
                   output().set_progress(completed)
                 end
-                Logger.info("#{p}  Total cost: $#{format_cost(costs)}")
                 log_phase_costs(state)
                 maybe_save(state)
                 :persistent_term.put(:golem_verify_commands, %{})
@@ -746,7 +811,7 @@ defmodule Golem.Runner do
       {:ok, %{text: text, tool_use: []} = response} ->
         text = text || ""  # Guard against nil text from API
         no_tool_count = Map.get(state, :no_tool_count, 0) + 1
-        Logger.info("#{p}  Agent (no tool, #{no_tool_count}x): #{text}")
+        Golem.Events.emit(:no_tool_response, %{step: step, depth: state.depth, count: no_tool_count, text: String.slice(text, 0, 500)})
         costs = accumulate_costs(costs, response.usage, model)
         input_tokens = Map.get(response.usage, :input_tokens, 0)
         if input_tokens > 0, do: :persistent_term.put(:golem_last_input_tokens, input_tokens)
@@ -867,10 +932,18 @@ defmodule Golem.Runner do
       if not silent, do: output().tool_call(tc.name, summarize_input(tc))
     end end
 
+    # Emit tool_call events for every call in the batch up-front, so
+    # events.jsonl preserves intent even if a later tool crashes.
+    Enum.each(batch, &emit_tool_call_event(&1, depth, state))
+
+    # Capture run_id so Task subprocesses can emit to the right run.
+    run_id = Golem.Events.current_run()
+
     # Execute all in parallel
     tasks =
       Enum.map(batch, fn tc ->
         Task.async(fn ->
+          if run_id, do: Golem.Events.set_run(run_id)
           start = System.monotonic_time(:millisecond)
           result = Golem.ToolHandler.execute(tc, depth) |> Golem.ToolHandler.truncate_result()
           elapsed = System.monotonic_time(:millisecond) - start
@@ -916,6 +989,7 @@ defmodule Golem.Runner do
             emit_sub_agent_status(state, tc.name, detail)
           end
 
+          emit_tool_result_event(tc, depth, state, text, elapsed, is_error)
           {tc, {:text, text}}
 
         {:continue_with_image, %{text: text, base64: base64}} ->
@@ -925,6 +999,7 @@ defmodule Golem.Runner do
           if not show and not silent and state do
             emit_sub_agent_status(state, tc.name, detail)
           end
+          emit_tool_result_event(tc, depth, state, text, elapsed, false)
           {tc, {:image, text, base64}}
       end
     end)
@@ -938,6 +1013,8 @@ defmodule Golem.Runner do
 
     start = System.monotonic_time(:millisecond)
 
+    emit_tool_call_event(tc, depth, state)
+
     # Sub-agent: show condensed status in the spinner line
     if not show and not silent and state do
       emit_sub_agent_status(state, tc.name, detail)
@@ -947,11 +1024,13 @@ defmodule Golem.Runner do
       {:done, summary} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if show, do: output().tool_result(tc.name, detail, summary.summary, elapsed, nil)
+        emit_tool_result_event(tc, depth, state, "Goal completed.", elapsed, false)
         {:done, summary, {tc, {:text, "Goal completed."}}}
 
       {:think_replan, reasoning} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if show, do: output().tool_result(tc.name, detail, "Re-planning...", elapsed, nil)
+        emit_tool_result_event(tc, depth, state, "Re-planning requested.", elapsed, false)
         {:think_replan, reasoning, {tc, {:text, "Re-planning requested."}}}
 
       {:continue, result} ->
@@ -964,13 +1043,41 @@ defmodule Golem.Runner do
             else: output().tool_result(tc.name, detail, result, elapsed, nil)
         end
 
+        emit_tool_result_event(tc, depth, state, result, elapsed, is_error)
         {:continue, {tc, {:text, result}}}
 
       {:continue_with_image, %{text: text, base64: base64}} ->
         elapsed = System.monotonic_time(:millisecond) - start
         if show and not silent, do: output().tool_result(tc.name, detail, text, elapsed, nil)
+        emit_tool_result_event(tc, depth, state, text, elapsed, false)
         {:continue, {tc, {:image, text, base64}}}
     end
+  end
+
+  defp emit_tool_call_event(tc, depth, state) do
+    Golem.Events.emit(:tool_call, %{
+      step: state && state.step,
+      depth: depth,
+      name: tc.name,
+      input: tc.input,
+      tool_use_id: tc.id
+    })
+  end
+
+  defp emit_tool_result_event(tc, depth, state, result, elapsed_ms, is_error) do
+    preview = result |> to_string() |> String.slice(0, 500)
+    size = byte_size(to_string(result))
+
+    Golem.Events.emit(:tool_result, %{
+      step: state && state.step,
+      depth: depth,
+      name: tc.name,
+      tool_use_id: tc.id,
+      elapsed_ms: elapsed_ms,
+      preview: preview,
+      size: size,
+      error: is_error
+    })
   end
 
   @sub_agent_silent_tools ~w(think update_progress)
@@ -1047,8 +1154,14 @@ defmodule Golem.Runner do
       state = Map.put(state, :replan_count, replan_count)
       loop(state, system)
     else
-      Logger.info("#{state.prefix}  Re-planning with Opus (#{replan_count}/#{@max_replans})...")
       if state.depth == 0, do: output().planning("Re-planning with Opus (#{replan_count}/#{@max_replans})...")
+
+      Golem.Events.emit(:replan_start, %{
+        step: step,
+        depth: state.depth,
+        count: replan_count,
+        reasoning: String.slice(reasoning || "", 0, 500)
+      })
 
       # Take last 20 history entries for context
       recent = Enum.take(state.history, -20)
@@ -1056,7 +1169,13 @@ defmodule Golem.Runner do
       # State already has the tool exchange messages appended from execute_tool_calls
       case replan(state.goal, state.plan, reasoning, recent) do
         {:ok, new_plan} ->
-          Logger.info("#{state.prefix}  Revised plan:\n#{new_plan}")
+
+          Golem.Events.emit(:replan_done, %{
+            step: step,
+            depth: state.depth,
+            count: replan_count,
+            plan: new_plan
+          })
 
           # Merge new verify commands (additive — keep already-verified items)
           new_verify = Golem.PlanParser.extract_verify_commands(new_plan)
@@ -1097,15 +1216,16 @@ defmodule Golem.Runner do
     if not summary.success or state.depth > 0 or rejections >= @max_done_rejections do
       {:accept, state}
     else
-      Logger.info("#{state.prefix}  Verifying before accepting done (attempt #{rejections + 1})...")
+      Golem.Events.emit(:verify_start, %{attempt: rejections + 1})
       if state.depth == 0, do: output().planning("Running verification agent...")
 
       case Golem.Verify.run_agent(state.goal) do
         :ok ->
-          Logger.info("#{state.prefix}  Verification passed")
+          Golem.Events.emit(:verify_done, %{passed: true})
           {:accept, state}
 
         {:error, issues} ->
+          Golem.Events.emit(:verify_done, %{passed: false, issues: String.slice(issues || "", 0, 1000)})
           reject_done(state, "Verification agent found issues:\n\n#{issues}")
       end
     end
@@ -1266,7 +1386,12 @@ defmodule Golem.Runner do
         # Snip removed messages — invalidate the API-token floor so the next
         # threshold check uses the fresh heuristic estimate.
         :persistent_term.put(:golem_last_input_tokens, 0)
-        Logger.info("  Snip compact: removed #{middle_removed} middle messages (~#{token_est - estimate_tokens(head ++ tail)} tokens freed)")
+        tokens_freed = token_est - estimate_tokens(head ++ tail)
+        Golem.Events.emit(:compaction, %{
+          type: "snip",
+          messages_removed: middle_removed,
+          tokens_freed: tokens_freed
+        })
 
         head ++ [
           %{role: "assistant", content: "I'll continue working on this goal."},
@@ -1303,11 +1428,17 @@ defmodule Golem.Runner do
     if msg_count <= @compact_threshold and token_est <= @compact_token_threshold do
       messages
     else
-      if token_est > @compact_token_threshold do
-        Logger.info("  Compacting: ~#{token_est} estimated tokens exceeds #{@compact_token_threshold} threshold")
-      else
-        Logger.info("  Compacting: #{msg_count} messages exceeds #{@compact_threshold} threshold")
-      end
+      reason =
+        if token_est > @compact_token_threshold,
+          do: "token_threshold",
+          else: "message_threshold"
+
+      Golem.Events.emit(:compaction, %{
+        type: "full",
+        reason: reason,
+        message_count: msg_count,
+        token_estimate: token_est
+      })
 
       do_trim_messages(messages)
     end
@@ -1611,11 +1742,6 @@ defmodule Golem.Runner do
   defp log_phase_costs(state) do
     phase_costs = Map.get(state, :phase_costs, [])
     if phase_costs != [] do
-      Logger.info("Phase cost breakdown:")
-      Enum.each(phase_costs, fn {name, cost} ->
-        Logger.info("  #{name}: $#{cost}")
-      end)
-
       output().show_phase_costs(phase_costs)
     end
   end
@@ -1633,6 +1759,7 @@ defmodule Golem.Runner do
     case Golem.Runner.Triggers.classify_stuck(state.history, executed) do
       {:edit_loop, stuck_files} ->
         Logger.warning("Stuck detection (edits): #{Enum.join(stuck_files, ", ")}")
+        Golem.Events.emit(:stuck, %{step: step, category: "edit_loop", detail: stuck_files})
 
         msg =
           "[System] WARNING: You appear to be stuck in an edit loop on: " <>
@@ -1643,6 +1770,7 @@ defmodule Golem.Runner do
 
       {:shell_loop, shell_repeats} ->
         Logger.warning("Stuck detection (shell): #{Enum.join(shell_repeats, ", ")}")
+        Golem.Events.emit(:stuck, %{step: step, category: "shell_loop", detail: shell_repeats})
 
         msg =
           "[System] WARNING: You are repeating the same shell command(s): " <>
@@ -1653,6 +1781,7 @@ defmodule Golem.Runner do
 
       {:repeat_loop, count} ->
         Logger.warning("Stuck detection (repeat): #{count} repeated tool calls")
+        Golem.Events.emit(:stuck, %{step: step, category: "repeat_loop", count: count})
 
         msg =
           "[System] WARNING: You are repeating identical tool calls without making progress. This is wasting steps. STOP and use `think` to analyze why you're stuck, then try a different approach.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
@@ -1675,6 +1804,7 @@ defmodule Golem.Runner do
       {:think_loop, consecutive} ->
         Logger.warning("Think loop detected: #{consecutive} consecutive think-only turns")
         step = state.step + 1
+        Golem.Events.emit(:think_loop, %{step: step, consecutive: consecutive})
 
         msg =
           "[System] WARNING: You have called `think` #{consecutive} times in a row without taking any other action. Stop thinking and ACT. Use a tool that changes state — `shell`, `write_file`, `edit_file`, `sub_agent` — or call `done` if you're finished. Do NOT call `think` again without an accompanying action tool.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
@@ -1746,6 +1876,7 @@ defmodule Golem.Runner do
       {:nudge, gap} ->
         :persistent_term.put(:golem_last_staleness_nudge, step)
         Logger.warning("Progress staleness: no completed items in #{gap} steps")
+        Golem.Events.emit(:staleness_nudge, %{step: step, gap: gap})
 
         msg = """
         [System] You haven't marked a progress item completed in #{gap} steps. Either:
@@ -1775,7 +1906,7 @@ defmodule Golem.Runner do
       # No cheap signal tripped — don't spend the LLM call
       {state.messages, 0}
     else
-      Logger.info("Drift heuristics tripped: #{inspect(signals)} — running LLM drift check")
+      Golem.Events.emit(:drift_check, %{signals: Enum.map(signals, &Atom.to_string/1)})
       do_llm_drift_check(state, consecutive)
     end
   end
@@ -1791,6 +1922,11 @@ defmodule Golem.Runner do
       {:drifting, explanation} ->
         new_consecutive = consecutive + 1
         Logger.warning("Drift detected at step #{step} (#{new_consecutive} consecutive): #{String.slice(explanation, 0, 200)}")
+        Golem.Events.emit(:drift, %{
+          step: step,
+          consecutive: new_consecutive,
+          explanation: String.slice(explanation, 0, 500)
+        })
 
         msg =
           if new_consecutive >= @max_consecutive_drifts do
@@ -1883,6 +2019,10 @@ defmodule Golem.Runner do
       entries ->
         files = Enum.map_join(entries, ", ", fn {path, lines} -> "#{path} (#{lines} lines)" end)
         Logger.warning("Large file warning: #{files}")
+        Golem.Events.emit(:file_size_warning, %{
+          files: Enum.map(entries, fn {p, l} -> %{path: p, lines: l} end),
+          threshold: threshold
+        })
 
         msg =
           "[System] WARNING: You wrote large file(s): #{files}. Files over #{threshold} lines are harder to edit reliably — `edit_file` failures increase with file size. Consider splitting into smaller modules (e.g., one file per struct/component/handler). This is not optional cleanup — it directly prevents edit failures in later steps."

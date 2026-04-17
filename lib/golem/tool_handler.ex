@@ -12,7 +12,6 @@ defmodule Golem.ToolHandler do
   def execute(tool_call, depth \\ 0)
 
   def execute(%{name: "shell", input: %{"command" => command}}, _depth) do
-    Logger.info("  [shell] #{String.slice(command, 0, 200)}")
 
     case Golem.Sandbox.exec(command) do
       {:ok, %{output: output, exit_code: 0}} ->
@@ -34,7 +33,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
-    Logger.info("  [write_file] #{path} (#{byte_size(content)} bytes)")
 
     # Ensure parent directory exists — avoids wasting a step on mkdir -p
     dir = Path.dirname(path)
@@ -53,7 +51,6 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "read_file", input: %{"path" => path} = input}, _depth) do
     offset = Map.get(input, "offset")
     limit = Map.get(input, "limit")
-    Logger.info("  [read_file] #{path}#{if offset, do: " offset=#{offset}"}#{if limit, do: " limit=#{limit}"}")
 
     # Check cache first (verifies hash against container)
     content =
@@ -67,7 +64,6 @@ defmodule Golem.ToolHandler do
               {:error, reason}
           end
         c ->
-          Logger.info("  [read_file] cache hit for #{path}")
           {:ok, c, true}
       end
 
@@ -102,7 +98,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}, _depth) do
-    Logger.info("  [edit_file] #{path}")
 
     # Try cache first, fall back to reading from container
     content =
@@ -133,7 +128,6 @@ defmodule Golem.ToolHandler do
               # Try fuzzy matching: normalize whitespace and retry
               case fuzzy_find(content, old) do
                 {:ok, actual_old} ->
-                  Logger.info("  [edit_file] fuzzy match succeeded for #{path}")
                   apply_edit(path, content, actual_old, new)
 
                 :no_match ->
@@ -152,7 +146,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "list_directory", input: %{"path" => path}}, _depth) do
-    Logger.info("  [list_directory] #{path}")
 
     case Golem.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
       {:ok, %{output: output, exit_code: 0}} -> {:continue, truncate(output, 50_000)}
@@ -164,7 +157,6 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "glob", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
-    Logger.info("  [glob] #{pattern} in #{path}")
 
     # Use find with -path for glob matching, or shell globstar
     cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | sort | head -200"
@@ -193,7 +185,6 @@ defmodule Golem.ToolHandler do
     file_glob = Map.get(input, "glob")
     context = Map.get(input, "context", 0)
     offset = Map.get(input, "offset", 0)
-    Logger.info("  [grep] '#{pattern}' in #{path}")
 
     glob_flag = if file_glob, do: " --include='#{file_glob}'", else: ""
     context_flag = if context > 0, do: " -C #{context}", else: ""
@@ -245,7 +236,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "web_search", input: %{"query" => query}}, _depth) do
-    Logger.info("  [web_search] #{query}")
 
     case Golem.Web.search(query) do
       {:ok, result} -> {:continue, truncate(result, 50_000)}
@@ -254,7 +244,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "web_fetch", input: %{"url" => url}}, _depth) do
-    Logger.info("  [web_fetch] #{url}")
 
     case Golem.Web.fetch(url) do
       {:ok, content} -> {:continue, truncate(content, 50_000)}
@@ -265,7 +254,11 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "think", input: input}, _depth) do
     reasoning = Map.fetch!(input, "reasoning")
     replan = Map.get(input, "request_replan", false)
-    Logger.info("  [think#{if replan, do: " + replan", else: ""}] #{String.slice(reasoning, 0, 500)}")
+
+    Golem.Events.emit(:thought, %{
+      request_replan: replan,
+      reasoning: String.slice(reasoning, 0, 2000)
+    })
 
     if replan do
       {:think_replan, reasoning}
@@ -275,7 +268,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "ask_user", input: %{"question" => question}}, _depth) do
-    Logger.info("  [ask_user] #{String.slice(question, 0, 200)}")
 
     # Get run_id from the process dictionary (set by the runner)
     run_id = Process.get(:golem_run_id, "unknown")
@@ -291,7 +283,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "browse", input: %{"url" => url}}, _depth) do
-    Logger.info("  [browse] #{url}")
 
     # Kill any existing Firefox, then open the URL
     Golem.Sandbox.exec("DISPLAY=:99 pkill -f firefox 2>/dev/null; sleep 0.5", timeout: 5_000)
@@ -372,10 +363,8 @@ defmodule Golem.ToolHandler do
               cmd ->
                 case Golem.Sandbox.exec(cmd, timeout: 10_000, stall_timeout: :infinity) do
                   {:ok, %{exit_code: 0}} ->
-                    Logger.info("  [verify] ✓ #{item.text}")
                     {%{item | status: :completed}, unverified}
                   _ ->
-                    Logger.info("  [verify] ✗ #{item.text}")
                     {item, [item.text | unverified]}
                 end
             end
@@ -389,7 +378,6 @@ defmodule Golem.ToolHandler do
 
     done = Enum.count(merged, &(&1.status in [:done, :completed]))
     total = length(merged)
-    Logger.info("  [update_progress] #{done}/#{total} completed")
 
     # Only update TUI and persistent state for top-level agent
     if depth == 0 do
@@ -409,9 +397,7 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
-    count = length(agents)
     parent_state = Process.get(:golem_parent_state)
-    Logger.info("  [parallel_sub_agents] #{count} agents")
 
     # Split agents into cached hits and ones that need to run
     {cached, to_run} =
@@ -420,7 +406,6 @@ defmodule Golem.ToolHandler do
       end)
 
     if cached != [] do
-      Logger.info("  [parallel_sub_agents] #{length(cached)} already completed, #{length(to_run)} to run")
     end
 
     # Run only the uncached agents
@@ -474,7 +459,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "screenshot", input: _input}, _depth) do
-    Logger.info("  [screenshot]")
 
     case Golem.Screenshot.capture() do
       {:ok, %{path: path, base64: base64}} ->
@@ -486,7 +470,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}, _depth) do
-    Logger.info("  [gui_click] #{x},#{y}")
 
     case Golem.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Clicked at (#{x}, #{y})"}
@@ -496,7 +479,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "gui_type", input: %{"text" => text}}, _depth) do
-    Logger.info("  [gui_type] #{String.slice(text, 0, 50)}")
     # Use xdotool type with --clearmodifiers to avoid modifier key issues
     escaped = String.replace(text, "'", "'\\''")
 
@@ -508,7 +490,6 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "gui_key", input: %{"key" => key}}, _depth) do
-    Logger.info("  [gui_key] #{key}")
 
     case Golem.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Pressed #{key}"}
@@ -521,7 +502,6 @@ defmodule Golem.ToolHandler do
     direction = Map.get(input, "direction", "down")
     clicks = Map.get(input, "clicks", 3)
     button = if direction == "up", do: 4, else: 5
-    Logger.info("  [gui_scroll] #{direction} #{clicks}")
 
     cmds = Enum.map_join(1..clicks, " && ", fn _ -> "DISPLAY=:99 xdotool click #{button}" end)
 
@@ -536,12 +516,11 @@ defmodule Golem.ToolHandler do
     goal = Map.fetch!(input, "goal")
     context = Map.get(input, "context", "")
     parent_state = Process.get(:golem_parent_state)
-    Logger.info("  [sub_agent] depth=#{depth + 1} — #{String.slice(goal, 0, 200)}")
 
     # Check if a similar sub-agent already ran successfully
     case find_completed_sub_agent(goal) do
       {:hit, cached} ->
-        Logger.info("  [sub_agent] SKIPPED — similar goal already completed")
+        Golem.Events.emit(:sub_agent_skipped, %{goal: String.slice(goal, 0, 500)})
         {:continue, cached}
 
       :miss ->
@@ -575,13 +554,11 @@ defmodule Golem.ToolHandler do
   def execute(%{name: "done", input: input}, _depth) do
     success = Map.get(input, "success", false)
     summary = Map.get(input, "summary", "No summary provided")
-    Logger.info("  [done] success=#{success} — #{summary}")
     {:done, %{success: success, summary: summary}}
   end
 
   # MCP tools — namespaced as mcp_{server}_{tool}
   def execute(%{name: "mcp_" <> _ = name, input: input}, _depth) do
-    Logger.info("  [mcp] #{name}")
 
     case Golem.MCP.call_tool(name, input) do
       {:ok, text} -> {:continue, truncate(text, 50_000)}
