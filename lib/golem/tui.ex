@@ -150,14 +150,6 @@ defmodule Golem.TUI do
     ], [action: "↳ #{short_goal} (#{step}/#{max_steps})"]})
   end
 
-  def set_live_output(lines) when is_list(lines) do
-    GenServer.cast(__MODULE__, {:update, live_output: lines})
-  end
-
-  def clear_live_output do
-    GenServer.cast(__MODULE__, {:update, live_output: []})
-  end
-
   @impl true
   def tool_batch_result(_results, _elapsed), do: :ok
 
@@ -221,7 +213,7 @@ defmodule Golem.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil, last_output: nil, live_output: []
+      ticker: nil, last_output: nil
     }}
   end
 
@@ -396,19 +388,10 @@ defmodule Golem.TUI do
         [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
       end)
 
-    live_lines =
-      case state.live_output do
-        [] -> []
-        lines ->
-          [[] | Enum.map(lines, fn line ->
-            [:faint, "  │ ", String.slice(to_string(line), 0, terminal_width() - 6), :reset]
-          end)]
-      end
-
     bottom = build_bottom_line(state)
 
-    sep = if progress_lines != [] or live_lines != [], do: [[]], else: []
-    [[]] ++ progress_lines ++ live_lines ++ sep ++ [bottom]
+    sep = if progress_lines != [], do: [[]], else: []
+    [[]] ++ progress_lines ++ sep ++ [bottom]
   end
 
   # --- Helpers ---
