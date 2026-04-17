@@ -1156,10 +1156,12 @@ defmodule Golem.Runner do
 
   # --- Microcompaction ---
 
-  # Selectively clear bulky tool results from older messages.
+  # Selectively compress bulky tool results from older messages.
   # Keeps the last @micro_keep_recent messages untouched. For older messages,
-  # replaces large tool_result content with "[cleared]" — the tool name and
-  # structure are preserved so the model still knows what happened.
+  # replaces large tool_result content with a compact signature that preserves
+  # tool name, input summary, success/exit code, and result size. This keeps
+  # the model's memory of "what did I already try?" so it doesn't re-run
+  # failing commands just because the raw output was cleared.
   @micro_keep_recent 6
   @micro_clearable_tools ~w(shell read_file grep glob web_search web_fetch list_directory browse)
   @micro_min_size 200
@@ -1170,21 +1172,23 @@ defmodule Golem.Runner do
     split_at = max(0, length(messages) - @micro_keep_recent)
     {old, recent} = Enum.split(messages, split_at)
 
-    # Build a map of tool_use_id → tool_name from assistant messages
-    tool_names = build_tool_name_index(old)
+    # Build a map of tool_use_id → {tool_name, input_summary}
+    tool_index = build_tool_index(old)
 
-    Enum.map(old, &microcompact_message(&1, tool_names)) ++ recent
+    Enum.map(old, &microcompact_message(&1, tool_index)) ++ recent
   end
 
-  defp build_tool_name_index(messages) do
+  defp build_tool_index(messages) do
     messages
     |> Enum.filter(&(&1.role == "assistant"))
     |> Enum.flat_map(fn msg ->
       case msg.content do
         blocks when is_list(blocks) ->
           Enum.flat_map(blocks, fn
-            %{type: "tool_use", id: id, name: name} -> [{id, name}]
-            %{"type" => "tool_use", "id" => id, "name" => name} -> [{id, name}]
+            %{type: "tool_use", id: id, name: name} = b ->
+              [{id, %{name: name, input: Map.get(b, :input, %{})}}]
+            %{"type" => "tool_use", "id" => id, "name" => name} = b ->
+              [{id, %{name: name, input: Map.get(b, "input", %{})}}]
             _ -> []
           end)
         _ -> []
@@ -1193,35 +1197,90 @@ defmodule Golem.Runner do
     |> Map.new()
   end
 
-  defp microcompact_message(%{role: "user", content: content} = msg, tool_names) when is_list(content) do
-    %{msg | content: Enum.map(content, &maybe_clear_tool_result(&1, tool_names))}
+  defp microcompact_message(%{role: "user", content: content} = msg, tool_index) when is_list(content) do
+    %{msg | content: Enum.map(content, &maybe_clear_tool_result(&1, tool_index))}
   end
 
-  defp microcompact_message(msg, _tool_names), do: msg
+  defp microcompact_message(msg, _tool_index), do: msg
 
-  defp maybe_clear_tool_result(%{type: "tool_result", content: content} = block, tool_names) when is_binary(content) do
+  defp maybe_clear_tool_result(%{type: "tool_result", content: content} = block, tool_index) when is_binary(content) do
     id = Map.get(block, :tool_use_id) || Map.get(block, "tool_use_id")
-    tool_name = Map.get(tool_names, id)
+    entry = Map.get(tool_index, id)
 
-    if byte_size(content) > @micro_min_size and tool_name in @micro_clearable_tools do
-      %{block | content: "[cleared]"}
+    if byte_size(content) > @micro_min_size and entry && entry.name in @micro_clearable_tools do
+      %{block | content: build_cleared_signature(entry, content)}
     else
       block
     end
   end
 
-  defp maybe_clear_tool_result(%{"type" => "tool_result", "content" => content} = block, tool_names) when is_binary(content) do
+  defp maybe_clear_tool_result(%{"type" => "tool_result", "content" => content} = block, tool_index) when is_binary(content) do
     id = Map.get(block, "tool_use_id")
-    tool_name = Map.get(tool_names, id)
+    entry = Map.get(tool_index, id)
 
-    if byte_size(content) > @micro_min_size and tool_name in @micro_clearable_tools do
-      Map.put(block, "content", "[cleared]")
+    if byte_size(content) > @micro_min_size and entry && entry.name in @micro_clearable_tools do
+      Map.put(block, "content", build_cleared_signature(entry, content))
     else
       block
     end
   end
 
-  defp maybe_clear_tool_result(block, _tool_names), do: block
+  defp maybe_clear_tool_result(block, _tool_index), do: block
+
+  # Build a short signature like:
+  #   [cleared: shell "npm run build" → exit 137, 2.3KB]
+  #   [cleared: read_file /home/agent/app/src/main.js — 45KB]
+  #   [cleared: grep "has_injury" — 12KB output]
+  # The format tells the agent what it already tried and what happened,
+  # without keeping the full output in context.
+  defp build_cleared_signature(%{name: name, input: input}, content) do
+    input_str = summarize_tool_input(name, input)
+    size_str = format_size(byte_size(content))
+    status = extract_status_hint(name, content)
+
+    parts =
+      ["[cleared: #{name}"] ++
+        (if input_str != "", do: [" ", input_str], else: []) ++
+        (if status != "", do: [" → ", status], else: []) ++
+        [", ", size_str, "]"]
+
+    IO.iodata_to_binary(parts)
+  end
+
+  defp summarize_tool_input("shell", %{"command" => cmd}), do: ~s("#{truncate_str(cmd, 80)}")
+  defp summarize_tool_input("read_file", %{"path" => path}), do: path
+  defp summarize_tool_input("grep", %{"pattern" => p}), do: ~s("#{truncate_str(p, 60)}")
+  defp summarize_tool_input("glob", %{"pattern" => p}), do: p
+  defp summarize_tool_input("list_directory", %{"path" => path}), do: path
+  defp summarize_tool_input("web_search", %{"query" => q}), do: ~s("#{truncate_str(q, 60)}")
+  defp summarize_tool_input("web_fetch", %{"url" => u}), do: u
+  defp summarize_tool_input("browse", %{"url" => u}), do: u
+  defp summarize_tool_input(_, _), do: ""
+
+  defp extract_status_hint("shell", content) do
+    cond do
+      String.starts_with?(content, "[exit code ") ->
+        case Regex.run(~r/^\[exit code (\d+)\]/, content) do
+          [_, code] -> "exit #{code}"
+          _ -> "failed"
+        end
+      String.starts_with?(content, "[command timed out]") -> "timed out"
+      String.starts_with?(content, "[command stalled") -> "stalled"
+      String.starts_with?(content, "[error]") -> "error"
+      true -> "ok"
+    end
+  end
+  defp extract_status_hint(_, "[error]" <> _), do: "error"
+  defp extract_status_hint(_, _), do: ""
+
+  defp format_size(bytes) when bytes < 1024, do: "#{bytes}B"
+  defp format_size(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)}KB"
+  defp format_size(bytes), do: "#{Float.round(bytes / 1024 / 1024, 1)}MB"
+
+  defp truncate_str(s, max) when is_binary(s) do
+    if String.length(s) > max, do: String.slice(s, 0, max - 3) <> "...", else: s
+  end
+  defp truncate_str(s, _), do: to_string(s)
 
   # --- Snip Compact ---
 
