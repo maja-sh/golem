@@ -101,6 +101,7 @@ defmodule Golem.Prompt do
       - Add a key: `jq '.section.new_key = "value"' file.json > tmp.json && mv tmp.json file.json`
       - Check structure: `jq 'path(..) | join(".")' file.json | head -20`
     - Keep shell commands focused. Prefer multiple small commands over one giant pipeline.
+    - NEVER read an entire large file with `read_file`. Every token goes into your context and costs money on every subsequent turn. Use `grep` with `context` lines to find the exact location, then `read_file` with `offset`/`limit` to read only the relevant section.
     - For file creation, use `write_file`. For targeted edits to existing files, use `edit_file` — it's much more efficient than rewriting the whole file.
     - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
     - Use `web_search` frequently. Do NOT rely on your training data for APIs, libraries, or frameworks — it may be outdated. Search for current documentation before using any library API. When you hit an error you haven't seen before, search for it. When using a framework you're not 100% sure about, search for the latest docs first.
@@ -247,10 +248,10 @@ defmodule Golem.Prompt do
     - Key file paths the executor will need to modify
 
     **What NOT to do:**
-    - Don't read entire files line by line. Skim structure, don't study implementation details.
-    - Don't read more than 2-3 files in full. Use `grep` to locate patterns, `read_file` with `offset`/`limit` for targeted sections.
+    - NEVER read an entire file. Every token you read goes into your context and costs money on every subsequent turn. Use `grep` to find the exact location, then `read_file` with `offset`/`limit` to read only the 20-30 relevant lines.
     - Don't explore exhaustively. The executor has the same read tools and will explore further as it works.
     - Your job is to create a *roadmap*, not to understand every line of code. Plan at the level of "modify X to add Y following the pattern in Z."
+    - Prefer `grep` over `read_file`. Prefer `glob` over `list_directory`. Search, don't browse.
 
     As you explore, AGENTS.md and CLAUDE.md files found in directories you visit will be automatically appended to tool results. These contain project-specific instructions and conventions — pay attention to them.
 
