@@ -248,6 +248,7 @@ defmodule Golem.Runner do
     depth = parent_depth + 1
     prefix = depth_prefix(depth)
     display_name = Keyword.get(opts, :display_name)
+    max_steps = Keyword.get(opts, :max_steps, @sub_agent_max_steps)
     if parent_depth == 0, do: output().sub_agent_start(goal, display_name)
 
     Golem.Events.emit(:sub_agent_start, %{
@@ -297,7 +298,7 @@ defmodule Golem.Runner do
       plan: Map.get(parent_state || %{}, :plan),
       messages: messages,
       step: 0,
-      max_steps: @sub_agent_max_steps,
+      max_steps: max_steps,
       depth: depth,
       prefix: prefix,
       history: [],
@@ -1215,23 +1216,46 @@ defmodule Golem.Runner do
   defp maybe_verify(summary, state) do
     rejections = Map.get(state, :done_rejections, 0)
 
-    if not summary.success or state.depth > 0 or rejections >= @max_done_rejections do
-      {:accept, state}
-    else
-      Golem.Events.emit(:verify_start, %{attempt: rejections + 1})
-      if state.depth == 0, do: output().planning("Running verification agent...")
+    cond do
+      not summary.success or state.depth > 0 or rejections >= @max_done_rejections ->
+        {:accept, state}
 
-      case Golem.Verify.run_agent(state.goal) do
-        :ok ->
-          Golem.Events.emit(:verify_done, %{passed: true})
-          {:accept, state}
+      all_items_system_verified?() ->
+        # Every progress item ended in :completed — meaning the plan's
+        # per-step `verify:` commands passed independently for each
+        # one. The adversarial verifier would re-do solved work with
+        # a full sub-agent run (50 steps × Opus). Skip it.
+        Logger.info("Verification skipped: all #{item_count()} progress items were system-verified via per-step commands")
+        Golem.Events.emit(:verify_skipped, %{reason: "all_items_system_verified", items: item_count()})
+        {:accept, state}
 
-        {:error, issues} ->
-          Golem.Events.emit(:verify_done, %{passed: false, issues: String.slice(issues || "", 0, 1000)})
-          reject_done(state, "Verification agent found issues:\n\n#{issues}")
-      end
+      true ->
+        Golem.Events.emit(:verify_start, %{attempt: rejections + 1})
+        if state.depth == 0, do: output().planning("Running verification agent...")
+
+        case Golem.Verify.run_agent(state.goal) do
+          :ok ->
+            Golem.Events.emit(:verify_done, %{passed: true})
+            {:accept, state}
+
+          {:error, issues} ->
+            Golem.Events.emit(:verify_done, %{passed: false, issues: String.slice(issues || "", 0, 1000)})
+            reject_done(state, "Verification agent found issues:\n\n#{issues}")
+        end
     end
   end
+
+  # All progress items ended :completed iff the per-step verify
+  # commands passed for each one. Items the agent marked :done but
+  # that didn't have a passing verify command stay :done, not
+  # :completed — so :done anywhere means the adversarial agent still
+  # has work to do.
+  defp all_items_system_verified? do
+    items = :persistent_term.get(:golem_progress, [])
+    items != [] and Enum.all?(items, &(&1.status == :completed))
+  end
+
+  defp item_count, do: :persistent_term.get(:golem_progress, []) |> length()
 
   defp reject_done(state, issues) do
     rejections = Map.get(state, :done_rejections, 0) + 1

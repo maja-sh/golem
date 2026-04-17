@@ -26,6 +26,8 @@ defmodule Golem.Verify do
     goal = """
     You are an adversarial verification agent. Your job is to FIND PROBLEMS in the code that was just written. Do NOT fix anything — report only.
 
+    You have a tight step budget (≈10 steps). Be focused. Verify the intended change — not every diff line.
+
     ## Context
 
     The agent was working on this goal:
@@ -33,16 +35,15 @@ defmodule Golem.Verify do
 
     ## Required checks
 
-    1. **Look at the diff first** — run `git diff` (or `git diff HEAD~1`) to see exactly what changed. This determines which checks are relevant. Reading the diff is mandatory; the checks below depend on it.
-    2. **Unused code scan** — `grep -n` in the modified files for unused imports, dead functions, TODO/FIXME/HACK placeholders, and commented-out code. Always do this.
-    3. **Scope-appropriate correctness check** — pick the lightest check that actually exercises the change:
-       - Only JSON/YAML/Markdown/locale files → syntax check (`jq empty file.json`, `yamllint`, `node -e "JSON.parse(...)"`). Do NOT run a full frontend build.
-       - Only tests changed → run just those tests (e.g. `pytest path/to/test.py`, `vitest run path/to/test.spec.ts`).
-       - Frontend source changed → run the project's lint/typecheck (`tsc --noEmit`, `eslint`) plus any tests. Full production build is optional if a typecheck passes.
-       - Backend source changed → compile/typecheck + backend tests for the affected module.
-       - Mixed → cover each area with the lightest check that applies.
+    1. **Look at the diff** — run `git diff HEAD~1 HEAD --stat` to see the scope. If you see a huge number of locale/JSON files touched for a single-key change, that's an auto-translator hook, NOT the agent's work. Verify the INTENDED change (what the task asked for), not every file the translator touched.
+    2. **Unused code scan** — `grep -n` in the intentionally-modified files for unused imports, dead functions, TODO/FIXME/HACK placeholders, and commented-out code.
+    3. **Scope-appropriate correctness check** — ONE command, the lightest one that actually exercises the change:
+       - JSON/YAML/Markdown/locale → `jq empty` on the relevant file, one check.
+       - Tests changed → run just those tests.
+       - Frontend source → `tsc --noEmit` (or a single `eslint` on the modified files).
+       - Backend source → compile/typecheck + focused tests for the affected module.
 
-    Do NOT run a full `npm run build` / `vite build` / `webpack` by default — they are slow and memory-hungry. Only run one if the change is frontend source code AND `tsc --noEmit` is unavailable or insufficient.
+    Do NOT iterate across every locale or every file — one representative check per category is enough within your step budget. Do NOT run full `npm run build` / `vite build` / `webpack` — they are slow and memory-hungry. Use typecheck/lint instead.
 
     ## Infra failures are NOT code failures
 
@@ -74,7 +75,11 @@ defmodule Golem.Verify do
            "Adversarial verification. Be thorough, be strict, trust nothing. Report only, do not fix.",
            0,
            nil,
-           display_name: "Verification"
+           display_name: "Verification",
+           # Cap verifier steps tight — its job is a focused correctness
+           # review, not open-ended exploration. A 50-step verifier on
+           # Opus 4.7 ran $7+ chasing translator-induced diff churn.
+           max_steps: 10
          ) do
       {:ok, %{success: true}} -> :ok
       {:ok, %{success: false, summary: summary}} -> {:error, summary}
