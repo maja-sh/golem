@@ -424,9 +424,10 @@ defmodule Golem.Claude do
   # would defeat caching). The breakpoint goes on the last *non-reminder*
   # user message — typically the tool_result from the previous assistant
   # turn, which IS stable across turns.
-  defp add_cache_breakpoints([]), do: []
+  @doc false
+  def add_cache_breakpoints([]), do: []
 
-  defp add_cache_breakpoints(messages) do
+  def add_cache_breakpoints(messages) do
     last_user_idx =
       messages
       |> Enum.with_index()
@@ -445,13 +446,14 @@ defmodule Golem.Claude do
     end
   end
 
-  defp is_reminder?(%{content: content}) when is_binary(content) do
+  @doc false
+  def is_reminder?(%{content: content}) when is_binary(content) do
     String.starts_with?(content, "<system-reminder>")
   end
-  defp is_reminder?(%{"content" => content}) when is_binary(content) do
+  def is_reminder?(%{"content" => content}) when is_binary(content) do
     String.starts_with?(content, "<system-reminder>")
   end
-  defp is_reminder?(_), do: false
+  def is_reminder?(_), do: false
 
   defp mark_last_block(%{content: content} = msg) when is_list(content) and content != [] do
     updated = List.update_at(content, -1, &put_cache_control/1)
@@ -492,7 +494,8 @@ defmodule Golem.Claude do
 
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp cache_last_tool(tools) do
+  @doc false
+  def cache_last_tool(tools) do
     last_idx = length(tools) - 1
     List.update_at(tools, last_idx, fn tool ->
       Map.put(tool, :cache_control, %{type: "ephemeral"})

@@ -403,7 +403,8 @@ defmodule Golem.TUI do
   end
 
   # Truncate a string containing ANSI escapes to a visible width.
-  defp truncate_visible(str, max_width) do
+  @doc false
+  def truncate_visible(str, max_width) do
     {result, _visible} =
       Regex.split(~r/(\e\[[0-9;]*m)/, str, include_captures: true)
       |> Enum.reduce({"", 0}, fn segment, {acc, visible} ->
@@ -429,12 +430,13 @@ defmodule Golem.TUI do
     end
   end
 
-  defp wrap_text(text, width) when width > 10 do
+  @doc false
+  def wrap_text(text, width) when width > 10 do
     text
     |> String.split("\n")
     |> Enum.flat_map(&wrap_line(&1, width))
   end
-  defp wrap_text(text, _width), do: [text]
+  def wrap_text(text, _width), do: [text]
 
   defp wrap_line("", _width), do: [""]
   defp wrap_line(line, width) do
@@ -457,8 +459,9 @@ defmodule Golem.TUI do
     end
   end
 
-  defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
-  defp format_duration(seconds) do
+  @doc false
+  def format_duration(seconds) when seconds < 60, do: "#{seconds}s"
+  def format_duration(seconds) do
     mins = div(seconds, 60)
     secs = rem(seconds, 60)
     if secs == 0, do: "#{mins}m", else: "#{mins}m #{secs}s"
@@ -476,39 +479,41 @@ defmodule Golem.TUI do
   end
   defp wtrunc(_, _), do: ""
 
-  defp tool_icon("shell"), do: "$"
-  defp tool_icon("write_file"), do: "+"
-  defp tool_icon("read_file"), do: "↓"
-  defp tool_icon("edit_file"), do: "~"
-  defp tool_icon("glob"), do: "⌕"
-  defp tool_icon("grep"), do: "⌕"
-  defp tool_icon("web_search"), do: "?"
-  defp tool_icon("web_fetch"), do: "↓"
-  defp tool_icon("screenshot"), do: "◉"
-  defp tool_icon("think"), do: "·"
-  defp tool_icon("update_progress"), do: "·"
-  defp tool_icon("done"), do: "✓"
-  defp tool_icon("sub_agent"), do: "●"
-  defp tool_icon("ask_user"), do: "?"
-  defp tool_icon("browse"), do: "◎"
-  defp tool_icon(_), do: "▸"
+  @doc false
+  def tool_icon("shell"), do: "$"
+  def tool_icon("write_file"), do: "+"
+  def tool_icon("read_file"), do: "↓"
+  def tool_icon("edit_file"), do: "~"
+  def tool_icon("glob"), do: "⌕"
+  def tool_icon("grep"), do: "⌕"
+  def tool_icon("web_search"), do: "?"
+  def tool_icon("web_fetch"), do: "↓"
+  def tool_icon("screenshot"), do: "◉"
+  def tool_icon("think"), do: "·"
+  def tool_icon("update_progress"), do: "·"
+  def tool_icon("done"), do: "✓"
+  def tool_icon("sub_agent"), do: "●"
+  def tool_icon("ask_user"), do: "?"
+  def tool_icon("browse"), do: "◎"
+  def tool_icon(_), do: "▸"
 
-  defp tool_label("shell", cmd), do: wtrunc(cmd, 6)
-  defp tool_label("write_file", path), do: "Write #{path}"
-  defp tool_label("read_file", path), do: "Read #{path}"
-  defp tool_label("edit_file", path), do: "Edit #{path}"
-  defp tool_label("glob", pattern), do: "Glob #{pattern}"
-  defp tool_label("grep", pattern), do: "Grep #{pattern}"
-  defp tool_label("web_search", query), do: "Search · #{wtrunc(query, 14)}"
-  defp tool_label("web_fetch", url), do: "Fetch #{wtrunc(url, 12)}"
-  defp tool_label("list_directory", path), do: "List #{path}"
-  defp tool_label("sub_agent", goal), do: "Sub-agent · #{wtrunc(goal, 18)}"
-  defp tool_label("update_progress", _), do: "Progress update"
-  defp tool_label("done", _), do: "Done"
-  defp tool_label("think", _), do: "Thinking..."
-  defp tool_label("ask_user", _), do: "Asking user..."
-  defp tool_label("browse", url), do: "Browse #{wtrunc(url, 12)}"
-  defp tool_label(name, _), do: name
+  @doc false
+  def tool_label("shell", cmd), do: wtrunc(cmd, 6)
+  def tool_label("write_file", path), do: "Write #{path}"
+  def tool_label("read_file", path), do: "Read #{path}"
+  def tool_label("edit_file", path), do: "Edit #{path}"
+  def tool_label("glob", pattern), do: "Glob #{pattern}"
+  def tool_label("grep", pattern), do: "Grep #{pattern}"
+  def tool_label("web_search", query), do: "Search · #{wtrunc(query, 14)}"
+  def tool_label("web_fetch", url), do: "Fetch #{wtrunc(url, 12)}"
+  def tool_label("list_directory", path), do: "List #{path}"
+  def tool_label("sub_agent", goal), do: "Sub-agent · #{wtrunc(goal, 18)}"
+  def tool_label("update_progress", _), do: "Progress update"
+  def tool_label("done", _), do: "Done"
+  def tool_label("think", _), do: "Thinking..."
+  def tool_label("ask_user", _), do: "Asking user..."
+  def tool_label("browse", url), do: "Browse #{wtrunc(url, 12)}"
+  def tool_label(name, _), do: name
 
   defp build_diff(path, old, new) do
     old_lines = String.split(old, "\n")
