@@ -40,8 +40,8 @@ fi
 
 # Mount Google Cloud service account if available (for translation, etc.)
 GCLOUD_MOUNT=""
-if [ -f "$SCRIPT_DIR/secrets/gcloud-sa.json" ]; then
-  GCLOUD_MOUNT="-v $SCRIPT_DIR/secrets/gcloud-sa.json:/home/agent/.config/gcloud/application_default_credentials.json:ro -e GOOGLE_APPLICATION_CREDENTIALS=/home/agent/.config/gcloud/application_default_credentials.json"
+if [ -f "$SCRIPT_DIR/.golem/gcloud-sa.json" ]; then
+  GCLOUD_MOUNT="-v $SCRIPT_DIR/.golem/gcloud-sa.json:/home/agent/.config/gcloud/application_default_credentials.json:ro -e GOOGLE_APPLICATION_CREDENTIALS=/home/agent/.config/gcloud/application_default_credentials.json"
   echo "Mounting Google Cloud credentials"
 fi
 
