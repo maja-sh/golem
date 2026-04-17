@@ -7,7 +7,16 @@ defmodule Golem.MixProject do
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases()
+    ]
+  end
+
+  defp aliases do
+    [
+      # Run only end-to-end tests (tagged :e2e). These hit the real
+      # Anthropic API so they cost money — keep them opt-in.
+      "test.e2e": ["test --only e2e"]
     ]
   end
 

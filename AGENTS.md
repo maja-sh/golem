@@ -259,6 +259,20 @@ Test scenarios in `scenarios/`. Run with `--scenario <name>`:
 - `gui_snake` — GUI rendering test
 - `money_maker` — Full research → plan → build cycle (150-300 steps)
 
+## Tests
+
+```bash
+mix test                 # default suite — excludes :e2e tags
+mix test.e2e             # only end-to-end tests (hit the real Claude API)
+mix test --include e2e   # full suite including e2e
+```
+
+- `test/` — unit tests, all pure functions. No network or container.
+- `test/runner/` — tests for the extracted `Golem.Runner.*` modules (compaction, triggers, reminder).
+- `test/e2e/` — end-to-end tests tagged `@tag :e2e`. Excluded from the default run via `ExUnit.start(exclude: [:e2e])` in `test/test_helper.exs`. Require `ANTHROPIC_API_KEY` and make real API calls — they cost money and are slow.
+
+When adding a new e2e test, tag the module with `@moduletag :e2e`. Keep the scenarios minimal — a single round-trip is enough to verify the integration. Expensive multi-step runs belong in `scenarios/` invoked via `mix golem.run`, not the test suite.
+
 ## Documentation Rules
 
 - When adding or changing config schemas (projects.yml, mcp.yml, jira.yml), environment variables, or CLI flags, always update **both** this file and `README.md`.

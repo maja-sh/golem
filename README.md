@@ -165,6 +165,16 @@ Test scenarios live in `scenarios/`. Run with `--scenario <name>`:
 | `chainpost_backend` | Hard | 200-400 | Rust blockchain microblogging |
 | `chainpost_frontend` | Hard | 150-300 | Tauri + React desktop client |
 
+## Tests
+
+```bash
+mix test                 # default suite — excludes :e2e tags
+mix test.e2e             # only end-to-end tests (hit the real Claude API)
+mix test --include e2e   # default + e2e
+```
+
+Unit tests cover pure logic (`Golem.Runner.Compaction`, `Golem.Runner.Triggers`, `Golem.Runner.Reminder`, cache breakpoints, prompt structure, config loader, TUI helpers). End-to-end tests in `test/e2e/` hit the real Anthropic API, cost money, and are excluded from the default run.
+
 ## Architecture
 
 - **Runner** (`lib/golem/runner.ex`) -- Main loop: plan, execute, re-plan, compact, persist.
