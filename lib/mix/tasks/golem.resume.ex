@@ -6,7 +6,18 @@ defmodule Mix.Tasks.Golem.Resume do
 
       mix golem.resume <run_id>
       mix golem.resume <run_id> --max-steps 200
+      mix golem.resume <run_id> --budget 30
+      mix golem.resume <run_id> --message "also handle the fallback case"
       mix golem.resume --list
+
+  ## Options
+
+    * `--max-steps` / `-s` — additional steps on top of the saved step count
+    * `--budget` / `-b` — raise the cost ceiling (USD). Useful when a run
+      paused at `:budget_exceeded` and you want to give it more headroom
+      to finish.
+    * `--message` / `-m` — inject a system message before the next turn
+    * `--list` / `-l` — list all saved runs
   """
 
   use Mix.Task
@@ -17,11 +28,16 @@ defmodule Mix.Tasks.Golem.Resume do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [max_steps: :integer, list: :boolean, message: :string],
-        aliases: [s: :max_steps, l: :list, m: :message]
+        strict: [max_steps: :integer, list: :boolean, message: :string, budget: :float],
+        aliases: [s: :max_steps, l: :list, m: :message, b: :budget]
       )
 
     Mix.Task.run("app.start")
+
+    # Apply budget override before starting — the runner reads max_cost
+    # from Application env on every loop iteration, so setting it here
+    # takes effect immediately for the resumed run.
+    if opts[:budget], do: Application.put_env(:golem, :max_cost, opts[:budget])
 
     if opts[:list] do
       list_runs()
