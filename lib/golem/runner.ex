@@ -1667,7 +1667,9 @@ defmodule Golem.Runner do
         prev = Map.get(state, :last_completed, 0)
 
         if completed > prev do
-          # New items completed — record cost for them
+          # New items completed — record cost for them and mark the step
+          # so drift detection can measure progress staleness cheaply.
+          :persistent_term.put(:golem_last_progress_step, state.step)
           cost_now = format_cost(costs)
           new_phases = Enum.filter(items, fn i ->
             Map.get(i, "status", "") in ["completed", "complete", "done"]
@@ -1809,15 +1811,99 @@ defmodule Golem.Runner do
 
   @max_consecutive_drifts 2
 
-  defp maybe_inject_drift_warning(%{step: step, plan: plan, history: history, depth: depth} = state)
-       when depth == 0 and plan != nil and rem(step, @drift_check_interval) == 0 and step > 0 do
+  # Staleness threshold: if progress hasn't moved in this many steps,
+  # nudge the agent (heuristic only, no LLM call).
+  @progress_stale_threshold 20
+
+  defp maybe_inject_drift_warning(%{step: step, plan: plan, depth: depth} = state)
+       when depth == 0 and plan != nil and step > 0 do
+    # Cheap heuristic: progress staleness — runs every step with no LLM cost.
+    state_with_staleness = maybe_inject_staleness_nudge(state)
+
+    # LLM drift check gated on interval AND at least one cheap signal tripping.
+    if rem(step, @drift_check_interval) == 0 do
+      run_llm_drift_check(state_with_staleness)
+    else
+      {state_with_staleness.messages, Map.get(state, :consecutive_drifts, 0)}
+    end
+  end
+
+  defp maybe_inject_drift_warning(state), do: {state.messages, Map.get(state, :consecutive_drifts, 0)}
+
+  # Progress staleness: if the agent hasn't marked anything completed in
+  # @progress_stale_threshold steps, inject a reminder. Uses a bumped
+  # "last nudge step" to avoid spamming — we only nudge once per window.
+  defp maybe_inject_staleness_nudge(%{step: step} = state) do
+    last_progress = :persistent_term.get(:golem_last_progress_step, 0)
+    last_nudge = :persistent_term.get(:golem_last_staleness_nudge, 0)
+    gap = step - last_progress
+
+    if gap >= @progress_stale_threshold and step - last_nudge >= @progress_stale_threshold do
+      :persistent_term.put(:golem_last_staleness_nudge, step)
+      Logger.warning("Progress staleness: no completed items in #{gap} steps")
+
+      msg = """
+      [System] You haven't marked a progress item completed in #{gap} steps. Either:
+      1. Call `update_progress` to mark items you've actually finished
+      2. If you're blocked, use `think(request_replan: true)` to get a revised plan
+      3. If the current step is genuinely large, that's fine — but be sure you're making progress, not wandering
+      """
+
+      %{state | messages: state.messages ++ [%{role: "user", content: msg}]}
+    else
+      state
+    end
+  end
+
+  # Cheap signals that suggest the agent may be off-plan. If none fire,
+  # skip the Sonnet drift check — saves ~$0.05-0.10 per check across a run.
+  defp drift_signals(state) do
+    history = state.history
+    step = state.step
+
+    signals = []
+
+    # 1. Progress staleness: no completed items in 15+ steps
+    last_progress = :persistent_term.get(:golem_last_progress_step, 0)
+    signals = if step - last_progress >= 15, do: [:stale_progress | signals], else: signals
+
+    # 2. Tool diversity collapse: last 20 actions use ≤ 2 unique tools (stuck in narrow loop)
+    recent_tools = history |> Enum.take(-20) |> Enum.map(fn {t, _, _} -> t end) |> Enum.uniq()
+    signals = if length(recent_tools) <= 2 and length(history) >= 20,
+      do: [:narrow_tools | signals], else: signals
+
+    # 3. Error rate: >40% of last 20 actions had "[error]" or failure markers
+    recent = Enum.take(history, -20)
+    if length(recent) >= 10 do
+      errors = Enum.count(recent, fn {_, _, result} ->
+        is_binary(result) and String.contains?(result, "[error]")
+      end)
+      error_rate = errors / length(recent)
+      if error_rate > 0.4, do: [:high_error_rate | signals], else: signals
+    else
+      signals
+    end
+  end
+
+  defp run_llm_drift_check(state) do
+    signals = drift_signals(state)
+    consecutive = Map.get(state, :consecutive_drifts, 0)
+
+    if signals == [] do
+      # No cheap signal tripped — don't spend the LLM call
+      {state.messages, 0}
+    else
+      Logger.info("Drift heuristics tripped: #{inspect(signals)} — running LLM drift check")
+      do_llm_drift_check(state, consecutive)
+    end
+  end
+
+  defp do_llm_drift_check(%{step: step, plan: plan, history: history} = state, consecutive) do
     recent =
       history
       |> Enum.take(-15)
       |> Enum.map(fn {tool, input, _result} -> "- [#{tool}] #{input}" end)
       |> Enum.join("\n")
-
-    consecutive = Map.get(state, :consecutive_drifts, 0)
 
     case check_drift(plan, recent) do
       {:drifting, explanation} ->
@@ -1852,8 +1938,6 @@ defmodule Golem.Runner do
         {state.messages, 0}
     end
   end
-
-  defp maybe_inject_drift_warning(state), do: {state.messages, Map.get(state, :consecutive_drifts, 0)}
 
   @drift_prompt """
   You are checking whether an autonomous agent is following its plan.
