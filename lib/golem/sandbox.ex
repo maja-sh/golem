@@ -181,24 +181,56 @@ defmodule Golem.Sandbox do
   end
 
   defp create_container(exe, name, image) do
+    with :ok <- ensure_image(exe, image) do
+      args = ["run", "-d", "--name", name, "--privileged", "-v", "golem-data:/home/agent"]
+      args = args ++ build_mount_args()
+      args = args ++ build_env_args()
+      args = args ++ [image]
+
+      case System.cmd(exe, args, stderr_to_stdout: true) do
+        {_, 0} ->
+          Logger.info("Container #{name} created")
+          :ok
+
+        {out, _} ->
+          {:error, "failed to create #{name}: #{String.trim(out)}"}
+      end
+    end
+  end
+
+  # Ensure the container image exists locally. If missing, build it
+  # from containers/Dockerfile. First-run build is slow (~5-10 min
+  # depending on base layers); subsequent calls are instant.
+  defp ensure_image(exe, image) do
     case System.cmd(exe, ["image", "exists", image], stderr_to_stdout: true) do
       {_, 0} ->
-        args = ["run", "-d", "--name", name, "--privileged", "-v", "golem-data:/home/agent"]
-        args = args ++ build_mount_args()
-        args = args ++ build_env_args()
-        args = args ++ [image]
-
-        case System.cmd(exe, args, stderr_to_stdout: true) do
-          {_, 0} ->
-            Logger.info("Container #{name} created")
-            :ok
-
-          {out, _} ->
-            {:error, "failed to create #{name}: #{String.trim(out)}"}
-        end
+        :ok
 
       {_, _} ->
-        {:error, "image #{image} not found. Build it: #{exe} build -t #{image} -f containers/Dockerfile containers/"}
+        dockerfile = Path.join("containers", "Dockerfile")
+        context = "containers"
+
+        cond do
+          not File.exists?(dockerfile) ->
+            {:error,
+             "image #{image} not found and #{dockerfile} is missing. " <>
+               "Build it manually: #{exe} build -t #{image} -f <dockerfile> <context>"}
+
+          true ->
+            Logger.info("Image #{image} not found — building from #{dockerfile} (this may take several minutes)")
+
+            case System.cmd(exe, ["build", "-t", image, "-f", dockerfile, context],
+                   stderr_to_stdout: true,
+                   into: IO.stream(:stdio, :line)
+                 ) do
+              {_, 0} ->
+                Logger.info("Image #{image} built successfully")
+                :ok
+
+              {_, _} ->
+                {:error, "failed to build image #{image}. Check output above."}
+            end
+        end
     end
   end
 
