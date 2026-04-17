@@ -10,26 +10,49 @@ defmodule Golem.ProjectSetup do
   @jira_path ".golem/jira.yml"
 
   @doc """
-  Load project config from `.golem/projects.yml`.
+  Load project config.
+
+  Primary source: `.golem/config.yml` (under top-level `projects:`,
+  `bitbucket:`, `default_branch:` keys). Falls back to the legacy
+  `.golem/projects.yml` if the unified file has no `projects:` key —
+  lets existing installations keep working without migration.
 
   Returns `{:ok, %{bitbucket_workspace, projects, ...}}`.
   """
   def load_config do
-    case YamlElixir.read_from_file(@projects_path) do
-      {:ok, config} ->
-        default_branch = config["default_branch"] || "main"
-        {:ok, %{
-          bitbucket_workspace: get_in(config, ["bitbucket", "workspace"]),
-          projects: parse_projects(config["projects"] || [], default_branch)
-        }}
+    unified = Golem.Config.raw_yaml()
 
-      {:error, reason} ->
-        {:error, "Failed to read #{@projects_path}: #{inspect(reason)}"}
+    cond do
+      is_list(unified["projects"]) ->
+        {:ok, build_projects_config(unified)}
+
+      File.exists?(@projects_path) ->
+        case YamlElixir.read_from_file(@projects_path) do
+          {:ok, config} -> {:ok, build_projects_config(config)}
+          {:error, reason} -> {:error, "Failed to read #{@projects_path}: #{inspect(reason)}"}
+        end
+
+      true ->
+        {:error,
+         "No project config found. Add a `projects:` block to .golem/config.yml " <>
+           "(see .golem/config.example.yml) or create #{@projects_path}."}
     end
   end
 
+  defp build_projects_config(config) do
+    default_branch = config["default_branch"] || "main"
+
+    %{
+      bitbucket_workspace: get_in(config, ["bitbucket", "workspace"]),
+      projects: parse_projects(config["projects"] || [], default_branch)
+    }
+  end
+
   @doc """
-  Load project config merged with Jira settings from `.golem/jira.yml`.
+  Load project config merged with Jira settings.
+
+  Jira config comes from `.golem/config.yml` (top-level `jira:` key)
+  if present; otherwise from the legacy `.golem/jira.yml`.
 
   Returns `{:ok, %{bitbucket_workspace, projects, jira_base_url, ...}}`.
   """
@@ -41,16 +64,30 @@ defmodule Golem.ProjectSetup do
   end
 
   defp load_jira_config do
-    case YamlElixir.read_from_file(@jira_path) do
-      {:ok, config} ->
-        {:ok, %{
-          jira_base_url: get_in(config, ["jira", "base_url"]),
-          jira_done_transition: get_in(config, ["jira", "done_transition"]) || "Done"
-        }}
+    unified = Golem.Config.raw_yaml()
 
-      {:error, reason} ->
-        {:error, "Failed to read #{@jira_path}: #{inspect(reason)}"}
+    cond do
+      is_map(unified["jira"]) ->
+        {:ok, build_jira_config(unified["jira"])}
+
+      File.exists?(@jira_path) ->
+        case YamlElixir.read_from_file(@jira_path) do
+          {:ok, config} -> {:ok, build_jira_config(config["jira"] || %{})}
+          {:error, reason} -> {:error, "Failed to read #{@jira_path}: #{inspect(reason)}"}
+        end
+
+      true ->
+        {:error,
+         "No Jira config found. Add a `jira:` block to .golem/config.yml " <>
+           "(see .golem/config.example.yml) or create #{@jira_path}."}
     end
+  end
+
+  defp build_jira_config(jira) do
+    %{
+      jira_base_url: jira["base_url"],
+      jira_done_transition: jira["done_transition"] || "Done"
+    }
   end
 
   @doc """

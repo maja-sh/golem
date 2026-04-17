@@ -31,36 +31,15 @@
 - [x] File cache invalidation after sub-agent runs
 - [x] Per-step verification enforcement in prompts
 - [x] Ticket type and priority in agent goal
+- [x] Generic secrets/file mounting (container.mounts + container.env in .golem/config.yml)
+- [x] Auto-provision container on boot (no manual `./containers/start.sh`)
+- [x] Per-run event log (`runs/<id>/events.jsonl`)
+- [x] Unified `.golem/config.yml` — rolls up projects.yml, jira.yml, mcp.yml under one file
 
 ## High Priority
 
 ### Smarter context compaction in planner
 After reading 20 files, the planner sends all of them every turn. Could summarize older file reads into a compact digest to reduce token usage.
-
-### Generic secrets/file mounting
-Currently gcloud credentials are hardcoded in `start.sh`. Need a generic mechanism for users to mount arbitrary files into the container (SSH keys, PGP keys, service account files, config files). Proposed approach:
-
-- Add a `mounts` section to `.golem/projects.yml` or a dedicated `.golem/mounts.yml`
-- Each mount specifies `src` (host path relative to `.golem/`), `dest` (container path), and optionally `readonly: true`
-- `start.sh` reads the config and generates `-v` flags dynamically
-- Remove the hardcoded gcloud mount from `start.sh`
-
-Example config:
-```yaml
-mounts:
-  - src: gcloud-sa.json
-    dest: /home/agent/.config/gcloud/application_default_credentials.json
-    env: GOOGLE_APPLICATION_CREDENTIALS
-    readonly: true
-  - src: id_rsa
-    dest: /home/agent/.ssh/id_rsa
-    readonly: true
-  - src: gpg-key.asc
-    dest: /home/agent/.gnupg/key.asc
-    readonly: true
-```
-
-This replaces the current hardcoded SSH and gcloud mounts in `start.sh` with a single generic mechanism. The `env` field optionally sets an env var pointing to the mounted path.
 
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
@@ -89,6 +68,8 @@ Run project clone/setup in parallel during `mix golem.setup`. System-level steps
 
 ## Distribution
 
+Ship `golem` as a self-contained executable users install with one command, configure via one file, and run from any project directory. No Elixir toolchain on target machines.
+
 ### Package as distributable CLI
 - Use `mix release` to produce a self-contained Erlang release (bundles ERTS, no Elixir needed on target)
 - GitHub Actions CI/CD matrix builds for linux-amd64, linux-arm64, darwin-arm64
@@ -98,12 +79,35 @@ Run project clone/setup in parallel during `mix golem.setup`. System-level steps
 
 ### CLI interface
 ```
-golem --jira SA-1111
-golem --task "inline prompt"
-golem --file path-to-markdown.md
+golem setup                    # provision container, validate config
+golem run --jira SA-1111
+golem run --task "inline prompt"
+golem run --file path-to-markdown.md
+golem resume <run_id>
+golem doctor                   # validate config + runtime health
+golem config                   # print resolved config
+golem mcp                      # list MCP server connectivity
+golem events <run_id>          # tail / inspect events.jsonl
 ```
+
+### `golem doctor` — config + health validator
+Single command that reports every way the setup is wrong:
+- YAML parses; unknown top-level keys warned
+- `container.mounts[].src` paths exist (or soft-warn if `required: false`)
+- Container image buildable / present; container reachable
+- `projects[].path` looks reasonable; `setup[].run` non-empty
+- `jira.base_url` reachable; `JIRA_API_TOKEN` + `JIRA_EMAIL` present
+- MCP stdio servers resolve to executables; HTTP servers respond to `tools/list`
+- `ANTHROPIC_API_KEY` present and valid (cheap call)
+
+Emit machine-readable report (`--json`) for CI use.
 
 ### Config migration
 - Move `.golem/` to `~/.config/golem/` (respect `XDG_CONFIG_HOME`)
 - Keep `.golem/` in project directory as per-project override
 - Lookup order: project `.golem/` → `~/.config/golem/`
+
+### Ship the image, don't build it
+- Push the base `golem-vm` image to GHCR / Docker Hub as part of CI
+- `golem setup` pulls from registry instead of building locally (first-run takes 30s instead of 10 min)
+- Keep Dockerfile in `priv/` for users who want to customize + build locally

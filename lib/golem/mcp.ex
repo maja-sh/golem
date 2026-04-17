@@ -123,28 +123,28 @@ defmodule Golem.MCP do
 
   # --- Config ---
 
+  # Config source: `.golem/config.yml` under the `mcp.servers` key if
+  # present; otherwise fall back to the legacy `.golem/mcp.yml` so
+  # existing installations keep working.
   defp load_config do
+    unified = Golem.Config.raw_yaml()
+
+    cond do
+      is_list(get_in(unified, ["mcp", "servers"])) ->
+        {:ok, parse_servers(get_in(unified, ["mcp", "servers"]))}
+
+      File.exists?(@config_path) ->
+        load_legacy_mcp()
+
+      true ->
+        {:ok, []}
+    end
+  end
+
+  defp load_legacy_mcp do
     case YamlElixir.read_from_file(@config_path) do
       {:ok, %{"servers" => servers}} when is_list(servers) ->
-        configs = Enum.map(servers, fn s ->
-          base = %{name: s["name"]}
-
-          if s["url"] do
-            Map.merge(base, %{
-              transport: :http,
-              url: expand_env(s["url"]),
-              headers: expand_env_map(s["headers"] || %{})
-            })
-          else
-            Map.merge(base, %{
-              transport: :stdio,
-              command: s["command"],
-              args: Enum.map(s["args"] || [], &expand_env/1),
-              env: expand_env_map(s["env"] || %{})
-            })
-          end
-        end)
-        {:ok, configs}
+        {:ok, parse_servers(servers)}
 
       {:ok, _} ->
         {:ok, []}
@@ -163,6 +163,27 @@ defmodule Golem.MCP do
           {:error, "Failed to read #{@config_path}: #{inspect(reason)}"}
         end
     end
+  end
+
+  defp parse_servers(servers) do
+    Enum.map(servers, fn s ->
+      base = %{name: s["name"]}
+
+      if s["url"] do
+        Map.merge(base, %{
+          transport: :http,
+          url: expand_env(s["url"]),
+          headers: expand_env_map(s["headers"] || %{})
+        })
+      else
+        Map.merge(base, %{
+          transport: :stdio,
+          command: s["command"],
+          args: Enum.map(s["args"] || [], &expand_env/1),
+          env: expand_env_map(s["env"] || %{})
+        })
+      end
+    end)
   end
 
   # --- Server Connection ---

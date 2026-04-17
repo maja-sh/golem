@@ -93,3 +93,48 @@ container:
     - name: GOOGLE_APPLICATION_CREDENTIALS
       value: /home/agent/.config/gcloud/application_default_credentials.json
       when_file: .golem/gcloud-sa.json
+
+# --- Project setup ---
+#
+# Repos the agent works on and how to set each one up inside the
+# container. This section replaces the legacy .golem/projects.yml.
+
+# bitbucket:
+#   workspace: your-workspace
+
+# default_branch: main
+
+# projects:
+#   - repo: your-workspace/api
+#     path: /home/agent/api
+#     description: "Laravel JSON API"
+#     branch_from: main
+#     cache: [vendor]
+#     instructions: |
+#       Project-specific rules for the agent (verification steps,
+#       conventions, test commands, etc).
+#     setup:
+#       - label: "composer install"
+#         run: "composer install --no-interaction"
+#         user: agent
+
+# --- Jira integration ---
+#
+# Replaces the legacy .golem/jira.yml.
+
+# jira:
+#   base_url: https://your-company.atlassian.net
+#   done_transition: "Pull Request / Deployable"
+
+# --- MCP servers ---
+#
+# External tool servers the agent can call. Replaces the legacy
+# .golem/mcp.yml.
+
+# mcp:
+#   servers:
+#     - name: my-service
+#       command: npx
+#       args: ["-y", "@my-org/mcp-server"]
+#       env:
+#         API_KEY: "${MY_API_KEY}"   # ${VAR} expands from host env
