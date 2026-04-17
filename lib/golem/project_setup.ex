@@ -177,7 +177,8 @@ defmodule Golem.ProjectSetup do
         description: p["description"],
         setup: parse_setup(p["setup"]),
         branch_from: p["branch_from"] || default_branch,
-        instructions: p["instructions"]
+        instructions: p["instructions"],
+        cache: p["cache"] || []
       }
     end)
   end
@@ -234,6 +235,7 @@ defmodule Golem.ProjectSetup do
 
     with :ok <- ensure_main_clone(repo_path, clone_url, project.branch_from),
          :ok <- create_worktree(repo_path, worktree_path, branch, project.branch_from),
+         :ok <- copy_cached_deps(repo_path, worktree_path, project[:cache] || []),
          :ok <- run_cmd("chown -R #{cuser}:#{cuser} #{worktree_path}", timeout: 60_000, verbose: false),
          :ok <- run_setup_script(project.setup, worktree_path, false) do
       {:ok, worktree_path}
@@ -284,6 +286,19 @@ defmodule Golem.ProjectSetup do
       cuser = container_user()
       run_cmd("chown -R #{cuser}:#{cuser} #{path}", timeout: 60_000, verbose: false)
     end
+  end
+
+  # Copy cached directories from main clone to worktree so dependency
+  # installs are fast (just verifies, doesn't re-download)
+  defp copy_cached_deps(_repo_path, _worktree_path, []), do: :ok
+  defp copy_cached_deps(repo_path, worktree_path, dirs) do
+    for dir <- dirs do
+      Golem.Sandbox.exec(
+        "test -d #{repo_path}/#{dir} && cp -a #{repo_path}/#{dir} #{worktree_path}/#{dir}",
+        timeout: 120_000
+      )
+    end
+    :ok
   end
 
   defp run_setup_script(nil, _path, _verbose), do: :ok
