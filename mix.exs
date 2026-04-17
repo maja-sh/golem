@@ -12,6 +12,10 @@ defmodule Golem.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: ["test.e2e": :test]]
+  end
+
   defp aliases do
     [
       # Run only end-to-end tests (tagged :e2e). These hit the real

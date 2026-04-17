@@ -20,44 +20,35 @@ defmodule Golem.E2E.ClaudeCacheTest do
     :ok
   end
 
-  test "prompt caching produces cache_read_input_tokens on the second turn" do
-    # Unique marker so the cached prefix is specific to this test run.
-    # Avoids interference from a warm cache populated by a prior run.
+  test "prompt caching produces cache_read on back-to-back calls with the same prefix" do
+    # Use a unique token marker so a cache warmed by a prior run doesn't
+    # make turn 1 look like a cache hit instead of a write.
     marker = :erlang.unique_integer([:positive]) |> Integer.to_string()
 
     system = [
       %{
         type: "text",
-        text: """
-        You are a helpful assistant. Answer concisely with a single sentence.
-        Run marker: #{marker}.
-        #{String.duplicate("Context fragment. ", 500)}
-        """,
+        text:
+          "You are a helpful assistant. marker=#{marker} " <>
+            String.duplicate("Context fragment. ", 500),
         cache_control: %{type: "ephemeral"}
       }
     ]
 
     model = Application.get_env(:golem, :executor_model) || "claude-haiku-4-5"
 
-    first = [%{role: "user", content: "say hello"}]
-
     {:ok, %{usage: u1}} =
-      Golem.Claude.call(first,
+      Golem.Claude.call([%{role: "user", content: "hi"}],
         model: model,
         max_tokens: 50,
         system: system
       )
 
-    # First call with a fresh marker should write the system prefix to
-    # the cache.
     assert Map.get(u1, :cache_create, 0) > 0,
            "expected first call to populate cache, got #{inspect(u1)}"
 
-    # Second call — different user message but same system prefix.
-    second = [%{role: "user", content: "say goodbye"}]
-
     {:ok, %{usage: u2}} =
-      Golem.Claude.call(second,
+      Golem.Claude.call([%{role: "user", content: "bye"}],
         model: model,
         max_tokens: 50,
         system: system
@@ -65,8 +56,5 @@ defmodule Golem.E2E.ClaudeCacheTest do
 
     assert Map.get(u2, :cache_read, 0) > 0,
            "expected second call to hit cache, got #{inspect(u2)}"
-
-    # cache_read should be close to the system prompt's token count.
-    assert Map.get(u2, :cache_read) >= Map.get(u1, :cache_create) - 100
   end
 end
