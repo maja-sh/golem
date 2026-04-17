@@ -69,7 +69,13 @@ defmodule Golem.Verify do
     Do NOT fix anything. Do NOT modify any files. Report only.
     """
 
-    case Golem.Runner.run_sub_agent(goal, "Adversarial verification. Be thorough, be strict, trust nothing. Report only, do not fix.", 0) do
+    case Golem.Runner.run_sub_agent(
+           goal,
+           "Adversarial verification. Be thorough, be strict, trust nothing. Report only, do not fix.",
+           0,
+           nil,
+           display_name: "Verification"
+         ) do
       {:ok, %{success: true}} -> :ok
       {:ok, %{success: false, summary: summary}} -> {:error, summary}
       {:error, :max_steps_reached} -> {:error, "Verification agent hit step limit (likely many issues)"}

@@ -244,14 +244,16 @@ defmodule Golem.Runner do
   Uses fork model: sub-agent inherits the parent's full message history
   for context awareness and prompt cache reuse.
   """
-  def run_sub_agent(goal, context, parent_depth, parent_state \\ nil) do
+  def run_sub_agent(goal, context, parent_depth, parent_state \\ nil, opts \\ []) do
     depth = parent_depth + 1
     prefix = depth_prefix(depth)
-    if parent_depth == 0, do: output().sub_agent_start(goal)
+    display_name = Keyword.get(opts, :display_name)
+    if parent_depth == 0, do: output().sub_agent_start(goal, display_name)
 
     Golem.Events.emit(:sub_agent_start, %{
       depth: depth,
       goal: String.slice(goal, 0, 500),
+      display_name: display_name,
       has_context: context != nil and context != ""
     })
 

@@ -126,24 +126,23 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print, [[:green, "✓ Plan revised", :reset]]})
   end
 
-  def sub_agent_start(goal) do
-    GenServer.call(__MODULE__, {:print, [
-      [],
-      [:magenta, "  ● Sub-agent: ", :reset, :faint, wtrunc(goal, 18), :reset]
-    ], :sub_agent})
+  def sub_agent_start(goal, display_name \\ nil) do
+    label = display_name || trunc(goal, 60)
+    GenServer.call(__MODULE__, {:sub_agent_start, label})
   end
 
   def sub_agent_result(_goal, steps, success) do
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
-    GenServer.call(__MODULE__, {:print, [
-      [],
-      [color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset]
-    ], :sub_agent})
+    GenServer.call(__MODULE__, {:sub_agent_end, icon, color, steps})
   end
 
   @impl true
   def sub_agent_status(goal, tool, detail, step, max_steps) do
-    short_goal = wtrunc(goal, 20)
+    # When display_name was passed to sub_agent_start, prefer the
+    # shorter form. For the adversarial verifier the goal is ~1500
+    # chars of instructions; showing it in the status line corrupts
+    # the TUI. Fall back to a short goal truncation.
+    short_goal = trunc(goal, 40)
     label = tool_label(tool, detail) |> trunc(55)
     GenServer.call(__MODULE__, {:print_and_update, [
       [:faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " #{label}", :reset]
@@ -213,7 +212,7 @@ defmodule Golem.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil, last_output: nil
+      ticker: nil, last_output: nil, sub_agent_depth: 0
     }}
   end
 
@@ -302,6 +301,33 @@ defmodule Golem.TUI do
     {:reply, :ok, state}
   end
 
+  def handle_call({:sub_agent_start, label}, _from, state) do
+    state = erase_status(state)
+    print_line([])
+    print_line([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
+
+    # Suppress the main-agent progress checklist while a sub-agent
+    # runs. It doesn't change during verification/sub-tasks and its
+    # continuous redraw was the leading cause of the "stacked
+    # checklist" visual bug during long sub-agent runs.
+    state = %{state | sub_agent_depth: state.sub_agent_depth + 1, last_output: :sub_agent, action: nil}
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:sub_agent_end, icon, color, steps}, _from, state) do
+    state = erase_status(state)
+    print_line([])
+    print_line([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
+    state = %{state |
+      sub_agent_depth: max(state.sub_agent_depth - 1, 0),
+      last_output: :sub_agent,
+      action: nil
+    }
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
   def handle_call(:stop, _from, state) do
     if state.ticker, do: :timer.cancel(state.ticker)
     state = erase_status(state)
@@ -376,17 +402,26 @@ defmodule Golem.TUI do
   end
 
   defp build_status_lines(state) do
+    # While a sub-agent is active, skip the progress checklist — the
+    # main agent's items don't change during sub-agent execution, and
+    # the repeated redraws visibly leak copies into scrollback on some
+    # terminals. A single-line status (blank + spinner) is enough and
+    # far more robust.
     progress_lines =
-      Enum.map(state.progress, fn item ->
-        {icon, color} = case item.status do
-          :completed -> {"✓", :green}
-          :done -> {"✓", :faint}
-          :in_progress -> {"→", :yellow}
-          :pending -> {"·", :faint}
-        end
-        style = if item.status in [:pending, :done], do: :faint, else: :white
-        [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
-      end)
+      if state.sub_agent_depth > 0 do
+        []
+      else
+        Enum.map(state.progress, fn item ->
+          {icon, color} = case item.status do
+            :completed -> {"✓", :green}
+            :done -> {"✓", :faint}
+            :in_progress -> {"→", :yellow}
+            :pending -> {"·", :faint}
+          end
+          style = if item.status in [:pending, :done], do: :faint, else: :white
+          [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
+        end)
+      end
 
     bottom = build_bottom_line(state)
 
