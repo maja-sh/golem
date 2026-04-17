@@ -38,6 +38,13 @@ if [ -d "$SCRIPT_DIR/ssh" ]; then
   echo "Mounting SSH keys from $SCRIPT_DIR/ssh"
 fi
 
+# Mount Google Cloud service account if available (for translation, etc.)
+GCLOUD_MOUNT=""
+if [ -f "$SCRIPT_DIR/secrets/gcloud-sa.json" ]; then
+  GCLOUD_MOUNT="-v $SCRIPT_DIR/secrets/gcloud-sa.json:/home/agent/.config/gcloud/application_default_credentials.json:ro -e GOOGLE_APPLICATION_CREDENTIALS=/home/agent/.config/gcloud/application_default_credentials.json"
+  echo "Mounting Google Cloud credentials"
+fi
+
 # Forward git identity
 GIT_ENV=""
 [ -n "$GIT_USER" ]  && GIT_ENV="$GIT_ENV -e GIT_USER=$GIT_USER"
@@ -48,6 +55,7 @@ $RUNTIME run -d \
   --privileged \
   -v golem-data:/home/agent \
   $SSH_MOUNT \
+  $GCLOUD_MOUNT \
   $GIT_ENV \
   "$IMAGE"
 
