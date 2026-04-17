@@ -105,13 +105,20 @@ defmodule Golem.Runner do
         verify_commands = Map.get(saved, :verify_commands, nil) || Golem.PlanParser.extract_verify_commands(saved.plan)
         :persistent_term.put(:golem_verify_commands, verify_commands)
 
-        # If no progress items, tell the agent to set them up
+        # Inject resume message and any custom message from --message flag
+        inject = opts[:inject_message]
         state =
-          if Map.get(saved, :progress, []) == [] and state.messages != [] do
-            resume_msg = %{role: "user", content: "[System] Run resumed. Use `update_progress` to set your current progress checklist before continuing."}
-            %{state | messages: state.messages ++ [resume_msg]}
-          else
-            state
+          cond do
+            Map.get(saved, :progress, []) == [] and state.messages != [] ->
+              msg = "[System] Run resumed. Use `update_progress` to set your current progress checklist before continuing."
+              msg = if inject, do: msg <> "\n\n#{inject}", else: msg
+              %{state | messages: state.messages ++ [%{role: "user", content: msg}]}
+
+            inject ->
+              %{state | messages: state.messages ++ [%{role: "user", content: "[System] #{inject}"}]}
+
+            true ->
+              state
           end
 
         system = Golem.Prompt.executor_system(state.errors)

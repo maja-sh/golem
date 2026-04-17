@@ -17,8 +17,8 @@ defmodule Mix.Tasks.Golem.Resume do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [max_steps: :integer, list: :boolean],
-        aliases: [s: :max_steps, l: :list]
+        strict: [max_steps: :integer, list: :boolean, message: :string],
+        aliases: [s: :max_steps, l: :list, m: :message]
       )
 
     Mix.Task.run("app.start")
@@ -34,7 +34,9 @@ defmodule Mix.Tasks.Golem.Resume do
         exit({:shutdown, 1})
       end
 
-      runner_opts = if opts[:max_steps], do: [max_steps: opts[:max_steps]], else: []
+      runner_opts =
+        (if opts[:max_steps], do: [max_steps: opts[:max_steps]], else: []) ++
+        (if opts[:message], do: [inject_message: opts[:message]], else: [])
 
       Mix.shell().info("Resuming run #{run_id}...\n")
 
