@@ -34,6 +34,8 @@ defmodule Golem.Tools do
       list_directory_tool(),
       glob_tool(),
       grep_tool(),
+      web_search_tool(),
+      web_fetch_tool(),
       create_plan_tool()
     ] ++ mcp_tools()
   end
@@ -202,6 +204,47 @@ defmodule Golem.Tools do
     })
   end
 
+  defp web_search_tool do
+    tool("web_search", """
+    Search the web for synthesized answers with source citations.
+
+    ## When to use
+
+    - Before using an unfamiliar library/API — your training data may be outdated
+    - When you hit an error you haven't seen — search the error message verbatim
+    - When working with a framework you're not 100% sure about — check current docs
+
+    Do NOT rely on memory for API signatures, config flags, or library behavior. Search first. A 2-turn search-then-implement is far cheaper than a 10-turn trial-and-error.
+
+    ## Good queries vs bad queries
+
+    Good: `"Vue 3 i18n useI18n composable autoloading 2024"`, `"vite build out of memory workaround"`
+    Bad: `"how to code"`, `"vue tutorial"`
+
+    Include the version, the specific feature, and the year if recent docs matter.
+    """, %{
+      type: "object",
+      properties: %{
+        query: %{type: "string", description: "Specific search query. Include version numbers, feature names, and date qualifiers when relevant."}
+      },
+      required: ["query"]
+    })
+  end
+
+  defp web_fetch_tool do
+    tool("web_fetch", """
+    Fetch the content of a URL as text. Use for reading specific docs/APIs/READMEs you've found via search.
+
+    Large pages are truncated. Fetch specific doc pages, not top-level index pages.
+    """, %{
+      type: "object",
+      properties: %{
+        url: %{type: "string", description: "URL to fetch. Prefer specific doc/API pages over homepages."}
+      },
+      required: ["url"]
+    })
+  end
+
   defp create_plan_tool do
     tool("create_plan", "Finalize your plan after exploring the codebase. Call this once you've read enough code to create a concrete, actionable plan. Every step that creates or modifies files MUST include a `verify:` line with a shell command that exits 0 on success (e.g. `verify: test -f /path/to/file`, `verify: cd /path && php artisan test --filter=SomeTest`). This is required — the system uses these to track progress.", %{
       type: "object",
@@ -358,41 +401,8 @@ defmodule Golem.Tools do
       list_directory_tool(),
       glob_tool(),
       grep_tool(),
-      tool("web_search", """
-      Search the web for synthesized answers with source citations.
-
-      ## When to use
-
-      - Before using an unfamiliar library/API — your training data may be outdated
-      - When you hit an error you haven't seen — search the error message verbatim
-      - When working with a framework you're not 100% sure about — check current docs
-
-      Do NOT rely on memory for API signatures, config flags, or library behavior. Search first. A 2-turn search-then-implement is far cheaper than a 10-turn trial-and-error.
-
-      ## Good queries vs bad queries
-
-      Good: `"Vue 3 i18n useI18n composable autoloading 2024"`, `"vite build out of memory workaround"`
-      Bad: `"how to code"`, `"vue tutorial"`
-
-      Include the version, the specific feature, and the year if recent docs matter.
-      """, %{
-        type: "object",
-        properties: %{
-          query: %{type: "string", description: "Specific search query. Include version numbers, feature names, and date qualifiers when relevant."}
-        },
-        required: ["query"]
-      }),
-      tool("web_fetch", """
-      Fetch the content of a URL as text. Use for reading specific docs/APIs/READMEs you've found via search.
-
-      Large pages are truncated. Fetch specific doc pages, not top-level index pages.
-      """, %{
-        type: "object",
-        properties: %{
-          url: %{type: "string", description: "URL to fetch. Prefer specific doc/API pages over homepages."}
-        },
-        required: ["url"]
-      }),
+      web_search_tool(),
+      web_fetch_tool(),
       tool("think", """
       Pause and reason about the current situation. Your reasoning is captured in the conversation for later reference.
 
