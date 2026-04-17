@@ -36,7 +36,10 @@ defmodule Golem.ToolsTest do
         assert is_binary(tool.name), "tool missing name"
         assert is_binary(tool.description), "#{tool.name} missing description"
         assert is_map(tool.input_schema), "#{tool.name} missing input_schema"
-        assert tool.input_schema.type == "object", "#{tool.name} schema not object type"
+        # MCP tools carry the JSON-decoded schema with string keys; built-in
+        # tools use atom keys. Accept either form.
+        schema_type = tool.input_schema[:type] || tool.input_schema["type"]
+        assert schema_type == "object", "#{tool.name} schema not object type"
       end
     end
 

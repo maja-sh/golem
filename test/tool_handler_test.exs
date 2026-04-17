@@ -40,6 +40,10 @@ defmodule Golem.ToolHandlerTest do
       :ok
     end
 
+    # Items marked :done without a matching plan verify command get
+    # an appended "NOT been verified" warning. The tests below don't
+    # set verify commands, so they match on the summary prefix only.
+
     test "parses standard status values" do
       items = [
         %{"text" => "Step 1", "status" => "completed"},
@@ -47,12 +51,13 @@ defmodule Golem.ToolHandlerTest do
         %{"text" => "Step 3", "status" => "pending"}
       ]
 
-      result = Golem.ToolHandler.execute(
-        %{name: "update_progress", input: %{"items" => items}},
-        0
-      )
+      assert {:continue, msg} =
+               Golem.ToolHandler.execute(
+                 %{name: "update_progress", input: %{"items" => items}},
+                 0
+               )
 
-      assert {:continue, "Progress updated (1/3 completed)."} = result
+      assert String.starts_with?(msg, "Progress updated (1/3 completed).")
     end
 
     test "parses alternate status values" do
@@ -66,12 +71,13 @@ defmodule Golem.ToolHandlerTest do
         %{"text" => "Unknown", "status" => "whatever"}
       ]
 
-      result = Golem.ToolHandler.execute(
-        %{name: "update_progress", input: %{"items" => items}},
-        0
-      )
+      assert {:continue, msg} =
+               Golem.ToolHandler.execute(
+                 %{name: "update_progress", input: %{"items" => items}},
+                 0
+               )
 
-      assert {:continue, "Progress updated (2/7 completed)."} = result
+      assert String.starts_with?(msg, "Progress updated (2/7 completed).")
     end
   end
 
