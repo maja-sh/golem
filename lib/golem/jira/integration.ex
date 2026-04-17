@@ -15,12 +15,14 @@ defmodule Golem.Jira.Integration do
     Logger.info("Jira integration starting for #{ticket_key}")
 
     # Show MCP server status
-    for entry <- Golem.MCP.status() do
-      case entry do
-        {:ok, name, count} -> output().planning("MCP #{name}: #{count} tools")
-        {:error, name, reason} -> output().planning("MCP #{name}: ✗ #{reason}")
-        {:error, reason} -> output().planning("MCP config error: #{reason}")
-      end
+    mcp_status = Golem.MCP.status()
+    if mcp_status != [] do
+      mcp_lines = Enum.map_join(mcp_status, "\n", fn
+        {:ok, name, count} -> "#{name} · ✓ #{count} tools"
+        {:error, name, reason} -> "#{name} · ✗ #{reason}"
+        {:error, reason} -> "✗ #{reason}"
+      end)
+      output().agent_text("MCP: #{mcp_lines}")
     end
 
     output().planning("Fetching ticket #{ticket_key}...")
