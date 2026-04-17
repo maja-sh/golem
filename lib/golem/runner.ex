@@ -654,6 +654,8 @@ defmodule Golem.Runner do
         state = Map.put(state, :no_tool_count, 0)  # Reset no-tool counter
         llm_elapsed = System.monotonic_time(:millisecond) - llm_start
         output_tokens = Map.get(response.usage, :output_tokens, 0)
+        input_tokens = Map.get(response.usage, :input_tokens, 0)
+        if input_tokens > 0, do: :persistent_term.put(:golem_last_input_tokens, input_tokens)
 
         if response.text do
           Logger.info("#{p}  Agent: #{response.text}")
@@ -741,6 +743,8 @@ defmodule Golem.Runner do
         no_tool_count = Map.get(state, :no_tool_count, 0) + 1
         Logger.info("#{p}  Agent (no tool, #{no_tool_count}x): #{text}")
         costs = accumulate_costs(costs, response.usage, model)
+        input_tokens = Map.get(response.usage, :input_tokens, 0)
+        if input_tokens > 0, do: :persistent_term.put(:golem_last_input_tokens, input_tokens)
         if state.depth == 0, do: output().update_tokens(Map.get(response.usage, :output_tokens, 0))
 
         nudge =
@@ -1246,6 +1250,9 @@ defmodule Golem.Runner do
       middle_removed = length(messages) - head_count - length(tail)
 
       if middle_removed > 0 do
+        # Snip removed messages — invalidate the API-token floor so the next
+        # threshold check uses the fresh heuristic estimate.
+        :persistent_term.put(:golem_last_input_tokens, 0)
         Logger.info("  Snip compact: removed #{middle_removed} middle messages (~#{token_est - estimate_tokens(head ++ tail)} tokens freed)")
 
         head ++ [
@@ -1294,6 +1301,9 @@ defmodule Golem.Runner do
   end
 
   defp do_trim_messages(messages) do
+    # Compaction shrinks the conversation — invalidate the API-token floor
+    # so the next threshold check uses the fresh heuristic estimate.
+    :persistent_term.put(:golem_last_input_tokens, 0)
     [first | rest] = messages
 
     # Split into old (to compact) and recent (to keep verbatim)
@@ -1339,27 +1349,44 @@ defmodule Golem.Runner do
   end
   defp drop_leading_user_messages(messages), do: messages
 
-  # Rough token estimation: ~4 bytes per token for English text.
-  # Conservative (overestimates) to trigger compaction early rather than late.
+  # Token estimation. Prefers the last API response's actual input_tokens
+  # count (stored in persistent_term after each Claude.call) as a floor,
+  # since we know the prior call used at least that many and the message
+  # set has only grown since.
+  #
+  # The heuristic estimator uses codepoints (String.length) rather than
+  # bytes — for UTF-8 with multi-byte chars (translations, CJK, emoji),
+  # byte_size can be 3× codepoint count, which underestimates tokens for
+  # those scripts and overestimates for ASCII. ~3 codepoints per token is
+  # a reasonable middle ground across Claude's tokenizer.
   defp estimate_tokens(messages) do
-    messages
-    |> Enum.map(&estimate_message_tokens/1)
-    |> Enum.sum()
-    |> div(1)  # already in tokens
+    heuristic =
+      messages
+      |> Enum.map(&estimate_message_tokens/1)
+      |> Enum.sum()
+
+    floor_from_api = :persistent_term.get(:golem_last_input_tokens, 0)
+    max(heuristic, floor_from_api)
   end
 
+  defp estimate_text_tokens(text) when is_binary(text) do
+    # codepoint count / 3 (conservative)
+    div(String.length(text), 3)
+  end
+  defp estimate_text_tokens(_), do: 0
+
   defp estimate_message_tokens(%{content: content}) when is_binary(content) do
-    div(byte_size(content), 4)
+    estimate_text_tokens(content)
   end
 
   defp estimate_message_tokens(%{content: blocks}) when is_list(blocks) do
     Enum.reduce(blocks, 0, fn
-      %{type: "text", text: text}, acc -> acc + div(byte_size(text), 4)
-      %{"type" => "text", "text" => text}, acc -> acc + div(byte_size(text), 4)
-      %{type: "tool_result", content: content}, acc when is_binary(content) -> acc + div(byte_size(content), 4)
-      %{"type" => "tool_result", "content" => content}, acc when is_binary(content) -> acc + div(byte_size(content), 4)
-      %{type: "tool_use", input: input}, acc -> acc + div(byte_size(inspect(input)), 4)
-      %{"type" => "tool_use", "input" => input}, acc -> acc + div(byte_size(inspect(input)), 4)
+      %{type: "text", text: text}, acc -> acc + estimate_text_tokens(text)
+      %{"type" => "text", "text" => text}, acc -> acc + estimate_text_tokens(text)
+      %{type: "tool_result", content: content}, acc when is_binary(content) -> acc + estimate_text_tokens(content)
+      %{"type" => "tool_result", "content" => content}, acc when is_binary(content) -> acc + estimate_text_tokens(content)
+      %{type: "tool_use", input: input}, acc -> acc + estimate_text_tokens(inspect(input))
+      %{"type" => "tool_use", "input" => input}, acc -> acc + estimate_text_tokens(inspect(input))
       %{type: "image"}, acc -> acc + 2000  # images are ~2000 tokens
       _, acc -> acc + 50  # small overhead for other block types
     end)
