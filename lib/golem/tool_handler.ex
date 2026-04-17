@@ -96,7 +96,8 @@ defmodule Golem.ToolHandler do
         prefix = if cached, do: "[cached] ", else: ""
         range_info = if showing_range, do: "[#{showing_range}]\n", else: ""
 
-        {:continue, "#{prefix}#{range_info}#{truncate(sliced, 50_000)}"}
+        {body, trunc_notice} = read_file_truncate(sliced, total_lines, start_line_for(offset))
+        {:continue, "#{prefix}#{range_info}#{body}#{trunc_notice}"}
     end
   end
 
@@ -812,6 +813,22 @@ defmodule Golem.ToolHandler do
   end
 
   defp truncate(text, _max), do: text
+
+  # Truncate a read_file body at 50KB and append an explicit notice the
+  # model can act on — silent truncation causes the agent to think it saw
+  # the whole file when it didn't.
+  defp read_file_truncate(text, total_lines, start_line) when byte_size(text) > 50_000 do
+    kept = binary_part(text, 0, 50_000)
+    shown_lines = kept |> String.split("\n") |> length()
+    last_shown = start_line + shown_lines - 1
+    notice = "\n\n[Truncated — file has #{total_lines} lines, showing #{start_line}-#{last_shown} (first 50KB). Use `offset` and `limit` to read more, or `grep` to locate what you need.]"
+    {kept, notice}
+  end
+  defp read_file_truncate(text, _total_lines, _start_line), do: {text, ""}
+
+  defp start_line_for(nil), do: 1
+  defp start_line_for(off) when is_integer(off) and off > 0, do: off
+  defp start_line_for(_), do: 1
 
   defp persist_and_preview(text) do
     total = byte_size(text)
