@@ -63,7 +63,11 @@ defmodule Golem.Jira.Integration do
             handle_rejection(task_config, ticket, branch, result)
 
           {:error, :max_steps_reached} = err ->
-            comment_on_ticket(task_config, ticket, "Golem run paused — max steps reached. Resume manually.")
+            handle_paused(task_config, ticket, branch, "max steps reached")
+            err
+
+          {:error, :budget_exceeded} = err ->
+            handle_paused(task_config, ticket, branch, "cost budget exceeded")
             err
 
           {:error, reason} = err ->
@@ -155,6 +159,27 @@ defmodule Golem.Jira.Integration do
 
     comment_on_ticket(config, ticket, comment)
     {:ok, result}
+  end
+
+  # Push whatever commits exist when the run was paused (step limit or
+  # budget). The work is real and committed — capture it as a draft PR
+  # so a human can review or the run can be resumed with more budget.
+  defp handle_paused(config, ticket, branch, reason) do
+    Logger.info("Agent paused for #{ticket.key} (#{reason}); pushing any committed work")
+    pr_urls = push_all(config, ticket, branch)
+
+    pr_section = case pr_urls do
+      [] -> "\n\nNo commits were pushed — either nothing was committed yet, or the push failed (check `logs/golem.log`)."
+      urls -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(urls, "\n", &"- #{&1}")
+    end
+
+    comment = """
+    Golem run paused — #{reason}.
+
+    Any committed work has been pushed as draft PR(s). You can review the diff and either merge, or resume the run with `mix golem.resume <run_id>` (and a higher `--budget` / `--max-steps` if needed).#{pr_section}
+    """
+
+    comment_on_ticket(config, ticket, comment)
   end
 
   defp push_all(config, ticket, branch) do
