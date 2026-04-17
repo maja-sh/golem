@@ -70,7 +70,7 @@ defmodule Golem.TUI do
   @impl true
   def tool_error(name, detail, error_text) do
     # Show first meaningful line of error, wrapped
-    first_line = error_text |> String.split("\n", trim: true) |> List.first("") |> trunc(100)
+    first_line = error_text |> String.split("\n", trim: true) |> List.first("") |> wtrunc(6)
     lines = [
       [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset],
       [:faint, :red, "  └ #{first_line}", :reset]
@@ -129,7 +129,7 @@ defmodule Golem.TUI do
   def sub_agent_start(goal) do
     GenServer.call(__MODULE__, {:print, [
       [],
-      [:magenta, "  ● Sub-agent: ", :reset, :faint, trunc(goal, 70), :reset]
+      [:magenta, "  ● Sub-agent: ", :reset, :faint, wtrunc(goal, 18), :reset]
     ], :sub_agent})
   end
 
@@ -143,7 +143,7 @@ defmodule Golem.TUI do
 
   @impl true
   def sub_agent_status(goal, tool, detail, step, max_steps) do
-    short_goal = trunc(goal, 40)
+    short_goal = wtrunc(goal, 20)
     label = tool_label(tool, detail) |> trunc(55)
     GenServer.call(__MODULE__, {:print_and_update, [
       [:faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " #{label}", :reset]
@@ -168,7 +168,7 @@ defmodule Golem.TUI do
         [[:green, :bright, "✓ Goal achieved", :reset]]
       else
         [[:red, :bright, "✗ Goal not achieved", :reset]]
-      end ++ [[:faint, "  #{trunc(summary, 120)}", :reset]]
+      end ++ [[:faint, "  #{wtrunc(summary, 4)}", :reset]]
     GenServer.call(__MODULE__, {:print_and_update, lines, [action: nil]})
   end
 
@@ -368,7 +368,7 @@ defmodule Golem.TUI do
   defp build_bottom_line(state) do
     spinner = Enum.at(@spinner_frames, state.spinner_idx)
     elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
-    action_part = if state.action, do: [:faint, " · ", :magenta, trunc(state.action, 40), :reset], else: []
+    action_part = if state.action, do: [:faint, " · ", :magenta, wtrunc(state.action, 30), :reset], else: []
 
     [:cyan, " #{spinner} ", :reset,
      :white, "#{state.verb} for #{elapsed}", :reset,
@@ -385,7 +385,7 @@ defmodule Golem.TUI do
           :pending -> {"·", :faint}
         end
         style = if item.status in [:pending, :done], do: :faint, else: :white
-        [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, trunc(item.text, 55), :reset]
+        [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
       end)
 
     bottom = build_bottom_line(state)
@@ -469,6 +469,13 @@ defmodule Golem.TUI do
   end
   defp trunc(_, _), do: ""
 
+  # Truncate relative to terminal width, with a prefix offset for indentation
+  defp wtrunc(text, offset) when is_binary(text) do
+    max = max(terminal_width() - offset, 40)
+    trunc(text, max)
+  end
+  defp wtrunc(_, _), do: ""
+
   defp tool_icon("shell"), do: "$"
   defp tool_icon("write_file"), do: "+"
   defp tool_icon("read_file"), do: "↓"
@@ -486,21 +493,21 @@ defmodule Golem.TUI do
   defp tool_icon("browse"), do: "◎"
   defp tool_icon(_), do: "▸"
 
-  defp tool_label("shell", cmd), do: trunc(cmd, 60)
+  defp tool_label("shell", cmd), do: wtrunc(cmd, 6)
   defp tool_label("write_file", path), do: "Write #{path}"
   defp tool_label("read_file", path), do: "Read #{path}"
   defp tool_label("edit_file", path), do: "Edit #{path}"
   defp tool_label("glob", pattern), do: "Glob #{pattern}"
   defp tool_label("grep", pattern), do: "Grep #{pattern}"
-  defp tool_label("web_search", query), do: "Search · #{trunc(query, 60)}"
-  defp tool_label("web_fetch", url), do: "Fetch #{trunc(url, 60)}"
+  defp tool_label("web_search", query), do: "Search · #{wtrunc(query, 14)}"
+  defp tool_label("web_fetch", url), do: "Fetch #{wtrunc(url, 12)}"
   defp tool_label("list_directory", path), do: "List #{path}"
-  defp tool_label("sub_agent", goal), do: "Sub-agent · #{trunc(goal, 50)}"
+  defp tool_label("sub_agent", goal), do: "Sub-agent · #{wtrunc(goal, 18)}"
   defp tool_label("update_progress", _), do: "Progress update"
   defp tool_label("done", _), do: "Done"
   defp tool_label("think", _), do: "Thinking..."
   defp tool_label("ask_user", _), do: "Asking user..."
-  defp tool_label("browse", url), do: "Browse #{trunc(url, 60)}"
+  defp tool_label("browse", url), do: "Browse #{wtrunc(url, 12)}"
   defp tool_label(name, _), do: name
 
   defp build_diff(path, old, new) do
