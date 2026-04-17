@@ -114,8 +114,6 @@ defmodule Golem.TUI do
   def plan_created(plan) do
     phases = Regex.scan(~r/^## /m, plan) |> length()
     steps = Regex.scan(~r/- \[ \]/m, plan) |> length()
-    # Switch verb from "Planning" to a forge verb now that execution begins
-    GenServer.cast(__MODULE__, {:update, verb: Enum.random(@forge_verbs)})
     GenServer.call(__MODULE__, {:print, [
       [],
       [:green, "✓ Plan created ", :reset, :faint, "(#{phases} phases, #{steps} steps)", :reset]
@@ -254,7 +252,7 @@ defmodule Golem.TUI do
     {:reply, :ok, %{state |
       active: true, status_lines: 0,
       started_at: System.monotonic_time(:second),
-      verb: "Planning",
+      verb: Enum.random(@forge_verbs),
       ticker: ticker
     }}
   end
