@@ -150,6 +150,9 @@ defmodule Golem.Runner do
   end
 
   defp do_run(goal, opts, max_steps, depth, prefix, run_id) do
+    # Init display early so planner exploration has a status area
+    if depth == 0, do: output().init_display(run_id, goal)
+
     plan_result =
       case opts[:plan] do
         nil ->
@@ -335,6 +338,8 @@ defmodule Golem.Runner do
 
   defp planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
     Logger.info("  [planner] step #{step}")
+    max = Application.get_env(:golem, :planner_max_steps, 75)
+    output().step_header(step, max, "$#{format_cost(costs)}")
 
     result = Golem.Claude.call(messages,
       model: model,
