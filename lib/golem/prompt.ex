@@ -12,32 +12,52 @@ defmodule Golem.Prompt do
   """
   def executor_system(errors \\ [], agents_md \\ nil)
   def executor_system(errors, agents_md) do
+    # Three-tier cache layout:
+    # 1. Static prompt — cached, never changes
+    # 2. AGENTS.md — cached, changes only when the project file changes
+    # 3. Errors — uncached, grows each run as the agent hits new failures
+    #
+    # Splitting AGENTS.md from errors means new errors don't bust the
+    # AGENTS.md cache entry, which is often several KB of project docs.
     static = %{
       type: "text",
       text: executor_static(),
       cache_control: %{type: "ephemeral"}
     }
 
-    dynamic_parts =
-      (if agents_md, do: ["## Project Instructions (from AGENTS.md)\n\n#{agents_md}"], else: []) ++
-      (if errors != [] do
-        error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
-        ["""
-        ## Lessons learned (errors from this run — do NOT repeat these)
-
-        #{error_list}
-
-        Review these before each action. If you're about to do something that previously failed, try a different approach.\
-        """]
+    agents_block =
+      if agents_md do
+        [
+          %{
+            type: "text",
+            text: "## Project Instructions (from AGENTS.md)\n\n#{agents_md}",
+            cache_control: %{type: "ephemeral"}
+          }
+        ]
       else
         []
-      end)
+      end
 
-    if dynamic_parts == [] do
-      [static]
-    else
-      [static, %{type: "text", text: Enum.join(dynamic_parts, "\n\n")}]
-    end
+    errors_block =
+      if errors != [] do
+        error_list = errors |> Enum.with_index(1) |> Enum.map_join("\n", fn {e, i} -> "#{i}. #{e}" end)
+        [
+          %{
+            type: "text",
+            text: """
+            ## Lessons learned (errors from this run — do NOT repeat these)
+
+            #{error_list}
+
+            Review these before each action. If you're about to do something that previously failed, try a different approach.\
+            """
+          }
+        ]
+      else
+        []
+      end
+
+    [static] ++ agents_block ++ errors_block
   end
 
   # The static portion of the executor prompt — never changes between turns,
