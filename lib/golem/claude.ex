@@ -468,7 +468,21 @@ defmodule Golem.Claude do
     Map.put(map, :system, blocks)
   end
 
+  # Tools: cache the whole array by marking the last tool with
+  # cache_control. Tool definitions don't change within a run, so this
+  # keeps them in the prompt cache across turns.
+  defp maybe_put(map, :tools, tools) when is_list(tools) and tools != [] do
+    Map.put(map, :tools, cache_last_tool(tools))
+  end
+
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp cache_last_tool(tools) do
+    last_idx = length(tools) - 1
+    List.update_at(tools, last_idx, fn tool ->
+      Map.put(tool, :cache_control, %{type: "ephemeral"})
+    end)
+  end
 
   defp maybe_put_thinking(body, nil), do: body
 
