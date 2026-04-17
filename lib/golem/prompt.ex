@@ -237,7 +237,7 @@ defmodule Golem.Prompt do
     You have read-only tools to explore the codebase: `read_file`, `list_directory`, `glob`, and `grep`. Use them to understand the existing code before creating your plan.
 
     **Your workflow:**
-    1. Read the goal and identify what parts of the codebase are relevant
+    1. **Start with the specifics.** If the ticket mentions a specific string, error, component, or file — `grep` for it immediately. Don't browse directories when you can search directly. For a bug like "missing translation for X", grep for "X" first.
     2. Use your tools to get the lay of the land — directory structures, file names, key patterns
     3. Once you understand the architecture well enough to make a concrete plan, call `create_plan`
 
