@@ -25,9 +25,44 @@ defmodule Golem.Sandbox do
   def exec(command, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, default_timeout())
     stall_timeout = Keyword.get(opts, :stall_timeout, default_stall_timeout())
-    GenServer.call(__MODULE__, {:exec, command, timeout, stall_timeout}, timeout + 5_000)
+    do_exec(command, timeout, stall_timeout, _attempt = 0)
+  end
+
+  # The Sandbox GenServer serializes commands — only one can run at a
+  # time. Rather than exposing `:busy` to callers (the old behavior
+  # caused retry loops when several tool calls fired concurrently),
+  # wait-and-retry inside the client so concurrent callers queue
+  # naturally. Total wait is capped so genuine deadlocks still surface.
+  @busy_max_wait_ms 30_000
+  @busy_base_backoff_ms 50
+
+  defp do_exec(command, timeout, stall_timeout, attempt) do
+    case GenServer.call(__MODULE__, {:exec, command, timeout, stall_timeout}, timeout + 5_000) do
+      {:error, :busy} ->
+        waited = busy_total_wait(attempt)
+
+        if waited >= @busy_max_wait_ms do
+          {:error, :busy}
+        else
+          Process.sleep(busy_backoff(attempt))
+          do_exec(command, timeout, stall_timeout, attempt + 1)
+        end
+
+      other ->
+        other
+    end
   catch
     :exit, _ -> {:error, :timeout}
+  end
+
+  # Linear-ish backoff capped at 500ms per wait. Cumulative limit is
+  # enforced by busy_total_wait/1.
+  defp busy_backoff(attempt), do: min(@busy_base_backoff_ms * (attempt + 1), 500)
+
+  defp busy_total_wait(attempt) do
+    0..attempt
+    |> Enum.map(&busy_backoff/1)
+    |> Enum.sum()
   end
 
   @doc """

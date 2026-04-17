@@ -189,10 +189,6 @@ defmodule Golem.Tools do
     ## Paginate large result sets
 
     Results are capped at 200 lines. If you need more, use `offset` to paginate. Or narrow the search with `glob` (e.g. `glob: "*.php"` to search only PHP files).
-
-    ## When `:busy` errors happen
-
-    The grep engine serializes calls. If you get `[error] :busy`, wait one step and retry. Do NOT fall back to shell grep — the :busy state clears quickly.
     """, %{
       type: "object",
       properties: %{

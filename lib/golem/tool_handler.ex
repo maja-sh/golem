@@ -195,10 +195,13 @@ defmodule Golem.ToolHandler do
     skip = if offset > 0, do: " | tail -n +#{offset + 1}", else: ""
     results_cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null#{skip} | head -#{@grep_limit}"
 
-    count_task = Task.async(fn -> Golem.Sandbox.exec(count_cmd, timeout: 15_000) end)
-    results_task = Task.async(fn -> Golem.Sandbox.exec(results_cmd, timeout: 15_000) end)
-
-    [count_result, results_result] = Task.await_many([count_task, results_task], :infinity)
+    # Serialize: the Sandbox is single-threaded so there's no gain from
+    # Task.async here — and with the grep handler being one of many
+    # things that can run concurrently from the planner, firing two
+    # tasks used to deadlock half the batch on :busy before the busy
+    # path was made queueing.
+    count_result = Golem.Sandbox.exec(count_cmd, timeout: 15_000)
+    results_result = Golem.Sandbox.exec(results_cmd, timeout: 15_000)
 
     total_files =
       case count_result do
