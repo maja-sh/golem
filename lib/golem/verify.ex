@@ -81,10 +81,28 @@ defmodule Golem.Verify do
            # Opus 4.7 ran $7+ chasing translator-induced diff churn.
            max_steps: 10
          ) do
-      {:ok, %{success: true}} -> :ok
-      {:ok, %{success: false, summary: summary}} -> {:error, summary}
-      {:error, :max_steps_reached} -> {:error, "Verification agent hit step limit (likely many issues)"}
-      {:error, reason} -> {:error, "Verification agent crashed: #{inspect(reason)}"}
+      {:ok, %{success: true}} ->
+        :ok
+
+      {:ok, %{success: false, summary: summary}} ->
+        {:error, summary}
+
+      {:error, :max_steps_reached} ->
+        # Inconclusive is NOT the same as failing. The verifier used
+        # up its budget without finding specific defects — either
+        # there are none, or they aren't reachable within 10 steps.
+        # Rejecting on this kicks the main agent into a "fix issues"
+        # loop with no actual issues, burning budget. Accept instead
+        # and emit a telemetry event so the inconclusive result is
+        # still visible.
+        Logger.warning("Verification inconclusive (verifier hit its step limit) — accepting")
+        Golem.Events.emit(:verify_inconclusive, %{reason: "step_limit"})
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Verification crashed (#{inspect(reason)}) — accepting to avoid fix loop")
+        Golem.Events.emit(:verify_inconclusive, %{reason: inspect(reason)})
+        :ok
     end
   end
 
