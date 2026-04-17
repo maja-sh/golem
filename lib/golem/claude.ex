@@ -419,14 +419,21 @@ defmodule Golem.Claude do
   # user message. This caches the entire conversation prefix so subsequent
   # turns only pay for new tokens. No context is lost — Claude sees the
   # same conversation, Anthropic just serves cached tokens at 90% discount.
+  #
+  # Skips per-turn system-reminder messages (they change every turn and
+  # would defeat caching). The breakpoint goes on the last *non-reminder*
+  # user message — typically the tool_result from the previous assistant
+  # turn, which IS stable across turns.
   defp add_cache_breakpoints([]), do: []
 
   defp add_cache_breakpoints(messages) do
-    # Find the index of the last user message
     last_user_idx =
       messages
       |> Enum.with_index()
-      |> Enum.filter(fn {msg, _} -> msg[:role] == "user" or msg["role"] == "user" end)
+      |> Enum.filter(fn {msg, _} ->
+        role = msg[:role] || msg["role"]
+        role == "user" and not is_reminder?(msg)
+      end)
       |> List.last()
 
     case last_user_idx do
@@ -437,6 +444,14 @@ defmodule Golem.Claude do
         messages
     end
   end
+
+  defp is_reminder?(%{content: content}) when is_binary(content) do
+    String.starts_with?(content, "<system-reminder>")
+  end
+  defp is_reminder?(%{"content" => content}) when is_binary(content) do
+    String.starts_with?(content, "<system-reminder>")
+  end
+  defp is_reminder?(_), do: false
 
   defp mark_last_block(%{content: content} = msg) when is_list(content) and content != [] do
     updated = List.update_at(content, -1, &put_cache_control/1)

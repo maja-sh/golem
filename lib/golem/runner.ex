@@ -638,6 +638,11 @@ defmodule Golem.Runner do
     # Trim: full LLM summary as last resort
     messages = trim_messages(messages)
 
+    # Append fresh per-turn runtime state as a system-reminder.
+    # Built from current state, NOT appended to state.messages, so it
+    # never gets persisted or compacted — rebuilt each turn.
+    messages = maybe_append_system_reminder(messages, state)
+
     llm_start = System.monotonic_time(:millisecond)
 
     result = Golem.Claude.call(messages,
@@ -1814,6 +1819,88 @@ defmodule Golem.Runner do
   # Staleness threshold: if progress hasn't moved in this many steps,
   # nudge the agent (heuristic only, no LLM call).
   @progress_stale_threshold 20
+
+  # --- Per-turn system-reminder ---
+
+  # Build a fresh <system-reminder> user message with current runtime state
+  # and append it to the outgoing messages. Never appended to state.messages
+  # — rebuilt from state + persistent_term each turn. This gives the agent
+  # constant awareness of recent commands, budget, and progress without
+  # bloating conversation history.
+  #
+  # Skipped early in the run (< 3 steps) when there's no useful state yet,
+  # and for sub-agents (depth > 0) which have narrower context already.
+  defp maybe_append_system_reminder(messages, %{depth: 0, step: step} = state) when step >= 3 do
+    reminder = build_system_reminder(state)
+    if reminder == "" do
+      messages
+    else
+      messages ++ [%{role: "user", content: reminder}]
+    end
+  end
+  defp maybe_append_system_reminder(messages, _state), do: messages
+
+  defp build_system_reminder(state) do
+    step = state.step
+    max_steps = state.max_steps
+    cost = Map.get(state.costs, :total_dollars, 0.0)
+    budget = Application.get_env(:golem, :max_cost, 10.0)
+    budget_pct = if budget > 0, do: round(cost / budget * 100), else: 0
+
+    progress = :persistent_term.get(:golem_progress, [])
+    progress_line = format_progress_line(progress)
+
+    recent_commands = format_recent_commands(state.history, 5)
+
+    """
+    <system-reminder>
+    Runtime context (system state, not user instruction):
+
+    - Step #{step}/#{max_steps} · Cost $#{:erlang.float_to_binary(cost, decimals: 2)} / $#{:erlang.float_to_binary(budget, decimals: 2)} (#{budget_pct}% budget used)#{progress_line}#{recent_commands}
+
+    Use this to avoid repeating failed actions. If recent commands show a pattern (repeated failures, OOMs, stalls), pick a different approach — do not retry the same thing.
+    </system-reminder>\
+    """
+  end
+
+  defp format_progress_line([]), do: ""
+  defp format_progress_line(items) do
+    done = Enum.count(items, &(&1.status in [:completed, :done]))
+    total = length(items)
+    active = Enum.find(items, &(&1.status == :in_progress))
+    active_part = if active, do: ~s{ · active: "#{truncate_str(active.text, 40)}"}, else: ""
+    "\n- Progress: #{done}/#{total} done#{active_part}"
+  end
+
+  defp format_recent_commands(history, limit) do
+    recent = Enum.take(history, -limit)
+    if recent == [] do
+      ""
+    else
+      lines =
+        Enum.map_join(recent, "\n", fn {tool, input, result} ->
+          input_str = truncate_str(to_string(input), 60)
+          status = short_status(result)
+          "  - [#{tool}] #{input_str}#{status}"
+        end)
+      "\n- Recent tool calls:\n#{lines}"
+    end
+  end
+
+  defp short_status(result) when is_binary(result) do
+    cond do
+      String.starts_with?(result, "[exit code ") ->
+        case Regex.run(~r/^\[exit code (\d+)\]/, result) do
+          [_, code] -> " → exit #{code}"
+          _ -> " → failed"
+        end
+      String.starts_with?(result, "[command timed out]") -> " → timed out"
+      String.starts_with?(result, "[command stalled") -> " → stalled"
+      String.starts_with?(result, "[error]") -> " → error"
+      true -> ""
+    end
+  end
+  defp short_status(_), do: ""
 
   defp maybe_inject_drift_warning(%{step: step, plan: plan, depth: depth} = state)
        when depth == 0 and plan != nil and step > 0 do
