@@ -19,8 +19,8 @@ defmodule Mix.Tasks.Golem.Run do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [plan: :string, max_steps: :integer, scenario: :string, jira: :string, force: :boolean, budget: :float, model: :string],
-        aliases: [p: :plan, s: :max_steps, S: :scenario, j: :jira, f: :force, b: :budget, m: :model]
+        strict: [plan: :string, max_steps: :integer, scenario: :string, jira: :string, force: :boolean, budget: :float, model: :string, visual: :boolean],
+        aliases: [p: :plan, s: :max_steps, S: :scenario, j: :jira, f: :force, b: :budget, m: :model, v: :visual]
       )
 
     # Start the application
@@ -53,7 +53,8 @@ defmodule Mix.Tasks.Golem.Run do
         nil -> []
         n -> [max_steps: n]
       end) ++
-      (if opts[:force], do: [skip_eval: true], else: [])
+      (if opts[:force], do: [skip_eval: true], else: []) ++
+      (if opts[:visual], do: [visual_verify: true], else: [])
 
     case Golem.Jira.Integration.run(ticket_key, runner_opts) do
       {:ok, _} -> :ok

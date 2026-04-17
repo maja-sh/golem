@@ -44,8 +44,9 @@ defmodule Golem.Jira.Integration do
         output().agent_text("Branch: #{branch}")
 
         # Use task_config which has worktree paths instead of main clone paths
+        visual_verify = Keyword.get(opts, :visual_verify, false)
         goal = build_goal(ticket, task_config)
-        agents_md = build_agents_md(task_config, branch, ticket)
+        agents_md = build_agents_md(task_config, branch, ticket, visual_verify)
 
         runner_opts =
           opts
@@ -306,7 +307,7 @@ defmodule Golem.Jira.Integration do
     |> Enum.join("\n\n")
   end
 
-  defp build_agents_md(config, branch, ticket) do
+  defp build_agents_md(config, branch, ticket, visual_verify) do
     project_list =
       config.projects
       |> Enum.map(fn p ->
@@ -369,6 +370,7 @@ defmodule Golem.Jira.Integration do
     - Do NOT modify files outside the project directories listed above.
     #{project_docs_section}
     #{instructions_section}
+    #{if visual_verify, do: "\n## Visual Verification REQUIRED\n\nThe operator has requested visual browser verification for this task. Before calling `done`, you MUST start the dev server and use the `browse` tool to verify your changes render correctly in the browser. This is not optional.", else: "\n## Verification\n\nUse code verification (build, syntax check, tests) unless you created new UI components or changed layout/styling. Do NOT start the dev server or use the browser for non-visual changes like translations, store logic, or config changes — it wastes time and tokens."}
     """
   end
 

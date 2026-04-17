@@ -27,6 +27,12 @@ mix golem.setup
 
 # Run a Jira ticket
 mix golem.run --jira SA-1111
+
+# Run with visual browser verification
+mix golem.run --jira SA-1111 --visual
+
+# Skip evaluation, set budget, use specific model
+mix golem.run --jira SA-1111 --force --budget 30 --model claude-opus-4-20250514
 ```
 
 ## Architecture
