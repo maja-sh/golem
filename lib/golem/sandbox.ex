@@ -174,10 +174,14 @@ defmodule Golem.Sandbox do
 
     case state.mode do
       {:exec, ref, from, timer, stall_timer} ->
+        # Broadcast last few lines to TUI for live output display
+        broadcast_output(buffer, ref)
+
         case parse_sentinel(buffer, ref) do
           {:ok, output, exit_code, new_cwd} ->
             Process.cancel_timer(timer)
             cancel_stall_timer(stall_timer)
+            Golem.TUI.clear_live_output()
             GenServer.reply(from, {:ok, %{output: output, exit_code: exit_code}})
             {:noreply, %{state | buffer: "", mode: :idle, cwd: new_cwd || state.cwd, stall_ms: nil}}
 
@@ -352,6 +356,24 @@ defmodule Golem.Sandbox do
       end
     after
       File.rm(tmp_path)
+    end
+  end
+
+  # Send the last few lines of output to the TUI for live display
+  defp broadcast_output(buffer, ref) do
+    lines =
+      buffer
+      |> String.split("\n")
+      |> Enum.reject(fn line ->
+        String.contains?(line, "---CMD_START_#{ref}---") or
+        String.contains?(line, "---CMD_END_#{ref}") or
+        String.contains?(line, "---CWD_#{ref}") or
+        line == ""
+      end)
+      |> Enum.take(-3)
+
+    if lines != [] do
+      Golem.TUI.set_live_output(lines)
     end
   end
 
