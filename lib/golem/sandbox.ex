@@ -43,11 +43,22 @@ defmodule Golem.Sandbox do
   Read a file from the container.
   """
   def read_file(container_path) do
-    # Use exec to cat the file — simpler than podman cp out
-    case exec("cat #{escape(container_path)}", timeout: 30_000, stall_timeout: :infinity) do
-      {:ok, %{exit_code: 0, output: content}} -> {:ok, content}
-      {:ok, %{output: err}} -> {:error, err}
-      error -> error
+    container = Application.get_env(:golem, :container, "golem-vm")
+    runtime = Golem.Runtime.executable()
+
+    # Use podman cp for reads — bypasses the sentinel-based exec which
+    # is slow for large files (375KB JSON was timing out at 30s)
+    tmp = System.tmp_dir!() |> Path.join("golem_read_#{:crypto.strong_rand_bytes(4) |> Base.encode16()}")
+
+    case System.cmd(runtime, ["cp", "#{container}:#{container_path}", tmp], stderr_to_stdout: true) do
+      {_, 0} ->
+        content = File.read!(tmp)
+        File.rm(tmp)
+        {:ok, content}
+
+      {err, _} ->
+        File.rm(tmp)
+        {:error, String.trim(err)}
     end
   end
 
