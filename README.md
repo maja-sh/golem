@@ -44,6 +44,61 @@ Set in `.env`:
 | `GIT_USER` | No | Git commit author name |
 | `GIT_EMAIL` | No | Git commit author email |
 
+Golem settings (models, limits, container name) can also be overridden via `GOLEM_*` env vars — see the [Configuration](#configuration) section below.
+
+### Configuration
+
+Project defaults live in `.golem/config.yml`. Copy the example template to get started:
+
+```bash
+cp .golem/config.example.yml .golem/config.yml
+```
+
+```yaml
+# .golem/config.yml
+models:
+  planner: claude-opus-4-7
+  executor: claude-opus-4-7
+  # compaction: claude-sonnet-4-6    # optional, falls back to executor
+
+limits:
+  max_steps: 200
+  max_cost: 10.0
+  thinking_budget: 10000
+  command_timeout: 900000
+  stall_timeout: 120000
+
+container:
+  name: golem-vm
+  user: agent
+```
+
+**Precedence** (highest first):
+
+1. `GOLEM_*` environment variable — per-shell override for CI/ops
+2. `.golem/config.yml` — project defaults, committed as `.example.yml`
+3. Built-in default in `lib/golem/application.ex`
+
+Run `mix golem.config` to see the resolved values and where each one came from.
+
+| YAML key | Env var | Default | Description |
+|---|---|---|---|
+| `models.planner` | `GOLEM_PLANNER_MODEL` | `claude-opus-4-7` | Model used to plan and revise |
+| `models.executor` | `GOLEM_EXECUTOR_MODEL` | `claude-opus-4-7` | Model used to execute steps |
+| `models.compaction` | `GOLEM_COMPACTION_MODEL` | (uses executor) | Model used to summarize context during compaction |
+| `limits.max_steps` | `GOLEM_MAX_STEPS` | `200` | Hard step ceiling for a run |
+| `limits.max_cost` | `GOLEM_MAX_COST` | `10.0` | Cost ceiling in USD |
+| `limits.thinking_budget` | `GOLEM_THINKING_BUDGET` | `10000` | Extended-thinking budget per turn (tokens) |
+| `limits.command_timeout` | `GOLEM_COMMAND_TIMEOUT` | `900000` | Shell command timeout (ms) |
+| `limits.stall_timeout` | `GOLEM_STALL_TIMEOUT` | `120000` | Stall detection timeout (ms, no output) |
+| `limits.planner_max_tokens` | `GOLEM_PLANNER_MAX_TOKENS` | `16000` | Max tokens per planner response |
+| `limits.planner_max_steps` | `GOLEM_PLANNER_MAX_STEPS` | `75` | Step cap for the planner phase |
+| `limits.executor_max_tokens` | `GOLEM_EXECUTOR_MAX_TOKENS` | `16000` | Max tokens per executor response |
+| `container.name` | `GOLEM_CONTAINER` | `golem-vm` | Podman/docker container name |
+| `container.user` | `GOLEM_CONTAINER_USER` | `agent` | Default setup-step user |
+
+The whole `.golem/` directory is gitignored — your `config.yml` stays local. Commit `.golem/config.example.yml` as the team template.
+
 ### Git access (optional)
 
 To let the bot push/pull from GitHub or Bitbucket, generate a dedicated SSH key:

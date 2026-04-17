@@ -44,5 +44,9 @@ golem-*.tar
 /secrets/
 
 # Project-specific config (org-specific settings, credentials)
-.golem/
+# Note: ignore the contents, not the directory itself, so we can
+# re-include template files below.
+.golem/*
+# …but track *.example.yml files as committed templates
+!.golem/*.example.yml
 

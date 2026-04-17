@@ -1,0 +1,55 @@
+# Golem configuration — copy to `.golem/config.yml` and customize.
+#
+# All settings are optional. Anything you omit falls back to the
+# built-in default in lib/golem/application.ex.
+#
+# Precedence (highest first):
+#   1. GOLEM_* environment variable
+#   2. This file
+#   3. Built-in default
+#
+# The whole .golem/ directory is gitignored — your personal config
+# stays local. Commit this `.example.yml` as the template.
+
+models:
+  # Used to produce the initial plan and revisions.
+  planner: claude-opus-4-7
+
+  # Used for step-by-step execution.
+  executor: claude-opus-4-7
+
+  # Optional: model used for compaction summaries. Falls back to
+  # `executor` if unset. Sonnet is a good cost/quality pick here.
+  # compaction: claude-sonnet-4-6
+
+limits:
+  # Hard step ceiling for a single run (main loop, excludes sub-agents).
+  max_steps: 200
+
+  # Cost ceiling in USD. Run aborts past this.
+  max_cost: 10.0
+
+  # Extended-thinking budget per turn, in tokens. Higher = slower +
+  # more expensive, but better reasoning on hard steps.
+  thinking_budget: 10000
+
+  # Shell command timeout in milliseconds.
+  command_timeout: 900000
+
+  # Shell stall detection — kill if no output for this long (ms).
+  stall_timeout: 120000
+
+  # Token/step caps for the planner phase.
+  planner_max_tokens: 16000
+  planner_max_steps: 75
+
+  # Max tokens per executor response.
+  executor_max_tokens: 16000
+
+container:
+  # Name of the podman/docker container to exec into.
+  name: golem-vm
+
+  # User to run setup steps as by default (can be overridden per-step
+  # in .golem/projects.yml).
+  user: agent

@@ -3,7 +3,10 @@ defmodule Golem.Application do
 
   @impl true
   def start(_type, _args) do
-    # Ensure config defaults exist even if config files are missing
+    # Load user config from .golem/config.yml and GOLEM_* env vars first.
+    # ensure_defaults/0 only fills in keys that are still unset, so anything
+    # the user configured takes precedence over the hard-coded fallbacks.
+    Golem.Config.load()
     ensure_defaults()
     setup_file_logger()
 

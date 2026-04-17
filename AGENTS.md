@@ -69,12 +69,34 @@ shell, write_file, read_file, edit_file, list_directory, glob, grep, web_search,
 
 ## Config
 
-See `config/config.exs`. Key settings:
-- `planner_model` / `executor_model` — Claude models
-- `thinking_budget` — Extended thinking token budget
-- `max_steps` — Default step limit
-- `command_timeout` — Shell command timeout
-- `stall_timeout` — Shell stall detection timeout (default 120s)
+User-facing config lives in `.golem/config.yml` (see `.golem/config.example.yml` for the template). `Golem.Config.load/0` runs at application boot and merges three layers in precedence order: `GOLEM_*` env vars → `.golem/config.yml` → built-in defaults in `Golem.Application.ensure_defaults/0`.
+
+Run `mix golem.config` to print the resolved values and their source.
+
+Top-level YAML keys:
+
+```yaml
+models:
+  planner: claude-opus-4-7       # GOLEM_PLANNER_MODEL
+  executor: claude-opus-4-7      # GOLEM_EXECUTOR_MODEL
+  compaction: claude-sonnet-4-6  # GOLEM_COMPACTION_MODEL (optional, falls back to executor)
+
+limits:
+  max_steps: 200                 # GOLEM_MAX_STEPS
+  max_cost: 10.0                 # GOLEM_MAX_COST
+  thinking_budget: 10000         # GOLEM_THINKING_BUDGET
+  command_timeout: 900000        # GOLEM_COMMAND_TIMEOUT
+  stall_timeout: 120000          # GOLEM_STALL_TIMEOUT
+  planner_max_tokens: 16000      # GOLEM_PLANNER_MAX_TOKENS
+  planner_max_steps: 75          # GOLEM_PLANNER_MAX_STEPS
+  executor_max_tokens: 16000     # GOLEM_EXECUTOR_MAX_TOKENS
+
+container:
+  name: golem-vm                 # GOLEM_CONTAINER
+  user: agent                    # GOLEM_CONTAINER_USER
+```
+
+Adding a new setting: append a row to `@settings` in `lib/golem/config.ex` (yaml path + env var + type) and add a hard-coded default in `Golem.Application.ensure_defaults/0`. Document the new key in both `README.md` and this file (see "Documentation Rules" below).
 
 ## Project Config
 
