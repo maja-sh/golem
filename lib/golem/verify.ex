@@ -31,12 +31,22 @@ defmodule Golem.Verify do
     The agent was working on this goal:
     #{String.slice(goal_context, 0, 500)}
 
-    ## Required checks (run ALL of these)
+    ## Required checks
 
-    1. **Discover the project**: Use `list_directory`, `glob`, and `read_file` to find the project structure and determine how to build and test it.
-    2. **Test suite**: Run the project's test suite. Report any failures verbatim.
-    3. **Clean build**: Run a clean compile/build. Report ALL warnings.
-    4. **Unused code scan**: `grep -rn` for unused imports, dead functions, TODO/FIXME/HACK placeholders, and commented-out code blocks in recently modified files.
+    1. **Look at the diff first** — run `git diff` (or `git diff HEAD~1`) to see exactly what changed. This determines which checks are relevant. Reading the diff is mandatory; the checks below depend on it.
+    2. **Unused code scan** — `grep -n` in the modified files for unused imports, dead functions, TODO/FIXME/HACK placeholders, and commented-out code. Always do this.
+    3. **Scope-appropriate correctness check** — pick the lightest check that actually exercises the change:
+       - Only JSON/YAML/Markdown/locale files → syntax check (`jq empty file.json`, `yamllint`, `node -e "JSON.parse(...)"`). Do NOT run a full frontend build.
+       - Only tests changed → run just those tests (e.g. `pytest path/to/test.py`, `vitest run path/to/test.spec.ts`).
+       - Frontend source changed → run the project's lint/typecheck (`tsc --noEmit`, `eslint`) plus any tests. Full production build is optional if a typecheck passes.
+       - Backend source changed → compile/typecheck + backend tests for the affected module.
+       - Mixed → cover each area with the lightest check that applies.
+
+    Do NOT run a full `npm run build` / `vite build` / `webpack` by default — they are slow and memory-hungry. Only run one if the change is frontend source code AND `tsc --noEmit` is unavailable or insufficient.
+
+    ## Infra failures are NOT code failures
+
+    If any check is killed (exit 137/143), OOMs, or stalls under memory pressure, that is an infrastructure problem, not a defect in the code. Report it as `Result: INFRA_ERROR` and move on — do NOT mark the overall verdict as failed on this basis alone. Try a lighter equivalent (`tsc --noEmit` instead of full build, `jq empty` instead of running the app). The goal is to catch real bugs, not to fight the container's memory ceiling.
 
     ## Evidence rules
 
