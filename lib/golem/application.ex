@@ -50,6 +50,7 @@ defmodule Golem.Application do
   defp ensure_defaults do
     defaults = [
       container: "golem-vm",
+      container_image: "golem-vm:latest",
       container_user: "agent",
       planner_model: "claude-opus-4-7",
       executor_model: "claude-opus-4-7",

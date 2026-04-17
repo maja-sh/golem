@@ -121,9 +121,148 @@ defmodule Golem.Sandbox do
   def init(_opts) do
     Process.flag(:trap_exit, true)
     container = Application.get_env(:golem, :container, "golem-vm")
+    image = Application.get_env(:golem, :container_image, "golem-vm:latest")
     Logger.debug("Sandbox initialized, container: #{container}")
+
+    # Auto-provision the container on boot so the user never has to
+    # run `./containers/start.sh` manually. No-op if it's already
+    # running. Creates from the image if missing, starts if stopped.
+    case ensure_container(container, image) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Container auto-provision failed: #{reason}. Run ./containers/start.sh manually.")
+    end
+
     {:ok, %{port: nil, container: container, buffer: "", mode: :idle, cwd: nil, stall_ms: nil}}
   end
+
+  # --- Auto-provisioning ---
+  #
+  # Replicates the essential parts of containers/start.sh so the user
+  # doesn't need to run it manually. Idempotent. Mounts and env vars
+  # come from .golem/config.yml — nothing about SSH, gcloud, or other
+  # secrets is hardcoded in this file.
+  defp ensure_container(name, image) do
+    runtime = Golem.Runtime.cmd()
+
+    case System.find_executable(runtime) do
+      nil ->
+        {:error, "#{runtime} not found in PATH"}
+
+      exe ->
+        case container_state(exe, name) do
+          :running ->
+            :ok
+
+          :stopped ->
+            Logger.info("Starting existing container #{name}")
+            case System.cmd(exe, ["start", name], stderr_to_stdout: true) do
+              {_, 0} -> :ok
+              {out, _} -> {:error, "failed to start #{name}: #{String.trim(out)}"}
+            end
+
+          :missing ->
+            Logger.info("Container #{name} not found — creating from #{image}")
+            create_container(exe, name, image)
+        end
+    end
+  end
+
+  defp container_state(exe, name) do
+    case System.cmd(exe, ["inspect", "-f", "{{.State.Status}}", name], stderr_to_stdout: true) do
+      {output, 0} ->
+        case String.trim(output) do
+          "running" -> :running
+          _ -> :stopped
+        end
+
+      {_, _} ->
+        :missing
+    end
+  end
+
+  defp create_container(exe, name, image) do
+    case System.cmd(exe, ["image", "exists", image], stderr_to_stdout: true) do
+      {_, 0} ->
+        args = ["run", "-d", "--name", name, "--privileged", "-v", "golem-data:/home/agent"]
+        args = args ++ build_mount_args()
+        args = args ++ build_env_args()
+        args = args ++ [image]
+
+        case System.cmd(exe, args, stderr_to_stdout: true) do
+          {_, 0} ->
+            Logger.info("Container #{name} created")
+            :ok
+
+          {out, _} ->
+            {:error, "failed to create #{name}: #{String.trim(out)}"}
+        end
+
+      {_, _} ->
+        {:error, "image #{image} not found. Build it: #{exe} build -t #{image} -f containers/Dockerfile containers/"}
+    end
+  end
+
+  # Build `-v host:container[:ro]` args from the `container.mounts`
+  # list in .golem/config.yml. Missing `src` paths are silently
+  # skipped unless the entry has `required: true`.
+  defp build_mount_args do
+    mounts = Golem.Config.raw_yaml() |> get_in(["container", "mounts"]) || []
+
+    Enum.flat_map(mounts, fn entry ->
+      src = Map.get(entry, "src") || ""
+      dest = Map.get(entry, "dest") || ""
+      readonly = Map.get(entry, "readonly", false)
+      required = Map.get(entry, "required", false)
+
+      cond do
+        src == "" or dest == "" ->
+          Logger.warning("container.mounts entry missing src/dest: #{inspect(entry)}")
+          []
+
+        not path_exists?(src) ->
+          if required,
+            do: raise("required mount source not found: #{src}"),
+            else: []
+
+        true ->
+          spec = "#{Path.expand(src)}:#{dest}" <> if(readonly, do: ":ro", else: "")
+          ["-v", spec]
+      end
+    end)
+  end
+
+  # Build `-e NAME=VALUE` args from `container.env`. Accepts two forms:
+  #
+  #   - "GIT_USER"                          (pass through from host env if set)
+  #   - %{"name" => _, "value" => _,        (static value)
+  #       "when_file" => optional}          (only set if host file exists)
+  defp build_env_args do
+    entries = Golem.Config.raw_yaml() |> get_in(["container", "env"]) || []
+
+    Enum.flat_map(entries, fn
+      name when is_binary(name) ->
+        case System.get_env(name) do
+          nil -> []
+          "" -> []
+          value -> ["-e", "#{name}=#{value}"]
+        end
+
+      %{"name" => name, "value" => value} = entry ->
+        gate = Map.get(entry, "when_file")
+
+        if gate == nil or File.exists?(gate) do
+          ["-e", "#{name}=#{value}"]
+        else
+          []
+        end
+
+      other ->
+        Logger.warning("container.env entry not recognized: #{inspect(other)}")
+        []
+    end)
+  end
+
+  defp path_exists?(path), do: File.exists?(path) or File.dir?(path)
 
   @impl true
   def handle_call({:exec, command, timeout, stall_timeout}, from, %{mode: :idle} = state) do

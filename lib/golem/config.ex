@@ -39,6 +39,7 @@ defmodule Golem.Config do
 
     # container
     {["container", "name"], :container, :string, "GOLEM_CONTAINER"},
+    {["container", "image"], :container_image, :string, "GOLEM_CONTAINER_IMAGE"},
     {["container", "user"], :container_user, :string, "GOLEM_CONTAINER_USER"}
   ]
 

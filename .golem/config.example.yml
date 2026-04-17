@@ -55,6 +55,41 @@ container:
   # Name of the podman/docker container to exec into.
   name: golem-vm
 
+  # Image used to create the container if it doesn't exist yet.
+  image: golem-vm:latest
+
   # User to run setup steps as by default (can be overridden per-step
   # in .golem/projects.yml).
   user: agent
+
+  # Host-path → container-path mounts, applied when golem creates the
+  # container on startup. Missing src paths are silently skipped
+  # unless `required: true` is set.
+  #
+  # Fields:
+  #   src       — host path, relative to the golem repo root or absolute
+  #   dest      — absolute path inside the container
+  #   readonly  — mount :ro (default: false)
+  #   required  — fail startup if src is missing (default: false)
+  mounts:
+    - src: ssh
+      dest: /home/agent/.ssh
+      readonly: true
+    - src: .golem/gcloud-sa.json
+      dest: /home/agent/.config/gcloud/application_default_credentials.json
+      readonly: true
+
+  # Environment variables passed into the container. Two forms:
+  #
+  # 1. Bare string: pass-through from host env if the variable is set
+  #    and non-empty. Useful for per-user config like git identity.
+  # 2. Map {name, value, when_file?}: static value. `when_file` (host
+  #    path) gates the variable — only set if that file exists. Useful
+  #    for linking secrets to their mount (e.g. only point to gcloud
+  #    creds if the cred file was actually mounted).
+  env:
+    - GIT_USER
+    - GIT_EMAIL
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: /home/agent/.config/gcloud/application_default_credentials.json
+      when_file: .golem/gcloud-sa.json
