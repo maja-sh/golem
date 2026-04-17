@@ -37,6 +37,31 @@
 ### Smarter context compaction in planner
 After reading 20 files, the planner sends all of them every turn. Could summarize older file reads into a compact digest to reduce token usage.
 
+### Generic secrets/file mounting
+Currently gcloud credentials are hardcoded in `start.sh`. Need a generic mechanism for users to mount arbitrary files into the container (SSH keys, PGP keys, service account files, config files). Proposed approach:
+
+- Add a `mounts` section to `.golem/projects.yml` or a dedicated `.golem/mounts.yml`
+- Each mount specifies `src` (host path relative to `.golem/`), `dest` (container path), and optionally `readonly: true`
+- `start.sh` reads the config and generates `-v` flags dynamically
+- Remove the hardcoded gcloud mount from `start.sh`
+
+Example config:
+```yaml
+mounts:
+  - src: gcloud-sa.json
+    dest: /home/agent/.config/gcloud/application_default_credentials.json
+    env: GOOGLE_APPLICATION_CREDENTIALS
+    readonly: true
+  - src: id_rsa
+    dest: /home/agent/.ssh/id_rsa
+    readonly: true
+  - src: gpg-key.asc
+    dest: /home/agent/.gnupg/key.asc
+    readonly: true
+```
+
+This replaces the current hardcoded SSH and gcloud mounts in `start.sh` with a single generic mechanism. The `env` field optionally sets an env var pointing to the mounted path.
+
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
 
