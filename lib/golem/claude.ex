@@ -504,8 +504,24 @@ defmodule Golem.Claude do
 
   defp maybe_put_thinking(body, nil), do: body
 
-  defp maybe_put_thinking(body, budget) do
+  # Newer Claude models (Opus 4.7+) use adaptive thinking with an effort
+  # knob on output_config instead of the legacy
+  # `thinking.type = "enabled"` + `budget_tokens` form.
+  #
+  # We translate an integer budget (legacy callers) into a coarse effort
+  # level, or pass through a string/atom effort value directly.
+  defp maybe_put_thinking(body, effort_or_budget) do
+    effort = to_effort(effort_or_budget)
+
     body
-    |> Map.put(:thinking, %{type: "enabled", budget_tokens: budget})
+    |> Map.put(:thinking, %{type: "adaptive"})
+    |> Map.update(:output_config, %{effort: effort}, &Map.put(&1, :effort, effort))
   end
+
+  defp to_effort(n) when is_integer(n) and n <= 5_000, do: "low"
+  defp to_effort(n) when is_integer(n) and n <= 15_000, do: "medium"
+  defp to_effort(n) when is_integer(n), do: "high"
+  defp to_effort(level) when level in ["low", "medium", "high"], do: level
+  defp to_effort(level) when level in [:low, :medium, :high], do: Atom.to_string(level)
+  defp to_effort(_), do: "medium"
 end

@@ -29,9 +29,14 @@ limits:
   # Cost ceiling in USD. Run aborts past this.
   max_cost: 10.0
 
-  # Extended-thinking budget per turn, in tokens. Higher = slower +
-  # more expensive, but better reasoning on hard steps.
-  thinking_budget: 10000
+  # Extended-thinking budget per turn (integer token budget, or string
+  # "low"/"medium"/"high" for Opus 4.7+ adaptive thinking).
+  #
+  # WARNING: enabling thinking on Opus 4.7+ breaks prompt caching —
+  # every call creates a fresh cache entry, eliminating the ~90%
+  # input-token discount. Leave unset (no thinking) unless a run
+  # genuinely needs reasoning more than it needs cheap context reuse.
+  # thinking_budget: 10000
 
   # Shell command timeout in milliseconds.
   command_timeout: 900000

@@ -56,7 +56,11 @@ defmodule Golem.Application do
       planner_max_tokens: 16_000,
       planner_max_steps: 75,
       executor_max_tokens: 16_000,
-      thinking_budget: 10_000,
+      # Extended thinking. With Opus 4.7 and later, thinking.type: "adaptive"
+      # breaks prompt caching — every call creates a fresh cache entry, wiping
+      # out the ~90% input savings. Leave disabled unless a specific run needs
+      # the reasoning boost more than the cache hits.
+      thinking_budget: nil,
       max_steps: 200,
       max_cost: 10.0,
       command_timeout: 900_000,
