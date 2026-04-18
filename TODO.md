@@ -38,14 +38,33 @@
 
 ## High Priority
 
-### Smarter context compaction in planner
-After reading 20 files, the planner sends all of them every turn. Could summarize older file reads into a compact digest to reduce token usage.
-
 ### Agent-initiated Discord questions (`ask_user` overhaul)
 Let the agent ping the operator on Discord when a ticket genuinely needs human judgment, rather than guessing or aborting. Opt-in via a Jira label (`ask-human`) that injects "use ask_user for significant decisions" into the prompt. Add a timeout, per-run question budget (max 3), `--no-ask` flag, TUI "awaiting reply" indicator, and `:ask_user` event. Full design in `DISCORD_COMMUNICATION.md`. Effort: ~2-3 hours for the minimal cut, half a day for everything.
 
+### Zoom Team Chat backend for `ask_user`
+Work switched from Slack to Zoom Chat, so the operator-reachable channel is Zoom, not Discord. Build a pluggable `ask_user` backend (`backend: discord | zoom`) and add a Zoom Chat implementation: register a Chatbot app in the Zoom Marketplace, handle incoming replies via webhook (or poll if we want to avoid a public endpoint), post via `chat_channels/{id}/messages`. Do this alongside the ask_user overhaul above so the interface is designed for multiple backends from the start.
+
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
+
+### Prompt / context infrastructure (from `CLAUDE_PROMPT.md` research)
+Things Claude Code does that Golem doesn't, ordered by impact. Full findings and citations in `CLAUDE_PROMPT.md` §11.4.
+
+- **Token-based compaction threshold** instead of message count. Fire when `estimated_tokens + summary_buffer > window_size` so we compact before the model drowns in context. Covers the old "planner keeps sending 20 file-reads every turn" issue.
+- **Per-tool-result cap with disk spill.** 50 KB per result, spill the rest to a file path the agent can Read on demand. Today a single large `cat` can poison context and cause loops because compaction then drops the tool result and the model re-runs the command.
+- **Audit what survives compaction.** The compacted summary must list "commands already executed" explicitly — if it doesn't, the model has no memory it already ran them, which is a major loop cause.
+- **Per-turn `<system-reminder>`** injecting current git status, last N commands (with short result hashes), remaining budget, active task. Cheap, cache-friendly, keeps the model grounded without growing history.
+- **Longer tool descriptions** carrying behavioral rules ("don't re-run the same command if its result is in context"). Rules in the tool description are enforced when the model considers that tool; rules in the system prompt get crowded out.
+- **Visible compaction boundary message** in the conversation so the model knows why it can no longer see earlier tool results.
+
+### TUI rework (from `CLAUDE_TUI.md` research)
+Claude Code's TUI tricks that would make Golem's TUI snappier and clearer. Full findings in `CLAUDE_TUI.md` §14.
+
+- **Snappiness:** single animation clock (not overlapping `:timer`s), viewport-gated ticks, per-message height cache, buffer-cap before render (10 MB `cat` should never reach the view), `Process.send_after` per-event instead of polling intervals.
+- **Clarity:** tool-specific formatters (short label + full args, never raw JSON), Unicode status glyphs for the todo list (`○` / `◐` / `●`), uniform status row format `<glyph> <verb> <subject> · <metadata>` with elapsed on in-progress items, 30 s TTL before completed tasks fade.
+- **Sub-agents:** horizontal colored pills instead of nested indentation, distinct color per concurrent sub-agent, spinner follows focus (unfocused agents blink their pill for activity).
+- **Streaming:** paint assistant text chunk-by-chunk, minimum 2 s thinking-block visibility so short thinks don't flicker, progress sub-messages indented under long-running tools.
+- **Architecture:** centralized state with selector-based subscriptions (GenServer emits `{:field_changed, name, value}`), tool registry owns rendering (`user_facing_name` + `render_args` callbacks), tools explicitly emit `:started|:progress|:completed|:failed` — the UI never infers status by diffing prior state.
 
 ## Medium Priority
 
