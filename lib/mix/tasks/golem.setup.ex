@@ -119,8 +119,12 @@ defmodule Mix.Tasks.Golem.Setup do
           run_step("pull #{project.branch_from}", cmd, timeout: 120_000)
 
         _ ->
-          cmd = "git clone --branch #{project.branch_from} #{clone_url} #{project.path} 2>/dev/null"
-          run_step("clone (#{project.branch_from})", cmd, timeout: 300_000)
+          # --progress forces git to emit progress on stderr so the stall
+          # detector doesn't misread a slow-but-alive download (airplane
+          # wifi, hotspot) as a hung command. Merge stderr into stdout
+          # instead of /dev/null'ing it.
+          cmd = "git clone --progress --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
+          run_step("clone (#{project.branch_from})", cmd, timeout: 600_000)
       end
 
     with :ok <- result do
