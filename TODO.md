@@ -41,6 +41,9 @@
 ### Smarter context compaction in planner
 After reading 20 files, the planner sends all of them every turn. Could summarize older file reads into a compact digest to reduce token usage.
 
+### Agent-initiated Discord questions (`ask_user` overhaul)
+Let the agent ping the operator on Discord when a ticket genuinely needs human judgment, rather than guessing or aborting. Opt-in via a Jira label (`ask-human`) that injects "use ask_user for significant decisions" into the prompt. Add a timeout, per-run question budget (max 3), `--no-ask` flag, TUI "awaiting reply" indicator, and `:ask_user` event. Full design in `DISCORD_COMMUNICATION.md`. Effort: ~2-3 hours for the minimal cut, half a day for everything.
+
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
 
