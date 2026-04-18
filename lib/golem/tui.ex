@@ -127,6 +127,16 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def tool_batch_start(items) do
+    GenServer.call(__MODULE__, {:batch_start, items})
+  end
+
+  @impl true
+  def tool_batch_item_done(id, outcome) do
+    GenServer.call(__MODULE__, {:batch_item_done, id, outcome})
+  end
+
+  @impl true
   def pr_opened(repo, url) do
     # OSC 8 hyperlink: clickable in iTerm2, WezTerm, Ghostty, Kitty;
     # degrades to visible URL text elsewhere.
@@ -228,6 +238,7 @@ defmodule Golem.TUI do
     {:ok, %{
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
+      pending_batch: [],
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
       ticker: nil, last_output: nil, sub_agent_depth: 0
     }}
@@ -314,6 +325,51 @@ defmodule Golem.TUI do
   def handle_call({:set_progress, items}, _from, state) do
     state = erase_status(state)
     state = %{state | progress: items}
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:batch_start, items}, _from, state) do
+    state = erase_status(state)
+
+    pending =
+      Enum.map(items, fn %{id: id, name: name, detail: detail} ->
+        %{id: id, name: name, detail: detail, status: :pending, elapsed_ms: nil}
+      end)
+
+    # Blank line before the batch so it visually separates from prior output.
+    if state.pending_batch == [] and pending != [], do: print_line([])
+
+    state = %{state | pending_batch: pending, action: nil}
+    state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:batch_item_done, id, outcome}, _from, state) do
+    state = erase_status(state)
+
+    {status, elapsed_ms} =
+      case outcome do
+        {:ok, ms} -> {:ok, ms}
+        {:error, ms} -> {:error, ms}
+      end
+
+    pending =
+      Enum.map(state.pending_batch, fn item ->
+        if item.id == id, do: %{item | status: status, elapsed_ms: elapsed_ms}, else: item
+      end)
+
+    all_terminal = pending != [] and Enum.all?(pending, &(&1.status != :pending))
+
+    state =
+      if all_terminal do
+        # Promote the completed batch to the scroll buffer so it persists.
+        Enum.each(pending, fn item -> print_line(batch_item_line(item)) end)
+        %{state | pending_batch: [], last_output: :other}
+      else
+        %{state | pending_batch: pending}
+      end
+
     state = draw_status(state)
     {:reply, :ok, state}
   end
@@ -440,10 +496,30 @@ defmodule Golem.TUI do
         end)
       end
 
+    batch_lines = Enum.map(state.pending_batch, &batch_item_line/1)
+
     bottom = build_bottom_line(state)
 
-    sep = if progress_lines != [], do: [[]], else: []
-    [[]] ++ progress_lines ++ sep ++ [bottom]
+    progress_sep = if progress_lines != [], do: [[]], else: []
+    batch_sep = if batch_lines != [], do: [[]], else: []
+    [[]] ++ progress_lines ++ progress_sep ++ batch_lines ++ batch_sep ++ [bottom]
+  end
+
+  # Single line representing one tool in a concurrent batch, either
+  # pending (faint ○), done (green ✓ + elapsed), or errored (red ✗).
+  @doc false
+  def batch_item_line(%{status: :pending, name: name, detail: detail}) do
+    [:faint, "  ○ ", :reset, :faint, tool_label(name, detail), :reset]
+  end
+
+  def batch_item_line(%{status: :ok, name: name, detail: detail, elapsed_ms: ms}) do
+    [:green, "  ✓ ", :reset, :white, tool_label(name, detail), :reset,
+     :faint, " (#{format_elapsed(ms)})", :reset]
+  end
+
+  def batch_item_line(%{status: :error, name: name, detail: detail, elapsed_ms: ms}) do
+    [:red, "  ✗ ", :reset, :red, tool_label(name, detail), :reset,
+     :faint, " (#{format_elapsed(ms)})", :reset]
   end
 
   # --- Helpers ---

@@ -920,20 +920,26 @@ defmodule Golem.Runner do
     end
   end
 
-  # Run a batch of read-only tools concurrently using Task.async.
+  # Run a batch of read-only tools concurrently using Task.async_stream,
+  # so TUI progress lines tick from ○ to ✓ as each tool finishes rather
+  # than all-at-once after the slowest.
   defp execute_concurrent_batch(batch, depth, show, state) do
-    batch_start = System.monotonic_time(:millisecond)
+    is_batch_display = show and length(batch) > 1
 
-    # Show status while batch runs (not individual headers)
-    if show and length(batch) > 1 do
-      names = batch |> Enum.map(& &1.name) |> Enum.frequencies()
-      label = Enum.map_join(names, " + ", fn {n, c} -> if c > 1, do: "#{c}x #{n}", else: n end)
-      output().tool_call("batch", label)
-    else if show do
-      [tc] = batch
-      silent = tc.name in @silent_tools
-      if not silent, do: output().tool_call(tc.name, summarize_input(tc))
-    end end
+    if is_batch_display do
+      items =
+        Enum.map(batch, fn tc ->
+          %{id: tc.id, name: tc.name, detail: summarize_input(tc)}
+        end)
+
+      output().tool_batch_start(items)
+    else
+      if show do
+        [tc] = batch
+        silent = tc.name in @silent_tools
+        if not silent, do: output().tool_call(tc.name, summarize_input(tc))
+      end
+    end
 
     # Emit tool_call events for every call in the batch up-front, so
     # events.jsonl preserves intent even if a later tool crashes.
@@ -942,34 +948,44 @@ defmodule Golem.Runner do
     # Capture run_id so Task subprocesses can emit to the right run.
     run_id = Golem.Events.current_run()
 
-    # Execute all in parallel
-    tasks =
-      Enum.map(batch, fn tc ->
-        Task.async(fn ->
+    # async_stream with ordered: false gives us results as each task
+    # finishes — we emit the per-item "done" event then, for a
+    # progressive fill. After the stream we reorder back to the original
+    # batch order so downstream (message history, sub-agent status) is
+    # deterministic.
+    results_by_id =
+      batch
+      |> Task.async_stream(
+        fn tc ->
           if run_id, do: Golem.Events.set_run(run_id)
           start = System.monotonic_time(:millisecond)
           result = Golem.ToolHandler.execute(tc, depth) |> Golem.ToolHandler.truncate_result()
           elapsed = System.monotonic_time(:millisecond) - start
           {tc, result, elapsed}
-        end)
+        end,
+        ordered: false,
+        max_concurrency: max(length(batch), 1),
+        timeout: :infinity
+      )
+      |> Enum.reduce(%{}, fn {:ok, {tc, result, elapsed} = entry}, acc ->
+        if is_batch_display do
+          is_error =
+            case result do
+              {:continue, text} ->
+                String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
+
+              _ ->
+                false
+            end
+
+          outcome = if is_error, do: {:error, elapsed}, else: {:ok, elapsed}
+          output().tool_batch_item_done(tc.id, outcome)
+        end
+
+        Map.put(acc, tc.id, entry)
       end)
 
-    results = Task.await_many(tasks, :infinity)
-    batch_elapsed = System.monotonic_time(:millisecond) - batch_start
-
-    # Collapsed display for multi-tool batches
-    if show and length(results) > 1 do
-      batch_summary =
-        Enum.map(results, fn {tc, result, _elapsed} ->
-          detail = summarize_input(tc)
-          is_error = case result do
-            {:continue, text} -> String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
-            _ -> false
-          end
-          {tc.name, detail, is_error}
-        end)
-      output().tool_batch_result(batch_summary, batch_elapsed)
-    end
+    results = Enum.map(batch, &Map.fetch!(results_by_id, &1.id))
 
     # Build return entries + handle single-tool display and sub-agent status
     Enum.map(results, fn {tc, result, elapsed} ->
@@ -980,7 +996,8 @@ defmodule Golem.Runner do
         {:continue, text} ->
           is_error = String.starts_with?(text, "[error]") or String.starts_with?(text, "[exit code")
 
-          # Single-tool batch: show individual result (multi-tool already collapsed above)
+          # Single-tool batch keeps the existing per-tool result rendering.
+          # Multi-tool batches already rendered progressively above.
           if show and not silent and length(results) == 1 do
             if is_error,
               do: output().tool_error(tc.name, detail, text),
@@ -1723,29 +1740,43 @@ defmodule Golem.Runner do
   defp extract_result_text(%{content: text}) when is_binary(text), do: text
   defp extract_result_text(_), do: ""
 
-  defp summarize_input(%{name: "shell", input: %{"command" => cmd}}) do
+  @doc """
+  Canonical short identifier for a tool call. Used for history display
+  and — critically — as the basis for stuck-loop repeat detection. Two
+  calls that share the same summary are considered "the same call" for
+  repeat-detection purposes, so every field that matters for
+  distinguishing work (e.g. read_file offset/limit) must be included
+  here.
+  """
+  def summarize_input(%{name: "shell", input: %{"command" => cmd}}) do
     String.slice(cmd, 0, 100)
   end
 
-  defp summarize_input(%{name: "write_file", input: %{"path" => path}}) do
+  def summarize_input(%{name: "write_file", input: %{"path" => path}}) do
     path
   end
 
-  defp summarize_input(%{name: "read_file", input: %{"path" => path}}), do: path
-  defp summarize_input(%{name: "edit_file", input: %{"path" => path}}), do: path
-  defp summarize_input(%{name: "list_directory", input: %{"path" => path}}), do: path
-  defp summarize_input(%{name: "glob", input: %{"pattern" => p}}), do: p
-  defp summarize_input(%{name: "grep", input: %{"pattern" => p}}), do: p
-  defp summarize_input(%{name: "web_search", input: %{"query" => q}}), do: String.slice(q, 0, 100)
-  defp summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
-  defp summarize_input(%{name: "screenshot", input: _}), do: "display"
-  defp summarize_input(%{name: "browse", input: %{"url" => u}}), do: u
-  defp summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
-  defp summarize_input(%{name: "parallel_sub_agents", input: %{"agents" => a}}), do: "#{length(a)} agents"
-  defp summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
-  defp summarize_input(%{name: "update_progress", input: _}), do: "progress"
+  def summarize_input(%{name: "read_file", input: %{"path" => path} = input}) do
+    parts = [path]
+    parts = if input["offset"], do: parts ++ ["@#{input["offset"]}"], else: parts
+    parts = if input["limit"], do: parts ++ ["+#{input["limit"]}"], else: parts
+    Enum.join(parts)
+  end
 
-  defp summarize_input(%{name: name, input: input}) do
+  def summarize_input(%{name: "edit_file", input: %{"path" => path}}), do: path
+  def summarize_input(%{name: "list_directory", input: %{"path" => path}}), do: path
+  def summarize_input(%{name: "glob", input: %{"pattern" => p}}), do: p
+  def summarize_input(%{name: "grep", input: %{"pattern" => p}}), do: p
+  def summarize_input(%{name: "web_search", input: %{"query" => q}}), do: String.slice(q, 0, 100)
+  def summarize_input(%{name: "web_fetch", input: %{"url" => u}}), do: u
+  def summarize_input(%{name: "screenshot", input: _}), do: "display"
+  def summarize_input(%{name: "browse", input: %{"url" => u}}), do: u
+  def summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
+  def summarize_input(%{name: "parallel_sub_agents", input: %{"agents" => a}}), do: "#{length(a)} agents"
+  def summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
+  def summarize_input(%{name: "update_progress", input: _}), do: "progress"
+
+  def summarize_input(%{name: name, input: input}) do
     "#{name}: #{inspect(input) |> String.slice(0, 100)}"
   end
 
@@ -1840,10 +1871,16 @@ defmodule Golem.Runner do
         Logger.warning("Stuck detection (repeat): #{count} repeated tool calls")
         Golem.Events.emit(:stuck, %{step: step, category: "repeat_loop", count: count})
 
+        # Weak signal: deliver the warning but do NOT escalate. Previously
+        # every repeat_loop hit bumped the model to Opus for 5 steps, and
+        # because the detector fired constantly on normal iteration
+        # (several reads of the same file, repeated shell sanity checks)
+        # the executor stayed on Opus for the entire run. Edit and shell
+        # loops are stronger signals and still escalate below.
         msg =
-          "[System] WARNING: You are repeating identical tool calls without making progress. This is wasting steps. STOP and use `think` to analyze why you're stuck, then try a different approach.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
+          "[System] WARNING: You are repeating identical tool calls without making progress. This is wasting steps. STOP and use `think` to analyze why you're stuck, then try a different approach."
 
-        {messages ++ [%{role: "user", content: msg}], step + @escalation_steps}
+        {messages ++ [%{role: "user", content: msg}], current_escalation}
 
       :ok ->
         {messages, current_escalation}

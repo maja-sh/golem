@@ -28,6 +28,23 @@ defmodule Golem.Output do
   @callback pr_skipped(repo :: String.t(), reason :: String.t()) :: :ok
 
   @doc """
+  Announce a batch of tool calls that are about to run in parallel. Each
+  item is `%{id: String.t(), name: String.t(), detail: String.t()}`. The
+  TUI should render them as pending entries so the user sees what the
+  agent is doing before results come back.
+  """
+  @callback tool_batch_start(items :: [map()]) :: :ok
+
+  @doc """
+  Report completion of a single item from a previously-announced batch.
+  Outcomes: `{:ok, elapsed_ms}` or `{:error, elapsed_ms}`.
+  """
+  @callback tool_batch_item_done(
+              id :: String.t(),
+              outcome :: {:ok, integer()} | {:error, integer()}
+            ) :: :ok
+
+  @doc """
   Returns the currently active output backend module.
   """
   def current do

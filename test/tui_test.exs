@@ -51,6 +51,32 @@ defmodule Golem.TUITest do
     end
   end
 
+  describe "batch_item_line" do
+    defp rendered(iodata), do: IO.ANSI.format(iodata) |> IO.chardata_to_string()
+
+    test "pending item uses ○ glyph" do
+      item = %{id: "toolu_01", name: "shell", detail: "ls /home", status: :pending}
+      out = rendered(Golem.TUI.batch_item_line(item))
+      assert out =~ "○"
+      refute out =~ "✓"
+      refute out =~ "✗"
+    end
+
+    test "ok item uses ✓ + elapsed" do
+      item = %{id: "toolu_01", name: "read_file", detail: "foo.ex", status: :ok, elapsed_ms: 42}
+      out = rendered(Golem.TUI.batch_item_line(item))
+      assert out =~ "✓"
+      assert out =~ "42ms"
+    end
+
+    test "error item uses ✗ + elapsed" do
+      item = %{id: "toolu_01", name: "shell", detail: "phpunit", status: :error, elapsed_ms: 1500}
+      out = rendered(Golem.TUI.batch_item_line(item))
+      assert out =~ "✗"
+      assert out =~ "1.5s"
+    end
+  end
+
   describe "wrap_text" do
     test "short text stays on one line" do
       assert Golem.TUI.wrap_text("hello world", 40) == ["hello world"]

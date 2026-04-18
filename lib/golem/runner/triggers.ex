@@ -117,11 +117,21 @@ defmodule Golem.Runner.Triggers do
   end
 
   defp detect_repeat_loop(recent_history, executed) do
+    # Hash the canonical *summary* on both sides so current and history
+    # match each other. Previously current used the raw input map and
+    # history used the summary string, so a repeat could only be found
+    # entirely within history — and even then `read_file` for different
+    # file chunks summarized identically (path-only), which tripped
+    # false positives and pinned the executor on Opus via escalation.
     current_sigs =
-      Enum.map(executed, fn {tc, _} -> "#{tc.name}:#{:erlang.phash2(tc.input)}" end)
+      Enum.map(executed, fn {tc, _} ->
+        "#{tc.name}:#{:erlang.phash2(Golem.Runner.summarize_input(tc))}"
+      end)
 
     recent_sigs =
-      Enum.map(recent_history, fn {tool, input, _} -> "#{tool}:#{:erlang.phash2(input)}" end)
+      Enum.map(recent_history, fn {tool, input, _} ->
+        "#{tool}:#{:erlang.phash2(input)}"
+      end)
 
     repeated =
       (recent_sigs ++ current_sigs)

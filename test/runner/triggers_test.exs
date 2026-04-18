@@ -24,11 +24,16 @@ defmodule Golem.Runner.TriggersTest do
       assert entry =~ "(4 edits)"
     end
 
-    test "does not fire at 3 edits" do
+    test "does not fire as :edit_loop at 3 edits (repeat_loop still fires)" do
       history = List.duplicate(hist("edit_file", "/foo/bar.ex"), 2)
       executed = [exec("edit_file", %{"path" => "/foo/bar.ex"})]
 
-      assert Triggers.classify_stuck(history, executed) == :ok
+      # 3 identical edits crosses the repeat_loop threshold (3) but not
+      # the edit_loop threshold (4). edit_loop is the stricter, higher
+      # bar; we only care here that the cheaper classification doesn't
+      # escalate to :edit_loop prematurely.
+      result = Triggers.classify_stuck(history, executed)
+      refute match?({:edit_loop, _}, result)
     end
 
     test "counts write_file toward edit loop" do
@@ -92,8 +97,10 @@ defmodule Golem.Runner.TriggersTest do
         hist("grep", "foo")
       ]
 
-      # Use same input so phash2 matches
-      executed = [exec("grep", "foo")]
+      # Executed side passes the raw tool input map as the runner does;
+      # Runner.summarize_input turns it into the same "foo" the history
+      # summaries use, so all three sigs match.
+      executed = [exec("grep", %{"pattern" => "foo"})]
 
       assert {:repeat_loop, count} = Triggers.classify_stuck(history, executed)
       assert count >= 1
@@ -101,6 +108,41 @@ defmodule Golem.Runner.TriggersTest do
 
     test "no loop returns :ok" do
       assert Triggers.classify_stuck([], []) == :ok
+    end
+
+    test "different chunks of the same file are NOT a repeat loop" do
+      # Regression: previously `read_file` with different offsets
+      # summarized to just the path, so three reads of the same file
+      # at different byte ranges all hashed to the same signature and
+      # triggered repeat_loop. That false-positive pinned the executor
+      # on Opus via stuck-escalation for the rest of the run.
+      path = "/home/agent/tasks/SA-2100/app/src/components/Foo.vue"
+
+      history = [
+        hist("read_file", "#{path}@1+30"),
+        hist("read_file", "#{path}@1100+150")
+      ]
+
+      executed = [
+        {%{name: "read_file", id: "toolu_01", input: %{"path" => path, "offset" => 1250, "limit" => 150}}, {:text, "<chunk>"}}
+      ]
+
+      assert Triggers.classify_stuck(history, executed) == :ok
+    end
+
+    test "three reads of the exact same offset+limit still trigger repeat_loop" do
+      path = "/home/agent/tasks/SA-2100/app/src/components/Foo.vue"
+
+      history = [
+        hist("read_file", "#{path}@100+50"),
+        hist("read_file", "#{path}@100+50")
+      ]
+
+      executed = [
+        {%{name: "read_file", id: "toolu_01", input: %{"path" => path, "offset" => 100, "limit" => 50}}, {:text, "<chunk>"}}
+      ]
+
+      assert {:repeat_loop, _} = Triggers.classify_stuck(history, executed)
     end
   end
 

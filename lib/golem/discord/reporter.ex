@@ -79,6 +79,12 @@ defmodule Golem.Discord.Reporter do
   def pr_skipped(_repo, _reason), do: :ok
 
   @impl true
+  def tool_batch_start(_items), do: :ok
+
+  @impl true
+  def tool_batch_item_done(_id, _outcome), do: :ok
+
+  @impl true
   def run_complete(success, summary) do
     icon = if success, do: "✅", else: "❌"
     label = if success, do: "Goal achieved", else: "Goal not achieved"
