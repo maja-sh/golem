@@ -1111,7 +1111,7 @@ defmodule Golem.Runner do
       Enum.map(executed, fn {tc, result} ->
         content =
           case result do
-            {:text, text} -> text
+            {:text, text} -> maybe_spill_result(text, tc)
             {:image, text, base64} ->
               [
                 %{type: "text", text: text},
@@ -1303,6 +1303,37 @@ defmodule Golem.Runner do
         ]
 
     {:reject, state |> Map.put(:messages, messages) |> Map.put(:done_rejections, rejections)}
+  end
+
+  # --- Tool-result disk spill ---
+
+  # If a tool produced too much text to safely keep in context, write the
+  # full payload to /tmp/golem-spill-<tool_use_id>.txt inside the container
+  # and return a preview + reference. Decision + message formatting live
+  # in Golem.Runner.Spill (pure, unit-tested); this wrapper handles the
+  # side effects.
+  defp maybe_spill_result(content, tc) do
+    case Golem.Runner.Spill.plan(content, tc) do
+      :passthrough ->
+        content
+
+      {:spill, path, preview_message} ->
+        case Golem.Sandbox.write_file(path, content) do
+          :ok ->
+            Golem.Events.emit(:tool_result_spilled, %{
+              tool_use_id: tc.id,
+              tool: tc.name,
+              size: byte_size(content),
+              spill_path: path
+            })
+
+            preview_message
+
+          {:error, reason} ->
+            Logger.warning("Tool-result spill failed for #{tc.id}: #{inspect(reason)}")
+            content
+        end
+    end
   end
 
   # --- Microcompaction ---

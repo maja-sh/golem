@@ -65,6 +65,28 @@ defmodule Golem.Runner.CompactionTest do
       sig = Compaction.build_cleared_signature(entry, "[error] not found" <> String.duplicate("x", 300))
       assert sig =~ "→ error"
     end
+
+    test "preserves spill path so the model can still re-read the full output" do
+      entry = %{name: "shell", input: %{"command" => "phpunit"}}
+
+      content = """
+      <persisted-output path="/tmp/golem-spill-toolu_01abc.txt">
+      Output too large (80.0 KB). Saved to /tmp/golem-spill-toolu_01abc.txt.
+      Use `read_file` with path="/tmp/golem-spill-toolu_01abc.txt" ...
+
+      Preview (first 2 KB):
+      PHPUnit 10.x
+      """ <> String.duplicate("test output line\n", 500)
+
+      sig = Compaction.build_cleared_signature(entry, content)
+      assert sig =~ "spilled at /tmp/golem-spill-toolu_01abc.txt"
+    end
+
+    test "omits spill note when content was never spilled" do
+      entry = %{name: "shell", input: %{"command" => "echo hi"}}
+      sig = Compaction.build_cleared_signature(entry, "hi\n" <> String.duplicate("x", 500))
+      refute sig =~ "spilled at"
+    end
   end
 
   describe "extract_status_hint/2" do

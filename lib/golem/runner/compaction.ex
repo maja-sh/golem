@@ -22,20 +22,34 @@ defmodule Golem.Runner.Compaction do
       [cleared: shell "npm run build" → exit 137, 2.3KB]
       [cleared: read_file /home/agent/app/src/main.js, 45.0KB]
       [cleared: grep "has_injury" → ok, 12.0KB]
+      [cleared: shell "phpunit" → ok, 80.0KB, spilled at /tmp/golem-spill-toolu_01.txt]
   """
   def build_cleared_signature(%{name: name, input: input}, content)
       when is_binary(content) do
     input_str = summarize_tool_input(name, input)
     size_str = format_size(byte_size(content))
     status = extract_status_hint(name, content)
+    spill_str = extract_spill_path(content)
 
     parts =
       ["[cleared: #{name}"] ++
         if(input_str != "", do: [" ", input_str], else: []) ++
         if(status != "", do: [" → ", status], else: []) ++
-        [", ", size_str, "]"]
+        [", ", size_str] ++
+        if(spill_str != "", do: [", spilled at ", spill_str], else: []) ++
+        ["]"]
 
     IO.iodata_to_binary(parts)
+  end
+
+  # Detect the `<persisted-output path="...">` marker written by the
+  # runner's spill helper, so the signature can point the model back at
+  # the full output file after microcompaction has dropped the preview.
+  defp extract_spill_path(content) do
+    case Regex.run(~r/<persisted-output path="([^"]+)">/, content) do
+      [_, path] -> path
+      _ -> ""
+    end
   end
 
   @doc """
