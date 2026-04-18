@@ -53,7 +53,7 @@ defmodule Golem.Application do
       container_image: "golem-vm:latest",
       container_user: "agent",
       planner_model: "claude-opus-4-7",
-      executor_model: "claude-opus-4-7",
+      executor_model: "claude-sonnet-4-6",
       planner_max_tokens: 16_000,
       planner_max_steps: 75,
       executor_max_tokens: 16_000,

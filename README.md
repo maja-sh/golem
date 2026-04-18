@@ -78,7 +78,7 @@ Run `mix golem.config` to see the resolved scalar values + where each came from.
 | YAML key | Env var | Default | Description |
 |---|---|---|---|
 | `models.planner` | `GOLEM_PLANNER_MODEL` | `claude-opus-4-7` | Model used to plan and revise |
-| `models.executor` | `GOLEM_EXECUTOR_MODEL` | `claude-opus-4-7` | Model used to execute steps |
+| `models.executor` | `GOLEM_EXECUTOR_MODEL` | `claude-sonnet-4-6` | Model used to execute steps. Default is Sonnet — ~5× cheaper and faster than Opus, reliable on repetitive read/edit/test loops. Switch to `claude-opus-4-7` if you see quality regressions. |
 | `models.compaction` | `GOLEM_COMPACTION_MODEL` | (uses executor) | Model used to summarize context during compaction |
 | `limits.max_steps` | `GOLEM_MAX_STEPS` | `200` | Hard step ceiling for a run |
 | `limits.max_cost` | `GOLEM_MAX_COST` | `10.0` | Cost ceiling in USD |

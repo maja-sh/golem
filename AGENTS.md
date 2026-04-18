@@ -79,7 +79,7 @@ Top-level YAML keys:
 ```yaml
 models:
   planner: claude-opus-4-7       # GOLEM_PLANNER_MODEL
-  executor: claude-opus-4-7      # GOLEM_EXECUTOR_MODEL
+  executor: claude-sonnet-4-6    # GOLEM_EXECUTOR_MODEL
   compaction: claude-sonnet-4-6  # GOLEM_COMPACTION_MODEL (optional, falls back to executor)
 
 limits:

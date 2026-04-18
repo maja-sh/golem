@@ -15,8 +15,10 @@ models:
   # Used to produce the initial plan and revisions.
   planner: claude-opus-4-7
 
-  # Used for step-by-step execution.
-  executor: claude-opus-4-7
+  # Used for step-by-step execution. Sonnet is the default: ~1/5 the
+  # cost of Opus with faster TTFT, reliable on read/edit/test loops.
+  # Switch to claude-opus-4-7 if you see executor quality regressions.
+  executor: claude-sonnet-4-6
 
   # Optional: model used for compaction summaries. Falls back to
   # `executor` if unset. Sonnet is a good cost/quality pick here.
