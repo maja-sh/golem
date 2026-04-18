@@ -5,11 +5,12 @@ Autonomous agent that takes a goal, plans with Claude Opus, and executes with Cl
 ## Quick Start
 
 ```bash
-# Build and start the container
-podman build -t golem-vm:latest -f containers/Dockerfile containers/
-./containers/start.sh
+# One-time setup
+cp .golem/config.example.yml .golem/config.yml   # then edit
+cp .env.example .env                              # set ANTHROPIC_API_KEY
+mix golem.doctor                                  # validate config + runtime
 
-# Run a scenario
+# Run a scenario (container auto-provisions on first run)
 mix golem.run --scenario smoke_maze
 
 # Run with a custom goal
@@ -100,7 +101,7 @@ Adding a new setting: append a row to `@settings` in `lib/golem/config.ex` (yaml
 
 ## Project Config
 
-Project setup is configured in `.golem/projects.yml`:
+Project setup lives under the `projects:` block in `.golem/config.yml`:
 
 ```yaml
 bitbucket:
@@ -175,45 +176,48 @@ When running Jira tasks, golem uses git worktrees so multiple tasks can run simu
 
 ## Jira Integration
 
-Jira settings live in `.golem/jira.yml`:
+Jira settings live under the `jira:` block in `.golem/config.yml`:
 
 ```yaml
 jira:
   base_url: https://yoursite.atlassian.net
+  done_transition: "Pull Request / Deployable"   # optional, default "Done"
 ```
 
 Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 
 1. **Evaluate** — Opus assesses the ticket. Rejects if too vague or complex, comments on Jira with the reason.
-2. **Select projects** — Picks which repos from `projects.yml` are relevant to the ticket.
+2. **Select projects** — Picks which repos from `projects:` are relevant to the ticket.
 3. **Setup** — Clones/pulls only selected repos, creates feature branch `golem/SA-1111-slug`.
 4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
-5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira.
+5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira, transitions the ticket to `jira.done_transition`.
 
 ## MCP Servers
 
-External tool servers can be connected via `.golem/mcp.yml` using the stdio transport:
+External tool servers are configured under the `mcp:` block in `.golem/config.yml`:
 
 ### stdio transport (local subprocess)
 
 ```yaml
-servers:
-  - name: elastic
-    command: npx
-    args: ["-y", "@elastic/mcp-server-elasticsearch"]
-    env:
-      ELASTICSEARCH_URL: "https://your-cluster.es.io"
-      ELASTICSEARCH_API_KEY: "your-key"
+mcp:
+  servers:
+    - name: elastic
+      command: npx
+      args: ["-y", "@elastic/mcp-server-elasticsearch"]
+      env:
+        ELASTICSEARCH_URL: "https://your-cluster.es.io"
+        ELASTICSEARCH_API_KEY: "your-key"
 ```
 
 ### HTTP transport (remote server)
 
 ```yaml
-servers:
-  - name: remote-tools
-    url: "http://localhost:3000/mcp"
-    headers:
-      Authorization: "Bearer your-token"
+mcp:
+  servers:
+    - name: remote-tools
+      url: "http://localhost:3000/mcp"
+      headers:
+        Authorization: "Bearer your-token"
 ```
 
 ### Server fields
@@ -318,7 +322,7 @@ When adding a new e2e test, tag the module with `@moduletag :e2e`. Keep the scen
 
 ## Documentation Rules
 
-- When adding or changing config schemas (projects.yml, mcp.yml, jira.yml), environment variables, or CLI flags, always update **both** this file and `README.md`.
+- When adding or changing config schema (any top-level key in `.golem/config.yml`), environment variables, or CLI flags, always update **both** this file and `README.md`.
 - `README.md` is the human-readable reference. Keep it in sync with this file.
 
 ## Conventions
