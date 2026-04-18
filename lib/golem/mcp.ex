@@ -20,7 +20,6 @@ defmodule Golem.MCP do
   use GenServer
   require Logger
 
-  @config_path ".golem/mcp.yml"
   @call_timeout 30_000
 
   # --- Public API ---
@@ -66,10 +65,6 @@ defmodule Golem.MCP do
           e ->
             {:ok, %{servers: %{}, tools: [], status: [{:error, "Connection error: #{Exception.message(e)}"}]}}
         end
-
-      {:error, reason} ->
-        # Don't log here — status API reports this to the TUI/CLI
-        {:ok, %{servers: %{}, tools: [], status: [{:error, reason}]}}
     end
   end
 
@@ -123,45 +118,12 @@ defmodule Golem.MCP do
 
   # --- Config ---
 
-  # Config source: `.golem/config.yml` under the `mcp.servers` key if
-  # present; otherwise fall back to the legacy `.golem/mcp.yml` so
-  # existing installations keep working.
+  # Config source: `.golem/config.yml` under the `mcp.servers` key.
+  # No servers configured = empty list (not an error).
   defp load_config do
-    unified = Golem.Config.raw_yaml()
-
-    cond do
-      is_list(get_in(unified, ["mcp", "servers"])) ->
-        {:ok, parse_servers(get_in(unified, ["mcp", "servers"]))}
-
-      File.exists?(@config_path) ->
-        load_legacy_mcp()
-
-      true ->
-        {:ok, []}
-    end
-  end
-
-  defp load_legacy_mcp do
-    case YamlElixir.read_from_file(@config_path) do
-      {:ok, %{"servers" => servers}} when is_list(servers) ->
-        {:ok, parse_servers(servers)}
-
-      {:ok, _} ->
-        {:ok, []}
-
-      {:error, %YamlElixir.ParsingError{} = e} ->
-        raw = case File.read(@config_path) do
-          {:ok, content} -> "\n\n#{content}"
-          _ -> ""
-        end
-        {:error, "Failed to parse #{@config_path}: #{Exception.message(e)}#{raw}"}
-
-      {:error, reason} ->
-        if reason == :enoent or (is_map(reason) and reason[:reason] == :enoent) do
-          {:ok, []}
-        else
-          {:error, "Failed to read #{@config_path}: #{inspect(reason)}"}
-        end
+    case Golem.Config.raw_yaml() |> get_in(["mcp", "servers"]) do
+      servers when is_list(servers) -> {:ok, parse_servers(servers)}
+      _ -> {:ok, []}
     end
   end
 

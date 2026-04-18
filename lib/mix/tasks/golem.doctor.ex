@@ -195,46 +195,23 @@ defmodule Mix.Tasks.Golem.Doctor do
   end
 
   defp check_jira do
-    unified = Golem.Config.raw_yaml()
-
-    jira_config =
-      cond do
-        is_map(unified["jira"]) -> unified["jira"]
-        File.exists?(".golem/jira.yml") -> legacy_jira_config()
-        true -> nil
-      end
-
-    case jira_config do
+    case Golem.Config.raw_yaml()["jira"] do
       nil ->
         {:warn, "Jira", "not configured (fine unless you use --jira)"}
 
       %{"base_url" => url} when is_binary(url) and url != "" ->
-        email = System.get_env("JIRA_EMAIL")
-        token = System.get_env("JIRA_API_TOKEN")
-
         missing =
           Enum.reject(["JIRA_EMAIL", "JIRA_API_TOKEN"], fn v ->
             val = System.get_env(v)
             val != nil and val != ""
           end)
 
-        cond do
-          missing == [] ->
-            {:ok, "Jira", "#{url} + creds set"}
-
-          email == nil or token == nil ->
-            {:error, "Jira", "#{url} configured but missing env: #{Enum.join(missing, ", ")}"}
-        end
+        if missing == [],
+          do: {:ok, "Jira", "#{url} + creds set"},
+          else: {:error, "Jira", "#{url} configured but missing env: #{Enum.join(missing, ", ")}"}
 
       _ ->
         {:error, "Jira", "jira.base_url missing or empty"}
-    end
-  end
-
-  defp legacy_jira_config do
-    case YamlElixir.read_from_file(".golem/jira.yml") do
-      {:ok, config} -> config["jira"] || %{}
-      _ -> %{}
     end
   end
 
