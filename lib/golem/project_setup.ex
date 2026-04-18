@@ -262,7 +262,7 @@ defmodule Golem.ProjectSetup do
         # networks (airplane wifi, hotspot) silently download the pack
         # and trip the 120 s stall detector.
         run_cmd("mkdir -p #{@repos_dir}", timeout: 5_000, verbose: false)
-        cmd = "git clone --progress --branch #{branch_from} #{clone_url} #{repo_path}"
+        cmd = "git clone --progress --depth 1 --branch #{branch_from} #{clone_url} #{repo_path}"
         display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
         with :ok <- run_cmd(cmd, timeout: 600_000, verbose: false, display: display) do
           run_cmd("chown -R #{cuser}:#{cuser} #{repo_path}", timeout: 60_000, verbose: false)
@@ -285,7 +285,7 @@ defmodule Golem.ProjectSetup do
     # Remove existing directory for a clean clone
     Golem.Sandbox.exec("rm -rf #{path}", timeout: 60_000)
 
-    cmd = "git clone --progress --branch #{branch_from} #{clone_url} #{path}"
+    cmd = "git clone --progress --depth 1 --branch #{branch_from} #{clone_url} #{path}"
     display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
     result = run_cmd(cmd, timeout: 600_000, verbose: verbose, display: display)
 

@@ -123,7 +123,7 @@ defmodule Mix.Tasks.Golem.Setup do
           # detector doesn't misread a slow-but-alive download (airplane
           # wifi, hotspot) as a hung command. Merge stderr into stdout
           # instead of /dev/null'ing it.
-          cmd = "git clone --progress --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
+          cmd = "git clone --progress --depth 1 --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
           run_step("clone (#{project.branch_from})", cmd, timeout: 600_000)
       end
 
