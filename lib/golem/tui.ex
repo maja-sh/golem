@@ -126,6 +126,23 @@ defmodule Golem.TUI do
     GenServer.call(__MODULE__, {:print, [[:green, "✓ Plan revised", :reset]]})
   end
 
+  @impl true
+  def pr_opened(repo, url) do
+    # OSC 8 hyperlink: clickable in iTerm2, WezTerm, Ghostty, Kitty;
+    # degrades to visible URL text elsewhere.
+    link = IO.ANSI.format([:cyan, :underline]) <> "\e]8;;#{url}\e\\#{url}\e]8;;\e\\" <> IO.ANSI.reset()
+    GenServer.call(__MODULE__, {:print, [
+      [:green, "  ✓ ", :reset, :bright, repo, :reset, :faint, "  →  ", :reset, link]
+    ], :pr_opened})
+  end
+
+  @impl true
+  def pr_skipped(repo, reason) do
+    GenServer.call(__MODULE__, {:print, [
+      [:faint, "  · #{repo}  —  #{reason}", :reset]
+    ], :pr_skipped})
+  end
+
   def sub_agent_start(goal, display_name \\ nil) do
     label = display_name || trunc(goal, 60)
     GenServer.call(__MODULE__, {:sub_agent_start, label})

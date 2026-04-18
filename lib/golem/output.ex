@@ -24,6 +24,8 @@ defmodule Golem.Output do
   @callback run_complete(success :: boolean(), summary :: String.t()) :: :ok
   @callback run_paused(run_id :: String.t()) :: :ok
   @callback run_error(reason :: any()) :: :ok
+  @callback pr_opened(repo :: String.t(), url :: String.t()) :: :ok
+  @callback pr_skipped(repo :: String.t(), reason :: String.t()) :: :ok
 
   @doc """
   Returns the currently active output backend module.

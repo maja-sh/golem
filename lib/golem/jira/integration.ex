@@ -214,7 +214,8 @@ defmodule Golem.Jira.Integration do
       {:ok, %{exit_code: 0, output: output}} when byte_size(output) > 0 ->
         with :ok <- push_branch(path, branch),
              {:ok, pr_url} <- create_pr(config, project, ticket, branch) do
-          Logger.info("Created PR for #{project.repo}: #{pr_url}")
+          output().pr_opened(project.repo, pr_url)
+          Golem.Events.emit(:pr_opened, %{repo: project.repo, url: pr_url})
           {:ok, pr_url}
         else
           {:error, reason} ->
@@ -223,7 +224,8 @@ defmodule Golem.Jira.Integration do
         end
 
       _ ->
-        Logger.info("No commits in #{project.repo}, skipping PR")
+        output().pr_skipped(project.repo, "nothing to push")
+        Golem.Events.emit(:pr_skipped, %{repo: project.repo, reason: "no_commits"})
         :no_changes
     end
   end

@@ -73,6 +73,12 @@ defmodule Golem.Discord.Reporter do
   def show_phase_costs(_costs), do: :ok
 
   @impl true
+  def pr_opened(_repo, _url), do: :ok
+
+  @impl true
+  def pr_skipped(_repo, _reason), do: :ok
+
+  @impl true
   def run_complete(success, summary) do
     icon = if success, do: "✅", else: "❌"
     label = if success, do: "Goal achieved", else: "Goal not achieved"
