@@ -47,6 +47,23 @@ Work switched from Slack to Zoom Chat, so the operator-reachable channel is Zoom
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
 
+### PR review loop — apply reviewer suggestions to an open PR
+New CLI: `mix golem.run --pr hrdl/api/3480`. Most plumbing already exists (Bitbucket client, worktrees, commit + push flow); the missing piece is turning reviewer feedback into a goal and pushing back to the same branch.
+
+Pipeline:
+1. **Fetch comments.** `getPullRequestComments` + `getPullRequestTasks` from the Bitbucket MCP. Filter to unresolved threads not authored by the bot. Prioritize PR tasks (explicit action items) over free-floating comments. Parse Bitbucket ` ```suggestion ` blocks as first-class "apply exactly this" instructions.
+2. **Assemble goal.** Single agent goal containing PR title/description + grouped reviewer comments with their `file:line` anchors and verbatim text. Tell the agent to apply concrete suggestions, explain-and-skip questions, and call `ask_user` for genuine ambiguity.
+3. **Worktree on the existing PR branch.** Reuse `Golem.ProjectSetup.create_worktree` but check out the PR's branch (no new branch), worktree path like `/home/agent/tasks/pr-3480/api`.
+4. **Run.** Normal runner loop with current budget/step limits.
+5. **Push + reply.** Push the branch back (no force unless commits were rewritten — usually not). For each addressed thread, post `Addressed in <sha>` via `addPullRequestComment`. **Don't auto-resolve** — leave thread resolution to the human reviewer so they see what was done.
+
+Non-obvious decisions:
+- **Loop risk.** Reviewer → bot → reviewer → bot. Cap at N iterations per PR in the events log (bot checks history before running), or keep it manual-only (operator invokes per pass).
+- **Suggestion blocks.** When reviewers use ` ```suggestion ` fenced blocks, apply them directly without the model's judgment — cheap, faithful, matches the reviewer's intent exactly.
+- **Auth.** MVP is manual-trigger only, operator is the gate. Webhook/auto-trigger is deferred; would need per-PR allowlist and a budget cap.
+
+Effort: ~half a day for MVP (comment fetching + goal assembly + reply-with-sha). Another half day for polish (suggestion-block parsing, `--dry-run`, resume support, iteration cap).
+
 ### Prompt / context infrastructure (from `CLAUDE_PROMPT.md` research)
 Things Claude Code does that Golem doesn't, ordered by impact. Full findings and citations in `CLAUDE_PROMPT.md` §11.4.
 
