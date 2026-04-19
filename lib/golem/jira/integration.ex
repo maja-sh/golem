@@ -14,6 +14,13 @@ defmodule Golem.Jira.Integration do
   def run(ticket_key, opts \\ []) do
     Logger.info("Jira integration starting for #{ticket_key}")
 
+    # Start the TUI early so the status bar (spinner, elapsed, cost)
+    # is visible during fetch/eval/setup, not just once the runner
+    # loop begins. The goal blurb is refined later; the ticket key is
+    # enough for now.
+    run_id = opts[:run_id] || Golem.State.new_run_id()
+    output().init_display(run_id, "Jira: #{ticket_key}")
+
     # Show MCP server status
     mcp_status = Golem.MCP.status()
     if mcp_status != [] do
@@ -34,6 +41,11 @@ defmodule Golem.Jira.Integration do
          :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
          {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval) do
 
+      # Fold pre-flight evaluator spend into the run's initial cost so
+      # the final total matches what actually hit the Anthropic bill.
+      eval_cost = Map.get(evaluation, :cost, 0.0)
+      if eval_cost > 0, do: output().update_cost("$#{:erlang.float_to_binary(eval_cost, decimals: 4)}")
+
       selected_config = filter_config(config, evaluation.selected_projects)
       projects_label = Enum.map_join(selected_config.projects, ", ", & &1.repo)
       Logger.info("Selected projects: #{projects_label}")
@@ -51,6 +63,8 @@ defmodule Golem.Jira.Integration do
         runner_opts =
           opts
           |> Keyword.put(:agents_md, agents_md)
+          |> Keyword.put(:run_id, run_id)
+          |> Keyword.put(:initial_cost, eval_cost)
 
         Logger.info("Running agent for #{ticket_key}: #{ticket.summary}")
         output().planning("Starting agent...")
@@ -286,6 +300,43 @@ defmodule Golem.Jira.Integration do
         labels -> "**Labels:** #{Enum.join(labels, ", ")}"
       end
 
+    ask_human_label? = Enum.any?(ticket.labels, &(String.downcase(&1) == "ask-human"))
+    discord_available? = System.get_env("DISCORD_TOKEN") not in [nil, ""]
+    operator_name = operator_display_name()
+
+    ask_user_section =
+      cond do
+        not discord_available? ->
+          nil
+
+        ask_human_label? ->
+          """
+          ## Operator is watching
+
+          This ticket is tagged **`ask-human`**: #{operator_name} explicitly \
+          flagged it as one where human judgment is likely needed. Call \
+          `ask_user` freely for any genuine ambiguity — choosing between \
+          architectural approaches, interpreting a vague acceptance \
+          criterion, or confirming which existing pattern to copy. \
+          Don't burn 20 steps exploring a fork when a 30-second reply \
+          can settle it. Keep questions focused: one decision, one or two \
+          choices plus your recommendation.
+          """
+
+        true ->
+          """
+          ## Fast feedback is available
+
+          You can call `ask_user` to reach #{operator_name} on Discord for \
+          a fast answer. Use it **only** when a wrong guess would waste \
+          significant budget — e.g. architectural forks, genuinely \
+          ambiguous acceptance criteria, or confirming a destructive \
+          action. Do NOT use it for small UI details or things you can \
+          reasonably infer from existing code. If in doubt, make a \
+          defensible choice and document it; errors get caught at PR review.
+          """
+      end
+
     comments_section =
       case ticket.comments do
         [] -> nil
@@ -310,9 +361,14 @@ defmodule Golem.Jira.Integration do
 
       **Type:** #{ticket.issue_type} | **Priority:** #{ticket.priority}
 
-      Everything below is the ticket as written by the team. The description, acceptance criteria, \
-      and especially the comments are your primary instructions. Follow them closely — if a comment \
-      says "use the same pattern as X", find X and replicate it.
+      This ticket was written by a human and may be incomplete — missing \
+      edge cases, ambiguous UI details, or phrasing that makes sense to \
+      the author but not to you. That's expected. Read the description, \
+      acceptance criteria, and comments carefully; they are your primary \
+      instructions. If a comment says "use the same pattern as X", find \
+      X and replicate it. Where the ticket is genuinely silent, make a \
+      reasonable interpretation and move on — mistakes surface in code \
+      review and the author will push back there.
       """,
       labels_section,
       if(ticket.description && ticket.description != "", do: "## Description\n\n#{ticket.description}"),
@@ -326,12 +382,29 @@ defmodule Golem.Jira.Integration do
       Map each step in your plan to the specific project directory where the changes belong. \
       If the ticket has acceptance criteria, ensure every criterion has a corresponding plan step. \
       If comments reference existing patterns or components, find and study them before planning.
-      """
+      """,
+      ask_user_section
     ]
 
     parts
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
+  end
+
+  # Human-readable name for the operator who receives `ask_user`
+  # prompts on Discord. Prefers an explicit `GIT_USER` env, falls back
+  # to the local-part of `JIRA_EMAIL` title-cased, finally "the operator".
+  defp operator_display_name do
+    cond do
+      (name = System.get_env("GIT_USER")) not in [nil, ""] ->
+        name
+
+      (email = System.get_env("JIRA_EMAIL")) not in [nil, ""] ->
+        email |> String.split("@") |> hd() |> String.capitalize()
+
+      true ->
+        "the operator"
+    end
   end
 
   defp build_agents_md(config, branch, ticket, visual_verify) do

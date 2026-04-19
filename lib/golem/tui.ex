@@ -245,6 +245,14 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def handle_call({:init, _run_id, _goal}, _from, %{active: true} = state) do
+    # Idempotent: the Jira integration calls init_display early so the
+    # status bar is visible during fetch/eval/setup, and Runner.run
+    # calls it again when the agent loop starts. Re-printing the
+    # header and restarting the ticker would corrupt the TUI.
+    {:reply, :ok, state}
+  end
+
   def handle_call({:init, run_id, goal}, _from, state) do
     # Suppress ALL console logger handlers — not just :default.
     # Nostrum/Gun deps may add extra handlers. Any console output

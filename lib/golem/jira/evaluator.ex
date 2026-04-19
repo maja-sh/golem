@@ -25,17 +25,21 @@ defmodule Golem.Jira.Evaluator do
            system: system_prompt(),
            tools: [evaluation_tool()]
          ) do
-      {:ok, %{tool_use: [%{name: "evaluate_ticket", input: input} | _]}} ->
+      {:ok, %{tool_use: [%{name: "evaluate_ticket", input: input} | _]} = response} ->
         decision = input["decision"]
         reason = input["reason"] || ""
         projects = input["selected_projects"] || []
+        cost = Golem.Runner.usage_cost(Map.get(response, :usage, %{}), model)
 
         # Accept with zero projects is effectively a rejection
-        if decision == "accept" and projects == [] do
-          {:ok, %{decision: "reject", reason: "Accepted but no projects selected — nothing to change.", selected_projects: []}}
-        else
-          {:ok, %{decision: decision, reason: reason, selected_projects: projects}}
-        end
+        result =
+          if decision == "accept" and projects == [] do
+            %{decision: "reject", reason: "Accepted but no projects selected — nothing to change.", selected_projects: []}
+          else
+            %{decision: decision, reason: reason, selected_projects: projects}
+          end
+
+        {:ok, Map.put(result, :cost, cost)}
 
       {:ok, %{text: text}} ->
         Logger.warning("Evaluator returned text instead of tool call: #{String.slice(text, 0, 200)}")
