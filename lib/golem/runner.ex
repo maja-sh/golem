@@ -1980,11 +1980,19 @@ defmodule Golem.Runner do
         Logger.warning("Progress staleness: no completed items in #{gap} steps")
         Golem.Events.emit(:staleness_nudge, %{step: step, gap: gap})
 
+        # Directive, not suggestion: the agent has been quietly ignoring
+        # the soft "please update_progress" wording. The TUI checklist
+        # is a user-facing contract — leaving it out of sync with reality
+        # is a bug, not a style choice.
         msg = """
-        [System] You haven't marked a progress item completed in #{gap} steps. Either:
-        1. Call `update_progress` to mark items you've actually finished
-        2. If you're blocked, use `think(request_replan: true)` to get a revised plan
-        3. If the current step is genuinely large, that's fine — but be sure you're making progress, not wandering
+        [System] PROGRESS CHECKLIST IS STALE. You have not marked any item completed in #{gap} steps, and the checklist the operator sees in the TUI is out of sync with what you're actually doing.
+
+        Before your next substantive tool call, you MUST either:
+
+        1. Call `update_progress` to mark items you've finished AND mark the item you're currently working on as in_progress. Be honest — if you've skipped a step because it wasn't needed (e.g. environment already set up), mark it completed with a one-word note.
+        2. If you're genuinely blocked on the current item, use `think(request_replan: true)` to get a revised plan.
+
+        Do NOT continue the current line of work while the checklist is wrong. An out-of-sync checklist makes the operator think you're stuck on something you're not, and makes it impossible to tell whether the run is making progress.
         """
 
         %{state | messages: state.messages ++ [%{role: "user", content: msg}]}

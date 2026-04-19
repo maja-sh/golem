@@ -20,8 +20,8 @@ defmodule Golem.Runner.Triggers do
   @stuck_repeat_threshold 3
   @max_consecutive_thinks 3
   @file_size_warning_threshold 300
-  @progress_stale_signal_threshold 15
-  @progress_stale_nudge_threshold 20
+  @progress_stale_signal_threshold 8
+  @progress_stale_nudge_threshold 10
   @narrow_tools_min_history 20
   @narrow_tools_max_unique 2
   @error_rate_window 20

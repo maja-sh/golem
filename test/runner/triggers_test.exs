@@ -249,12 +249,13 @@ defmodule Golem.Runner.TriggersTest do
     end
 
     test "does not re-nudge within the cooldown window" do
-      # Just nudged at step 25; don't nudge again at step 30
+      # Just nudged at step 25; don't nudge again at step 30 (cooldown 10)
       assert Triggers.check_staleness(30, 5, 25) == :ok
     end
 
     test "nudges again after cooldown" do
-      # Nudged at 25, cooldown is 20 — next nudge allowed at 45+
+      # Nudged at 25, cooldown matches the stale threshold — next nudge
+      # allowed at 35+.
       assert {:nudge, _} = Triggers.check_staleness(45, 5, 25)
     end
   end

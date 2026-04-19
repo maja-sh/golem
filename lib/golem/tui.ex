@@ -536,7 +536,16 @@ defmodule Golem.TUI do
         end)
       end
 
-    batch_lines = Enum.map(state.pending_batch, &batch_item_line/1)
+    # Only render the pending-batch block when there are at least 2
+    # items. A 1-item "batch" is just a single tool call and already
+    # flows through the tool_call/tool_result pattern in the scroll
+    # buffer — rendering it again in the status area is noise.
+    batch_lines =
+      if length(state.pending_batch) >= 2 do
+        Enum.map(state.pending_batch, &batch_item_line/1)
+      else
+        []
+      end
 
     bottom = build_bottom_line(state)
 
@@ -546,9 +555,15 @@ defmodule Golem.TUI do
         r -> [retry_status_line(r)]
       end
 
+    # Layout (top → bottom):
+    #   blank
+    #   todo checklist (plan-level state, stable across turns)
+    #   blank
+    #   spinner + elapsed + cost      (overall run)
+    #   pending batch items           (current live activity)
+    #   retry indicator               (transient network issue)
     progress_sep = if progress_lines != [], do: [[]], else: []
-    batch_sep = if batch_lines != [], do: [[]], else: []
-    [[]] ++ progress_lines ++ progress_sep ++ batch_lines ++ batch_sep ++ [bottom] ++ retry_line
+    [[]] ++ progress_lines ++ progress_sep ++ [bottom] ++ batch_lines ++ retry_line
   end
 
   # One-line retry indicator rendered directly under the spinner.
