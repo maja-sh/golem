@@ -24,6 +24,23 @@ models:
   # `executor` if unset. Sonnet is a good cost/quality pick here.
   # compaction: claude-sonnet-4-6
 
+# Optional: override token pricing per model. Values are USD per
+# million tokens. Useful when Anthropic bumps prices between Golem
+# releases, or once multi-provider support lands. Partial overrides
+# are allowed — unspecified keys fall back to the built-in defaults.
+#
+# pricing:
+#   claude-opus-4-7:
+#     input: 15.0
+#     output: 75.0
+#     cache_read: 1.5
+#     cache_create: 18.75
+#   claude-sonnet-4-6:
+#     input: 3.0
+#     output: 15.0
+#     cache_read: 0.3
+#     cache_create: 3.75
+
 limits:
   # Hard step ceiling for a single run (main loop, excludes sub-agents).
   max_steps: 200

@@ -208,6 +208,14 @@ defmodule Golem.Runner do
         :persistent_term.put(:golem_verify_commands, verify_commands)
         :persistent_term.put(:golem_completed_sub_agents, %{})
 
+        # Fold any pre-flight spend (Jira evaluator call) into the
+        # run's cost total so the TUI / budget / final summary reflect
+        # what actually hit the Anthropic bill.
+        initial_cost = opts[:initial_cost] || 0.0
+
+        starting_costs =
+          Map.update(planner_costs, :total_dollars, initial_cost, &(&1 + initial_cost))
+
         state = %{
           goal: goal,
           plan: plan,
@@ -217,7 +225,7 @@ defmodule Golem.Runner do
           depth: depth,
           prefix: prefix,
           history: [],
-          costs: planner_costs,
+          costs: starting_costs,
           errors: [],
           agents_md: opts[:agents_md],
           phase_costs: [],
@@ -2231,27 +2239,57 @@ defmodule Golem.Runner do
   # --- Cost Tracking ---
 
   # Pricing per million tokens (as of 2025)
-  # Accumulate cost in dollars directly, not raw tokens, since models have different prices.
-  @sonnet_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
-  @opus_pricing %{input: 15.0, output: 75.0, cache_read: 1.5, cache_create: 18.75}
+  # Pricing per million tokens in USD. Defaults match Anthropic's
+  # public pricing as of 2026-04. Users can override any model in
+  # `.golem/config.yml` under the `pricing:` block — useful if
+  # Anthropic bumps prices between Golem releases, or to model other
+  # providers once multi-provider lands.
+  #
+  # Example override:
+  #
+  #     pricing:
+  #       claude-opus-4-7:
+  #         input: 15.0
+  #         output: 75.0
+  #         cache_read: 1.5
+  #         cache_create: 18.75
+  @default_sonnet_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
+  @default_opus_pricing %{input: 15.0, output: 75.0, cache_read: 1.5, cache_create: 18.75}
 
   defp pricing_for(model) when is_binary(model) do
-    if String.contains?(model, "opus"), do: @opus_pricing, else: @sonnet_pricing
+    overrides = Golem.Config.raw_yaml() |> get_in(["pricing", model]) || %{}
+    base = if String.contains?(model, "opus"), do: @default_opus_pricing, else: @default_sonnet_pricing
+
+    # Accept both string and atom keys; users will almost always write
+    # strings in YAML. Merge over the matching base so partial
+    # overrides (e.g. just `input:`) work.
+    Enum.reduce(base, %{}, fn {key, default}, acc ->
+      override = overrides[to_string(key)] || overrides[key]
+      Map.put(acc, key, if(is_number(override), do: override * 1.0, else: default))
+    end)
   end
 
-  defp accumulate_costs(costs, usage, model) do
+  @doc """
+  Compute the dollar cost of a single Claude.call usage map for the
+  given model. Pure helper — used by the runner for per-turn cost
+  accumulation and by the Jira evaluator to fold pre-flight spend
+  into the run total.
+  """
+  def usage_cost(usage, model) when is_binary(model) do
     p = pricing_for(model)
     input = Map.get(usage, :input_tokens, 0)
     output = Map.get(usage, :output_tokens, 0)
     cache_read = Map.get(usage, :cache_read, 0)
     cache_create = Map.get(usage, :cache_create, 0)
 
-    step_cost =
-      input / 1_000_000 * p.input +
+    input / 1_000_000 * p.input +
       output / 1_000_000 * p.output +
       cache_read / 1_000_000 * p.cache_read +
       cache_create / 1_000_000 * p.cache_create
+  end
 
+  defp accumulate_costs(costs, usage, model) do
+    step_cost = usage_cost(usage, model)
     Map.update(costs, :total_dollars, step_cost, &(&1 + step_cost))
   end
 
