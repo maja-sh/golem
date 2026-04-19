@@ -50,7 +50,9 @@ defmodule Golem.Claude do
       {"content-type", "application/json"}
     ]
 
-    do_call(body, headers, model, 0)
+    result = do_call(body, headers, model, 0)
+    Golem.Output.current().api_retry_cleared()
+    result
   end
 
   @doc """
@@ -81,8 +83,30 @@ defmodule Golem.Claude do
       {"content-type", "application/json"}
     ]
 
-    do_call_stream(body, headers, model, on_text, 0)
+    result = do_call_stream(body, headers, model, on_text, 0)
+    Golem.Output.current().api_retry_cleared()
+    result
   end
+
+  # Surface a retry to the TUI and sleep. Callers must still recurse
+  # into do_call* with attempt+1.
+  defp signal_retry_and_sleep(attempt, backoff_ms, reason) do
+    Golem.Output.current().api_retry(
+      attempt + 1,
+      @max_retries,
+      backoff_ms,
+      to_string(reason)
+    )
+
+    Process.sleep(backoff_ms)
+  end
+
+  # Short human-readable label for a Req.TransportError, suitable for
+  # the TUI retry line (e.g. "timeout", "closed", "econnrefused").
+  defp transport_reason(%Req.TransportError{reason: reason}) when is_atom(reason),
+    do: Atom.to_string(reason)
+
+  defp transport_reason(%Req.TransportError{reason: reason}), do: inspect(reason)
 
   defp do_call_stream(body, headers, model, on_text, attempt) do
     start = System.monotonic_time(:millisecond)
@@ -139,7 +163,7 @@ defmodule Golem.Claude do
         if attempt < @max_retries do
           backoff = backoff_ms(attempt)
           Logger.warning("Claude stream #{status} after #{elapsed}ms — retry #{attempt + 1}/#{@max_retries}")
-          Process.sleep(backoff)
+          signal_retry_and_sleep(attempt, backoff, "HTTP #{status}")
           do_call_stream(body, headers, model, on_text, attempt + 1)
         else
           {:error, {status, "exhausted retries"}}
@@ -149,10 +173,10 @@ defmodule Golem.Claude do
         Logger.error("Claude stream error #{status}: #{inspect(resp)}")
         {:error, {status, resp}}
 
-      {:error, %Req.TransportError{}} when attempt < @max_retries ->
+      {:error, %Req.TransportError{} = err} when attempt < @max_retries ->
         backoff = backoff_ms(attempt)
         Logger.warning("Claude stream transport error — retry #{attempt + 1}/#{@max_retries}")
-        Process.sleep(backoff)
+        signal_retry_and_sleep(attempt, backoff, transport_reason(err))
         do_call_stream(body, headers, model, on_text, attempt + 1)
 
       {:error, reason} ->
@@ -309,7 +333,7 @@ defmodule Golem.Claude do
         if attempt < @max_retries do
           backoff = backoff_ms(attempt)
           Logger.warning("Claude #{status} after #{elapsed}ms — retry #{attempt + 1}/#{@max_retries} in #{backoff}ms")
-          Process.sleep(backoff)
+          signal_retry_and_sleep(attempt, backoff, "HTTP #{status}")
           do_call(body, headers, model, attempt + 1)
         else
           Logger.error("Claude #{status} after #{elapsed}ms — exhausted #{@max_retries} retries")
@@ -324,7 +348,7 @@ defmodule Golem.Claude do
       {:error, %Req.TransportError{} = reason} when attempt < @max_retries ->
         backoff = backoff_ms(attempt)
         Logger.warning("Claude transport error — retry #{attempt + 1}/#{@max_retries} in #{backoff}ms: #{inspect(reason)}")
-        Process.sleep(backoff)
+        signal_retry_and_sleep(attempt, backoff, transport_reason(reason))
         do_call(body, headers, model, attempt + 1)
 
       {:error, reason} ->

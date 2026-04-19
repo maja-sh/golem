@@ -137,6 +137,16 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def api_retry(attempt, max, delay_ms, reason) do
+    GenServer.cast(__MODULE__, {:api_retry, attempt, max, delay_ms, reason})
+  end
+
+  @impl true
+  def api_retry_cleared do
+    GenServer.cast(__MODULE__, :api_retry_cleared)
+  end
+
+  @impl true
   def pr_opened(repo, url) do
     # OSC 8 hyperlink: clickable in iTerm2, WezTerm, Ghostty, Kitty;
     # degrades to visible URL text elsewhere.
@@ -239,6 +249,7 @@ defmodule Golem.TUI do
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
       progress: [], action: nil, status_lines: 0,
       pending_batch: [],
+      retry: nil,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
       ticker: nil, last_output: nil, sub_agent_depth: 0
     }}
@@ -443,6 +454,27 @@ defmodule Golem.TUI do
     {:noreply, state}
   end
 
+  def handle_cast({:api_retry, attempt, max, delay_ms, reason}, state) do
+    state = erase_status(state)
+
+    retry = %{
+      attempt: attempt,
+      max: max,
+      delay_ms: delay_ms,
+      reason: reason,
+      started_at: System.monotonic_time(:millisecond)
+    }
+
+    state = draw_status(%{state | retry: retry})
+    {:noreply, state}
+  end
+
+  def handle_cast(:api_retry_cleared, state) do
+    state = erase_status(state)
+    state = draw_status(%{state | retry: nil})
+    {:noreply, state}
+  end
+
   # --- Status Area ---
   #
   # The status area is a block of lines pinned at the bottom of the terminal.
@@ -508,9 +540,27 @@ defmodule Golem.TUI do
 
     bottom = build_bottom_line(state)
 
+    retry_line =
+      case state.retry do
+        nil -> []
+        r -> [retry_status_line(r)]
+      end
+
     progress_sep = if progress_lines != [], do: [[]], else: []
     batch_sep = if batch_lines != [], do: [[]], else: []
-    [[]] ++ progress_lines ++ progress_sep ++ batch_lines ++ batch_sep ++ [bottom]
+    [[]] ++ progress_lines ++ progress_sep ++ batch_lines ++ batch_sep ++ [bottom] ++ retry_line
+  end
+
+  # One-line retry indicator rendered directly under the spinner.
+  # Remaining seconds are computed from `started_at` so the existing
+  # spinner ticker (80 ms) drives a live countdown for free.
+  defp retry_status_line(%{attempt: attempt, max: max, delay_ms: delay_ms, reason: reason, started_at: started_at}) do
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+    remaining_ms = max(delay_ms - elapsed_ms, 0)
+    remaining_s = div(remaining_ms, 1000)
+
+    [:faint, "  ↳ Retrying in ", :reset, :yellow, "#{remaining_s}s",
+     :reset, :faint, " · attempt #{attempt}/#{max} · #{reason}", :reset]
   end
 
   # Single line representing one tool in a concurrent batch, either

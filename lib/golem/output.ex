@@ -45,6 +45,22 @@ defmodule Golem.Output do
             ) :: :ok
 
   @doc """
+  Signal that a Claude API call is waiting to retry after a transient
+  failure (overload, transport error). The TUI uses the `started_at`
+  plus `delay_ms` to tick down a visible countdown under the spinner
+  so the user knows the agent is alive but throttled, not hung.
+  """
+  @callback api_retry(
+              attempt :: integer(),
+              max :: integer(),
+              delay_ms :: integer(),
+              reason :: String.t()
+            ) :: :ok
+
+  @doc "Clear any pending retry indicator — the call succeeded or gave up."
+  @callback api_retry_cleared() :: :ok
+
+  @doc """
   Returns the currently active output backend module.
   """
   def current do

@@ -85,6 +85,12 @@ defmodule Golem.Discord.Reporter do
   def tool_batch_item_done(_id, _outcome), do: :ok
 
   @impl true
+  def api_retry(_attempt, _max, _delay_ms, _reason), do: :ok
+
+  @impl true
+  def api_retry_cleared, do: :ok
+
+  @impl true
   def run_complete(success, summary) do
     icon = if success, do: "✅", else: "❌"
     label = if success, do: "Goal achieved", else: "Goal not achieved"
