@@ -148,11 +148,15 @@ defmodule Golem.TUI do
 
   @impl true
   def pr_opened(repo, url) do
-    # OSC 8 hyperlink: clickable in iTerm2, WezTerm, Ghostty, Kitty;
-    # degrades to visible URL text elsewhere.
-    link = IO.ANSI.format([:cyan, :underline]) <> "\e]8;;#{url}\e\\#{url}\e]8;;\e\\" <> IO.ANSI.reset()
+    # Plain underlined cyan URL — modern terminals auto-detect it as
+    # clickable. An earlier version used an OSC 8 hyperlink escape for
+    # "proper" click support but the sequence confused the ANSI-aware
+    # truncator (it doesn't recognize OSC 8, so it counted the URL
+    # bytes toward visible width and clipped the rest of the line),
+    # and the `<>` concatenation crashed on iodata.
     GenServer.call(__MODULE__, {:print, [
-      [:green, "  ✓ ", :reset, :bright, repo, :reset, :faint, "  →  ", :reset, link]
+      [:green, "  ✓ ", :reset, :bright, repo, :reset,
+       :faint, "  →  ", :reset, :cyan, :underline, url, :reset]
     ], :pr_opened})
   end
 
