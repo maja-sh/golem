@@ -353,9 +353,21 @@ defmodule Golem.Prompt do
   end
 
   @doc """
-  Build the initial user message with the goal and plan.
+  Build the initial user message content.
+
+  When `image_attachments` is empty, returns a plain string (preserving
+  the old shape for callers that don't have attachments).
+
+  When images are present, returns a list of content blocks so the
+  images can ride alongside the prose in a single user message. The
+  text is split around the images: goal text up front so the model's
+  attention lands on the ask, then the image blocks (which benefit
+  from being near the instruction to read them), then plan + "begin"
+  directive.
   """
-  def initial_message(goal, plan) do
+  def initial_message(goal, plan, image_attachments \\ [])
+
+  def initial_message(goal, plan, []) do
     """
     ## Goal
 
@@ -367,6 +379,29 @@ defmodule Golem.Prompt do
 
     Begin executing the plan. Start with the first unchecked step.
     """
+  end
+
+  def initial_message(goal, plan, image_attachments) when is_list(image_attachments) do
+    lead_text = """
+    ## Goal
+
+    #{goal}
+
+    The ticket includes #{length(image_attachments)} image attachment(s) below. Treat them as primary context — screenshots of the UI, errors, or expected output are often the clearest spec the ticket author can give.
+    """
+
+    trailer_text = """
+
+    ## Plan
+
+    #{plan}
+
+    Begin executing the plan. Start with the first unchecked step.
+    """
+
+    [%{type: "text", text: lead_text}] ++
+      image_attachments ++
+      [%{type: "text", text: trailer_text}]
   end
 
   @doc """

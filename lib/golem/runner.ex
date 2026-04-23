@@ -234,8 +234,9 @@ defmodule Golem.Runner do
         }
 
         system = Golem.Prompt.executor_system([])
-        initial = Golem.Prompt.initial_message(goal, plan)
-        state = %{state | messages: [%{role: "user", content: initial}]}
+        image_attachments = opts[:image_attachments] || []
+        initial_content = Golem.Prompt.initial_message(goal, plan, image_attachments)
+        state = %{state | messages: [%{role: "user", content: initial_content}]}
 
         loop(state, system)
 

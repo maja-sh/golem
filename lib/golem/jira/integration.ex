@@ -57,6 +57,7 @@ defmodule Golem.Jira.Integration do
 
         # Use task_config which has worktree paths instead of main clone paths
         visual_verify = Keyword.get(opts, :visual_verify, false)
+        image_blocks = download_image_attachments(ticket)
         goal = build_goal(ticket, task_config)
         agents_md = build_agents_md(task_config, branch, ticket, visual_verify)
 
@@ -65,6 +66,7 @@ defmodule Golem.Jira.Integration do
           |> Keyword.put(:agents_md, agents_md)
           |> Keyword.put(:run_id, run_id)
           |> Keyword.put(:initial_cost, eval_cost)
+          |> Keyword.put(:image_attachments, image_blocks)
 
         Logger.info("Running agent for #{ticket_key}: #{ticket.summary}")
         output().planning("Starting agent...")
@@ -304,6 +306,8 @@ defmodule Golem.Jira.Integration do
     discord_available? = System.get_env("DISCORD_TOKEN") not in [nil, ""]
     operator_name = operator_display_name()
 
+    attachments_section = build_attachments_section(ticket)
+
     ask_user_section =
       cond do
         not discord_available? ->
@@ -373,6 +377,7 @@ defmodule Golem.Jira.Integration do
       labels_section,
       if(ticket.description && ticket.description != "", do: "## Description\n\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "## Acceptance Criteria\n\n#{ticket.acceptance_criteria}"),
+      attachments_section,
       comments_section,
       """
       ## Projects
@@ -390,6 +395,83 @@ defmodule Golem.Jira.Integration do
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end
+
+  # --- Attachments ---
+
+  # Max image attachments to embed in the initial message. Each one
+  # costs ~1500 tokens to the model, so a sensible cap keeps the
+  # first turn from ballooning on tickets that have screenshots of
+  # every browser tab.
+  @max_image_attachments 5
+
+  # Human-readable bytes: "18 KB", "2.3 MB"
+  defp fmt_size(bytes) when is_integer(bytes) and bytes >= 1_048_576,
+    do: "#{Float.round(bytes / 1_048_576, 1)} MB"
+
+  defp fmt_size(bytes) when is_integer(bytes) and bytes >= 1024,
+    do: "#{div(bytes, 1024)} KB"
+
+  defp fmt_size(bytes) when is_integer(bytes), do: "#{bytes} B"
+  defp fmt_size(_), do: "?"
+
+  defp build_attachments_section(%{attachments: attachments}) when attachments != [] do
+    images = Golem.Jira.image_attachments(attachments) |> Enum.take(@max_image_attachments)
+    others = attachments -- images
+
+    image_lines =
+      Enum.map(images, fn a ->
+        "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — **embedded below as an image**"
+      end)
+
+    other_lines =
+      Enum.map(others, fn a ->
+        "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — not embedded; fetch via Jira API if needed"
+      end)
+
+    lines = image_lines ++ other_lines
+
+    if lines == [] do
+      nil
+    else
+      "## Attachments\n\n" <>
+        Enum.join(lines, "\n") <>
+        "\n\nImages on this ticket are embedded as content blocks in this message — read them as you would the description. Treat them as primary context; the human often screenshot a UI state or error that's hard to describe in prose."
+    end
+  end
+
+  defp build_attachments_section(_), do: nil
+
+  defp download_image_attachments(%{attachments: attachments, key: key}) do
+    images = Golem.Jira.image_attachments(attachments) |> Enum.take(@max_image_attachments)
+
+    if images == [] do
+      []
+    else
+      Logger.info("Downloading #{length(images)} image attachment(s) for #{key}")
+
+      Enum.flat_map(images, fn att ->
+        case Golem.Jira.fetch_attachment(att) do
+          {:ok, bytes} ->
+            [
+              %{
+                type: "image",
+                source: %{
+                  type: "base64",
+                  media_type: att.mime_type,
+                  data: Base.encode64(bytes)
+                }
+              }
+            ]
+
+          {:error, reason} ->
+            Logger.warning("Skipping attachment #{att.filename}: #{inspect(reason)}")
+            []
+        end
+      end)
+    end
+  end
+
+  defp download_image_attachments(_), do: []
 
   # Human-readable name for the operator who receives `ask_user`
   # prompts on Discord. Prefers an explicit `GIT_USER` env, falls back

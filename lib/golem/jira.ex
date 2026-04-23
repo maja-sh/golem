@@ -24,7 +24,8 @@ defmodule Golem.Jira do
           issue_type: get_in(fields, ["issuetype", "name"]),
           priority: get_in(fields, ["priority", "name"]),
           labels: fields["labels"] || [],
-          comments: extract_comments(fields)
+          comments: extract_comments(fields),
+          attachments: extract_attachments(fields)
         }}
 
       {:ok, %{status: 404}} ->
@@ -223,6 +224,59 @@ defmodule Golem.Jira do
       # Filter out Golem's own comments
       String.starts_with?(c.body, "Golem ")
     end)
+  end
+
+  defp extract_attachments(fields) do
+    fields
+    |> Map.get("attachment", [])
+    |> List.wrap()
+    |> Enum.map(fn a ->
+      %{
+        id: a["id"],
+        filename: a["filename"],
+        mime_type: a["mimeType"],
+        size: a["size"] || 0,
+        content_url: a["content"]
+      }
+    end)
+  end
+
+  @claude_image_types ~w(image/png image/jpeg image/gif image/webp)
+  @max_image_bytes 5 * 1024 * 1024
+
+  @doc """
+  Download an attachment's bytes from Jira (basic auth). Returns
+  `{:ok, binary}` or `{:error, reason}`. Images only — callers should
+  pre-filter by mime type.
+  """
+  def fetch_attachment(%{content_url: url, size: size} = att) do
+    cond do
+      att.mime_type not in @claude_image_types ->
+        {:error, :unsupported_mime_type}
+
+      size > @max_image_bytes ->
+        {:error, {:too_large, size}}
+
+      true ->
+        case Req.get(url, headers: auth_headers(), redirect: true) do
+          {:ok, %{status: 200, body: body}} when is_binary(body) ->
+            {:ok, body}
+
+          {:ok, %{status: status}} ->
+            {:error, {:http_status, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Returns only image attachments (by mime type), suitable for embedding
+  as base64 blocks in a Claude message.
+  """
+  def image_attachments(attachments) do
+    Enum.filter(attachments, &(&1.mime_type in @claude_image_types))
   end
 
   defp extract_acceptance_criteria(fields) do

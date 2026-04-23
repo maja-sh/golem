@@ -53,4 +53,45 @@ defmodule Golem.PromptTest do
       assert length(result) == 1
     end
   end
+
+  describe "initial_message/3" do
+    test "returns a plain string when there are no image attachments" do
+      result = Prompt.initial_message("do a thing", "- [ ] step 1", [])
+      assert is_binary(result)
+      assert result =~ "## Goal"
+      assert result =~ "do a thing"
+      assert result =~ "## Plan"
+      assert result =~ "step 1"
+    end
+
+    test "default image_attachments arg is empty" do
+      # No third arg — must still return plain string (back-compat).
+      assert is_binary(Prompt.initial_message("g", "p"))
+    end
+
+    test "returns a list of blocks with images sandwiched when attachments present" do
+      image1 = %{type: "image", source: %{type: "base64", media_type: "image/png", data: "A"}}
+      image2 = %{type: "image", source: %{type: "base64", media_type: "image/jpeg", data: "B"}}
+
+      blocks = Prompt.initial_message("do a thing", "- [ ] step 1", [image1, image2])
+
+      assert is_list(blocks)
+      assert length(blocks) == 4
+
+      [lead, img_a, img_b, trailer] = blocks
+
+      assert lead.type == "text"
+      assert lead.text =~ "## Goal"
+      assert lead.text =~ "do a thing"
+      assert lead.text =~ "2 image attachment(s)"
+
+      assert img_a == image1
+      assert img_b == image2
+
+      assert trailer.type == "text"
+      assert trailer.text =~ "## Plan"
+      assert trailer.text =~ "step 1"
+      assert trailer.text =~ "Begin executing"
+    end
+  end
 end
