@@ -131,6 +131,64 @@ defmodule Golem.ProjectSetup do
   end
 
   @doc """
+  Set up a worktree on an existing branch (the PR's source branch).
+  Used by `mix golem.iterate` — we don't create a new branch, we
+  check out the one the bot already pushed.
+
+  Reuses the same `tasks/<key>/<repo>` layout so the agent's mental
+  model stays consistent across new-ticket runs and iteration runs.
+
+  Returns `{:ok, branch, %{config | projects: [updated_project]}}`.
+  """
+  def setup_iterate_worktree(config, project, pr, ticket_key) do
+    setup_git_credentials(config.bitbucket_workspace, false)
+
+    branch = pr.source_branch
+    repo_slug = project.repo |> String.split("/") |> List.last()
+    clone_url = Golem.Bitbucket.clone_url(config.bitbucket_workspace, repo_slug)
+    repo_path = "#{@repos_dir}/#{repo_slug}"
+    worktree_path = "#{@tasks_dir}/#{ticket_key}/#{repo_slug}"
+    cuser = container_user()
+
+    with :ok <- ensure_main_clone(repo_path, clone_url, project.branch_from),
+         :ok <- ensure_branch_fetched(repo_path, branch),
+         :ok <- create_review_worktree(repo_path, worktree_path, branch),
+         :ok <- copy_cached_deps(repo_path, worktree_path, project[:cache] || []),
+         :ok <- run_cmd("chown -R #{cuser}:#{cuser} #{worktree_path}", timeout: 60_000, verbose: false),
+         :ok <- run_setup_script(project.setup, worktree_path, false) do
+      updated = %{project | path: worktree_path}
+      {:ok, branch, %{config | projects: [updated]}}
+    end
+  end
+
+  # Main clones default to a single-branch shallow fetch. To check out
+  # an existing feature branch we first need to fetch it explicitly.
+  defp ensure_branch_fetched(repo_path, branch) do
+    cmd = "cd #{repo_path} && git fetch origin #{branch}:refs/remotes/origin/#{branch} --depth 1"
+    run_cmd(cmd, timeout: 600_000, verbose: false)
+  end
+
+  defp create_review_worktree(repo_path, worktree_path, branch) do
+    # Clean any prior worktree at this path (could be a stale one from
+    # a previous run on the same ticket).
+    Golem.Sandbox.exec(
+      "cd #{repo_path} && git worktree remove --force #{worktree_path} 2>/dev/null; rm -rf #{worktree_path}",
+      timeout: 30_000
+    )
+
+    run_cmd("mkdir -p #{Path.dirname(worktree_path)}", timeout: 5_000, verbose: false)
+
+    # Track the existing remote branch — no -b, so we don't create a
+    # new local branch with the same name (which would conflict). The
+    # leading `git branch -D` clears any stale local pointer.
+    cmd =
+      "cd #{repo_path} && git branch -D #{branch} 2>/dev/null; " <>
+        "git worktree add #{worktree_path} -B #{branch} origin/#{branch}"
+
+    run_cmd(cmd, timeout: 30_000, verbose: false)
+  end
+
+  @doc """
   Clean up worktrees for a completed task.
   """
   def cleanup_worktrees(ticket_key) do

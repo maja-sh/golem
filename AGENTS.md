@@ -34,6 +34,11 @@ mix golem.run --jira SA-1111 --visual
 
 # Skip evaluation, set budget, use specific model
 mix golem.run --jira SA-1111 --force --budget 30 --model claude-opus-4-20250514
+
+# Iterate on a PR — apply reviewer feedback, push back to same branch
+mix golem.iterate SA-1111                             # by ticket key
+mix golem.iterate hrdl/api/3480                       # by ws/repo/id
+mix golem.iterate                                     # list open bot PRs
 ```
 
 ## Architecture
@@ -191,6 +196,18 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 3. **Setup** — Clones/pulls only selected repos, creates feature branch `golem/SA-1111-slug`.
 4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
 5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira, transitions the ticket to `jira.done_transition`.
+
+### Iterating on reviewer feedback
+
+After a human reviews a Golem-opened PR, drive another pass with `mix golem.iterate <ticket | pr-path | pr-url>`. Pipeline:
+
+1. **Resolve PR** — ticket key searches every configured repo for an open PR with a `golem/<KEY>-…` branch; a `ws/repo/id` triple or full URL fetches directly.
+2. **Fetch unresolved comments** — non-bot authors only, top-level threads (replies aren't actionable on their own).
+3. **Worktree** — checks out the PR's existing source branch (no new branch). Reuses the `tasks/<key>/<repo>` layout via `setup_iterate_worktree/4`.
+4. **Run** — agent works through the comments, commits each fix.
+5. **Reply** — pushes the branch back, posts `Addressed in <sha>` on each thread it touched. **Doesn't auto-resolve** — that's the reviewer's call.
+
+Bare `mix golem.iterate` lists every open bot PR with unresolved-comment counts; informative, not active.
 
 ## MCP Servers
 

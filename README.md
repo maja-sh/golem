@@ -235,6 +235,41 @@ mix golem.resume --list
 mix golem.resume <run_id>
 ```
 
+### Iterate on a PR (apply reviewer feedback)
+
+After Golem has opened a PR and a human reviewer leaves comments, drive
+another pass with `mix golem.iterate`. The agent fetches unresolved
+comments, checks out the PR's existing branch as a worktree, addresses
+the feedback, pushes back to the same branch, and replies on each
+addressed thread with the head commit SHA.
+
+```bash
+# By Jira ticket key — the most common case. Resolves to whichever
+# open PR has a `golem/<KEY>-…` source branch.
+mix golem.iterate SA-2100
+
+# By workspace/repo/PR id, when you only have the URL handy.
+mix golem.iterate hrdl/api/3480
+mix golem.iterate https://bitbucket.org/hrdl/api/pull-requests/3480
+
+# Bare invocation lists open bot PRs with unresolved-comment counts —
+# informative, not active. Use it when you don't remember which ticket
+# key you want.
+mix golem.iterate
+
+# Cost ceiling and step ceiling work the same way as `golem.run`.
+mix golem.iterate SA-2100 --budget 20
+```
+
+Threads are NOT auto-resolved — that authority stays with the human
+reviewer. Bot replies only post `Addressed in <sha>` with a one-line
+summary.
+
+The command is named `iterate` because "iterate on a PR" matches how
+engineers describe addressing review feedback. The name `review` is
+reserved for a future feature where Golem itself reviews a PR (posts
+comments, points out bugs).
+
 ### Export files from container
 
 ```bash
