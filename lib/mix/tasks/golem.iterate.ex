@@ -33,7 +33,7 @@ defmodule Mix.Tasks.Golem.Iterate do
   def run(args) do
     {opts, rest, _} =
       OptionParser.parse(args,
-        strict: [budget: :float, max_steps: :integer],
+        strict: [budget: :float, max_steps: :integer, debug: :boolean],
         aliases: [b: :budget, s: :max_steps]
       )
 
@@ -43,8 +43,56 @@ defmodule Mix.Tasks.Golem.Iterate do
 
     case rest do
       [] -> show_actionable()
-      [arg | _] -> review(arg, opts)
+      [arg | _] -> if opts[:debug], do: debug(arg), else: review(arg, opts)
     end
+  end
+
+  defp debug(arg) do
+    with parsed when not is_tuple(parsed) or elem(parsed, 0) != :error <-
+           Golem.Iterate.parse_arg(arg),
+         {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
+         {:ok, pr} <- Golem.Iterate.resolve(parsed, config),
+         {:ok, threads} <- Golem.Iterate.diagnose(pr) do
+      Mix.shell().info("\nPR: #{pr.workspace}/#{pr.repo}/#{pr.id} — #{pr.url}")
+      Mix.shell().info("Bot identity: #{System.get_env("GIT_USER") || "Golem Bot"}\n")
+      Mix.shell().info("#{length(threads)} top-level thread(s):\n")
+
+      Enum.each(threads, fn t ->
+        marker = if t.actionable, do: "✓", else: "✗"
+        loc = if t.top.path, do: " #{t.top.path}:#{t.top.line}", else: ""
+        resolved_part = if t.top.resolved, do: " [resolved]", else: ""
+
+        Mix.shell().info(
+          "#{marker} ##{t.top.id} by #{t.top.author}#{loc}#{resolved_part} — #{t.reason}"
+        )
+
+        Mix.shell().info("    top: #{preview(t.top.body)}")
+        Mix.shell().info("    descendants: #{length(t.descendants)}")
+
+        Enum.each(t.descendants, fn d ->
+          Mix.shell().info("      ##{d.id} by #{d.author} (parent ##{d.parent_id}, #{d.created})")
+          Mix.shell().info("        #{preview(d.body)}")
+        end)
+
+        if t.descendants != [] do
+          Mix.shell().info(
+            "    latest: ##{t.latest.id} by #{t.latest.author} (#{t.latest.created})"
+          )
+        end
+
+        Mix.shell().info("")
+      end)
+    else
+      {:error, reason} ->
+        Mix.shell().error("✗ #{inspect(reason)}")
+        exit({:shutdown, 1})
+    end
+  end
+
+  defp preview(body) do
+    body
+    |> String.replace("\n", " ")
+    |> String.slice(0, 120)
   end
 
   defp review(arg, opts) do
@@ -91,12 +139,16 @@ defmodule Mix.Tasks.Golem.Iterate do
             pr = entry.pr
             ticket_part = ticket_label(pr.source_branch)
             count = entry.unresolved
-            unresolved_part =
+            tasks = entry.tasks
+            base =
               cond do
-                count == 0 -> "no unresolved threads"
-                count == 1 -> "1 unresolved thread"
-                true -> "#{count} unresolved threads"
+                count == 0 -> "no unresolved items"
+                count == 1 -> "1 unresolved item"
+                true -> "#{count} unresolved items"
               end
+
+            unresolved_part =
+              if tasks > 0, do: "#{base} (#{tasks} task#{if tasks == 1, do: "", else: "s"})", else: base
 
             Mix.shell().info(
               "  #{ticket_part}  #{pr.workspace}/#{pr.repo}/#{pr.id}  · #{unresolved_part}"

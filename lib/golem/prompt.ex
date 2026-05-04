@@ -155,16 +155,31 @@ defmodule Golem.Prompt do
 
     Before moving to a new phase, run the FULL test suite and fix all failures.
 
+    ## Tests are part of the deliverable (MANDATORY)
+
+    Any new or modified behavior MUST land with a test that exercises it. This is non-negotiable:
+
+    - **New function / endpoint / job / service** → add a unit or feature test that covers the happy path and at least one failure mode.
+    - **Bug fix** → add a regression test that fails on the old code and passes on the fix. Land them in the same commit so the test proves the fix.
+    - **Behavior change** → update the existing test(s) to reflect the new behavior. If no test covered the old behavior, add one for the new behavior.
+    - **Refactor with no behavior change** → existing tests must still pass; you don't need to add new ones.
+    - **Doc / config / dependency-only change** → no tests required.
+
+    Before calling `done` with success=true, run `git diff --name-only origin/<base>..HEAD` (or equivalent) and audit it: for every source file you changed, verify a test file changed too — or that the change is a pure refactor / doc / config edit. If a source change is missing a test, add the test before finishing. PRs without tests for new behavior will be sent back as iteration work, and that's wasted budget.
+
+    Match the project's existing test layout and naming. If you can't find any tests in the project, surface this in the `done` summary so the operator knows.
+
     ## Final verification before "done"
 
     Before calling `done` with success=true, you MUST:
     1. Run the FULL test suite — ALL tests must pass
-    2. Fix any compiler warnings
-    3. Scan for unused code (unused imports, dead functions, TODO placeholders)
-    4. Run the linter if available (e.g. `cargo clippy`, `mix credo`, `eslint .`)
-    5. Fix all issues found in steps 1-4
+    2. Confirm tests exist for every behavior change (see "Tests are part of the deliverable")
+    3. Fix any compiler warnings
+    4. Scan for unused code (unused imports, dead functions, TODO placeholders)
+    5. Run the linter if available (e.g. `cargo clippy`, `mix credo`, `eslint .`)
+    6. Fix all issues found in steps 1-5
 
-    Do NOT call `done` with success=true while any test is failing or the code has obvious issues. This is mandatory.
+    Do NOT call `done` with success=true while any test is failing, behavior changes lack tests, or the code has obvious issues. This is mandatory.
 
     ## General guidelines
 
@@ -334,6 +349,7 @@ defmodule Golem.Prompt do
     - Don't over-plan phases that depend on unknown information. Plan what you know, defer what you don't.
     - Consider the container environment — it's a fresh Linux system, so dependencies need to be installed.
     - Plan sub-agent delegation explicitly. Each self-contained module (a screen, a service, a component library, a test suite) should be marked as a sub-agent task in the plan. Example: "- [ ] [sub_agent] Implement Feed screen (Feed.tsx, Post.tsx, ComposeModal.tsx)". The executor should use `sub_agent` for these, not build them inline. This keeps the main context clean and prevents fatigue on long runs.
+    - **Tests are part of the deliverable.** For every plan step that adds or modifies behavior (a function, endpoint, job, service, fix, etc.), include a paired test step — either in the same checklist item or as the next one. Example: "- [ ] Add `attachmentCanBeConverted()` check in `ExternalPdfConversion::shouldDispatch`" followed by "- [ ] Add test for `ExternalPdfConversion::shouldDispatch` covering doc/docx/non-document attachments". Pure refactors and doc/config-only edits don't need new tests.
 
     ## Verification commands
 

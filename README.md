@@ -38,8 +38,8 @@ That's it. The container and image are provisioned automatically on the first `m
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Claude API key |
 | `PERPLEXITY_API_KEY` | For web_search | Perplexity API key |
-| `DISCORD_TOKEN` | For daemon/`ask_user` | Discord bot token |
-| `DISCORD_CHANNEL_ID` | For daemon/`ask_user` | Discord channel ID |
+| `DISCORD_TOKEN` | For `ask_user` | Discord bot token |
+| `DISCORD_CHANNEL_ID` | For `ask_user` | Discord channel ID |
 | `JIRA_EMAIL` | For `--jira` | Atlassian account email |
 | `JIRA_API_TOKEN` | For `--jira` | Atlassian API token |
 | `BITBUCKET_API_TOKEN` | For `--jira` (push/PR) | Bitbucket app password |
@@ -237,11 +237,13 @@ mix golem.resume <run_id>
 
 ### Iterate on a PR (apply reviewer feedback)
 
-After Golem has opened a PR and a human reviewer leaves comments, drive
+After Golem has opened a PR and a human reviewer leaves feedback, drive
 another pass with `mix golem.iterate`. The agent fetches unresolved
-comments, checks out the PR's existing branch as a worktree, addresses
-the feedback, pushes back to the same branch, and replies on each
-addressed thread with the head commit SHA.
+comments **and** unresolved Bitbucket PR tasks, checks out the PR's
+existing branch as a worktree, addresses the feedback, pushes back to
+the same branch, and replies on each affected thread with the head
+commit SHA. Tasks are framed as binding action items; comments are
+weighted by type (suggestion / question / nit).
 
 ```bash
 # By Jira ticket key — the most common case. Resolves to whichever
@@ -252,18 +254,19 @@ mix golem.iterate SA-2100
 mix golem.iterate hrdl/api/3480
 mix golem.iterate https://bitbucket.org/hrdl/api/pull-requests/3480
 
-# Bare invocation lists open bot PRs with unresolved-comment counts —
-# informative, not active. Use it when you don't remember which ticket
-# key you want.
+# Bare invocation lists open bot PRs with unresolved-item counts
+# (comments + tasks) — informative, not active. Use it when you don't
+# remember which ticket key you want.
 mix golem.iterate
 
 # Cost ceiling and step ceiling work the same way as `golem.run`.
 mix golem.iterate SA-2100 --budget 20
 ```
 
-Threads are NOT auto-resolved — that authority stays with the human
-reviewer. Bot replies only post `Addressed in <sha>` with a one-line
-summary.
+Threads and tasks are NOT auto-resolved — that authority stays with
+the human reviewer. Bot replies only post `Addressed in <sha>` with a
+one-line summary, deduped per parent thread when a comment and a task
+share one.
 
 The command is named `iterate` because "iterate on a PR" matches how
 engineers describe addressing review feedback. The name `review` is
@@ -275,14 +278,6 @@ comments, points out bugs).
 ```bash
 mix golem.export /home/agent/project ./output/project
 ```
-
-### Daemon mode (Discord-controlled)
-
-```bash
-mix golem.daemon
-```
-
-Discord commands: `run <scenario>`, `run "custom goal"`, `fix <project>: <description>`, `resume`, `status`, `stop`, `runs`
 
 ## Scenarios
 

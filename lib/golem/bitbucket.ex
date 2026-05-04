@@ -162,6 +162,35 @@ defmodule Golem.Bitbucket do
   end
 
   @doc """
+  List tasks on a pull request. Bitbucket tasks are concrete action
+  items separate from comments — typically attached to a comment via
+  `comment.id`. Returns a normalized list:
+
+      %{
+        id:         integer(),
+        body:       String.t(),
+        state:      String.t(),       # "UNRESOLVED" | "RESOLVED"
+        creator:    String.t(),
+        comment_id: integer() | nil,  # parent comment if attached
+        created:    String.t()
+      }
+  """
+  def list_pr_tasks(workspace, repo_slug, pr_id) do
+    url = "#{@api_base}/repositories/#{workspace}/#{repo_slug}/pullrequests/#{pr_id}/tasks"
+
+    fetch_paginated(url, [{"pagelen", "50"}], 200, fn t ->
+      %{
+        id: t["id"],
+        body: get_in(t, ["content", "raw"]) || "",
+        state: t["state"] || "",
+        creator: get_in(t, ["creator", "display_name"]) || "Unknown",
+        comment_id: get_in(t, ["comment", "id"]),
+        created: t["created_on"] || ""
+      }
+    end)
+  end
+
+  @doc """
   Add a comment to a PR. When `parent_id` is given, the comment is
   posted as a reply on that thread.
   """

@@ -1,8 +1,8 @@
 defmodule Golem.Output do
   @moduledoc """
-  Behaviour for output backends. Both TUI (terminal) and Discord Reporter
-  implement this interface. The active backend is selected via
-  `Application.get_env(:golem, :output_backend, Golem.TUI)`.
+  Behaviour for output backends. The active backend is selected via
+  `Application.get_env(:golem, :output_backend, Golem.TUI)` — `Golem.TUI`
+  is the only implementation today.
   """
 
   @callback init_display(run_id :: String.t(), goal :: String.t()) :: :ok

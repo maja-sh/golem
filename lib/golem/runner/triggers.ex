@@ -22,6 +22,7 @@ defmodule Golem.Runner.Triggers do
   @file_size_warning_threshold 300
   @progress_stale_signal_threshold 8
   @progress_stale_nudge_threshold 10
+  @progress_silent_call_threshold 3
   @narrow_tools_min_history 20
   @narrow_tools_max_unique 2
   @error_rate_window 20
@@ -242,6 +243,31 @@ defmodule Golem.Runner.Triggers do
       {:nudge, gap}
     else
       :ok
+    end
+  end
+
+  @doc """
+  Returns `{:nudge, gap_in_steps}` when the agent has gone too many
+  turns without calling `update_progress` at all (regardless of whether
+  items advanced) AND we haven't already nudged for this in the last
+  threshold steps. Else `:ok`.
+
+  Distinct from `check_staleness/3`: that one fires only if no item
+  has *completed* in a long time, which is fine for big runs but
+  doesn't help when an agent silently does work without bookkeeping.
+  This trigger fires on call silence — N turns without any
+  `update_progress` call while non-completed items still exist.
+
+  Pure — caller bumps last-nudge-step after injecting.
+  """
+  def check_progress_call_silence(step, last_call_step, last_nudge_step, has_pending?) do
+    gap = step - last_call_step
+
+    cond do
+      not has_pending? -> :ok
+      gap < @progress_silent_call_threshold -> :ok
+      step - last_nudge_step < @progress_silent_call_threshold -> :ok
+      true -> {:nudge, gap}
     end
   end
 

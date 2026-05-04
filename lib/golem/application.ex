@@ -10,14 +10,20 @@ defmodule Golem.Application do
     ensure_defaults()
     setup_file_logger()
 
-    # Set console handler to info level — debug goes to file only
-    for id <- :logger.get_handler_ids(), id != :golem_file do
-      :logger.set_handler_config(id, :level, :info)
-    end
-
-    # Set output backend — daemon mode uses Discord, CLI uses TUI
     unless Application.get_env(:golem, :output_backend) do
       Application.put_env(:golem, :output_backend, Golem.TUI)
+    end
+
+    # Console handler level: silent under the TUI (the file handler still
+    # captures everything to logs/golem.log), info elsewhere. The TUI also
+    # re-asserts :none at init_display time as a belt-and-braces guard.
+    console_level =
+      if Application.get_env(:golem, :output_backend) == Golem.TUI,
+        do: :none,
+        else: :info
+
+    for id <- :logger.get_handler_ids(), id != :golem_file do
+      :logger.set_handler_config(id, :level, console_level)
     end
 
     token = System.get_env("DISCORD_TOKEN")
@@ -30,8 +36,7 @@ defmodule Golem.Application do
       Golem.Sandbox,
       Golem.FileCache,
       Golem.TUI,
-      Golem.MCP,
-      Golem.DaemonRunner
+      Golem.MCP
     ]
 
     opts = [strategy: :one_for_one, name: Golem.Supervisor]

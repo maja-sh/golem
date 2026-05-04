@@ -163,8 +163,12 @@ defmodule Golem.ProjectSetup do
 
   # Main clones default to a single-branch shallow fetch. To check out
   # an existing feature branch we first need to fetch it explicitly.
+  # The `+` prefix forces the local remote-tracking ref to whatever
+  # origin currently has — we don't keep local commits on the main
+  # clone (real work lives in worktrees), so a non-fast-forward from
+  # origin is always something we want to accept rather than block on.
   defp ensure_branch_fetched(repo_path, branch) do
-    cmd = "cd #{repo_path} && git fetch origin #{branch}:refs/remotes/origin/#{branch} --depth 1"
+    cmd = "cd #{repo_path} && git fetch origin +#{branch}:refs/remotes/origin/#{branch} --depth 1"
     run_cmd(cmd, timeout: 600_000, verbose: false)
   end
 

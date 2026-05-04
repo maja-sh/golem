@@ -644,23 +644,8 @@ defmodule Golem.Runner do
       if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
       output().run_paused(Map.get(state, :run_id, "unknown"))
       {:error, :budget_exceeded}
-    # Check for stop signal (from DaemonRunner.stop_run)
     else
-      if check_stop() do
-        Logger.info("Stop requested — saving state")
-        if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
-        {:error, :stopped}
-      else
-        do_loop(state)
-      end
-    end
-  end
-
-  defp check_stop do
-    receive do
-      :stop_requested -> true
-    after
-      0 -> false
+      do_loop(state)
     end
   end
 
@@ -804,6 +789,7 @@ defmodule Golem.Runner do
             new_errors = extract_errors(executed)
             errors = (errors ++ new_errors) |> Enum.uniq() |> Enum.take(-20)
             {phase_costs, last_completed} = track_phase_costs(executed, costs, state)
+            messages = maybe_inject_progress_silence_nudge(messages, state, step)
             state = %{state | messages: messages, step: step, costs: costs, errors: errors,
                        phase_costs: phase_costs, last_completed: last_completed,
                        history: update_history(state.history, executed)}
@@ -1807,6 +1793,16 @@ defmodule Golem.Runner do
 
     case progress_call do
       {tc, _} ->
+        # Bump the call-step counter so the silence nudge knows the
+        # agent did *something* on the checklist this turn, even if no
+        # item advanced to completed. Gated to depth 0 — sub-agent
+        # update_progress calls don't touch the parent's checklist
+        # (tool_handler.ex:386), so they shouldn't reset the parent's
+        # silence counter either.
+        if state.depth == 0 do
+          :persistent_term.put(:golem_last_progress_call_step, state.step)
+        end
+
         items = Map.get(tc.input, "items", [])
         completed = Enum.count(items, fn i ->
           Map.get(i, "status", "") in ["completed", "complete", "done"]
@@ -1967,6 +1963,46 @@ defmodule Golem.Runner do
   end
 
   defp maybe_inject_drift_warning(state), do: {state.messages, Map.get(state, :consecutive_drifts, 0)}
+
+  # Progress silence nudge — fires when the agent hasn't called
+  # `update_progress` at all in a few turns while non-completed items
+  # remain. Distinct from the staleness nudge below: that one fires on
+  # "no completed items in N steps", which only catches an agent that
+  # *finished* nothing for a long time. This one catches the more
+  # common case — an agent doing real work but skipping the bookkeeping
+  # tool turn after turn, leaving the operator's TUI checklist out of
+  # sync with reality.
+  #
+  # Gated to depth 0: sub-agents don't drive the parent's TUI checklist
+  # (tool_handler.ex:386), so silence at depth > 0 isn't a problem.
+  defp maybe_inject_progress_silence_nudge(messages, %{depth: 0}, step) do
+    progress = :persistent_term.get(:golem_progress, [])
+    has_pending? = Enum.any?(progress, &(&1.status not in [:completed, :done]))
+    last_call = :persistent_term.get(:golem_last_progress_call_step, 0)
+    last_nudge = :persistent_term.get(:golem_last_silence_nudge_step, 0)
+
+    case Golem.Runner.Triggers.check_progress_call_silence(step, last_call, last_nudge, has_pending?) do
+      {:nudge, gap} ->
+        :persistent_term.put(:golem_last_silence_nudge_step, step)
+        Logger.warning("Progress silence: no update_progress call in #{gap} turns")
+        Golem.Events.emit(:progress_silence_nudge, %{step: step, gap: gap})
+
+        msg = """
+        [System] You have not called `update_progress` in #{gap} turns. The operator's checklist still shows your status from before that work — it's wrong now.
+
+        On your NEXT turn, call `update_progress` with the FULL item list. Mark items you've finished as `completed`, the one you're currently working on as `in_progress`, the rest as `pending`. Then continue the work in the same turn or the next one — `update_progress` is silent and cheap, it won't slow you down.
+
+        The TUI checklist is a contract with the operator. Leaving it stale while you do real work makes them think you're stuck.
+        """
+
+        messages ++ [%{role: "user", content: msg}]
+
+      :ok ->
+        messages
+    end
+  end
+
+  defp maybe_inject_progress_silence_nudge(messages, _state, _step), do: messages
 
   # Progress staleness nudge — heuristic detection lives in
   # Golem.Runner.Triggers; this wrapper handles :persistent_term side

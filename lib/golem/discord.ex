@@ -108,33 +108,15 @@ defmodule Golem.Discord do
   def handle_event({:MESSAGE_CREATE, msg, _ws_state}) do
     me = Nostrum.Cache.Me.get()
 
-    # Ignore our own messages
     if me && msg.author.id == me.id do
       :noop
     else
       channel_id = channel_id!()
+
       if msg.channel_id == channel_id do
-        waiter = :persistent_term.get(@waiter_key, nil)
-
-        case Golem.Discord.Commander.parse(msg.content) do
-          # status and stop always work, even while waiting for ask_user
-          {:command, cmd, args} when cmd in [:status, :stop] ->
-            response = Golem.Discord.Commander.execute(cmd, args)
-            send_message_to(channel_id, response)
-
-          # Other commands only work when NOT waiting for a reply
-          {:command, cmd, args} when is_nil(waiter) ->
-            response = Golem.Discord.Commander.execute(cmd, args)
-            send_message_to(channel_id, response)
-
-          # Not a command, or command while waiting — treat as reply
-          _ ->
-            case waiter do
-              {pid, _run_id, ^channel_id} ->
-                send(pid, {:discord_reply, msg.content})
-              _ ->
-                :noop
-            end
+        case :persistent_term.get(@waiter_key, nil) do
+          {pid, _run_id, ^channel_id} -> send(pid, {:discord_reply, msg.content})
+          _ -> :noop
         end
       end
     end

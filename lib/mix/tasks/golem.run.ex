@@ -130,7 +130,6 @@ defmodule Mix.Tasks.Golem.Run do
   defp format_error(:planner_max_steps), do: "Planner hit max exploration steps — increase :planner_max_steps config"
   defp format_error(:ticket_rejected), do: "Ticket was rejected by evaluator"
   defp format_error(:budget_exceeded), do: "Cost budget exceeded"
-  defp format_error(:stopped), do: "Run was stopped"
   defp format_error({status, %{"error" => %{"message" => msg}}}) when is_integer(status), do: msg
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)
