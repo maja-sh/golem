@@ -22,6 +22,9 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 golem-*.tar
 
+# Built escript binary (mix escript.build).
+/golem
+
 # Screenshots captured during runs
 /screenshots/
 
