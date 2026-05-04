@@ -64,25 +64,6 @@ Non-obvious decisions:
 
 Effort: ~half a day for MVP (comment fetching + goal assembly + reply-with-sha). Another half day for polish (suggestion-block parsing, `--dry-run`, resume support, iteration cap).
 
-### Prompt / context infrastructure (from `CLAUDE_PROMPT.md` research)
-Things Claude Code does that Golem doesn't, ordered by impact. Full findings and citations in `CLAUDE_PROMPT.md` §11.4.
-
-- **Token-based compaction threshold** instead of message count. Fire when `estimated_tokens + summary_buffer > window_size` so we compact before the model drowns in context. Covers the old "planner keeps sending 20 file-reads every turn" issue.
-- **Per-tool-result cap with disk spill.** 50 KB per result, spill the rest to a file path the agent can Read on demand. Today a single large `cat` can poison context and cause loops because compaction then drops the tool result and the model re-runs the command.
-- **Audit what survives compaction.** The compacted summary must list "commands already executed" explicitly — if it doesn't, the model has no memory it already ran them, which is a major loop cause.
-- **Per-turn `<system-reminder>`** injecting current git status, last N commands (with short result hashes), remaining budget, active task. Cheap, cache-friendly, keeps the model grounded without growing history.
-- **Longer tool descriptions** carrying behavioral rules ("don't re-run the same command if its result is in context"). Rules in the tool description are enforced when the model considers that tool; rules in the system prompt get crowded out.
-- **Visible compaction boundary message** in the conversation so the model knows why it can no longer see earlier tool results.
-
-### TUI rework (from `CLAUDE_TUI.md` research)
-Claude Code's TUI tricks that would make Golem's TUI snappier and clearer. Full findings in `CLAUDE_TUI.md` §14.
-
-- **Snappiness:** single animation clock (not overlapping `:timer`s), viewport-gated ticks, per-message height cache, buffer-cap before render (10 MB `cat` should never reach the view), `Process.send_after` per-event instead of polling intervals.
-- **Clarity:** tool-specific formatters (short label + full args, never raw JSON), Unicode status glyphs for the todo list (`○` / `◐` / `●`), uniform status row format `<glyph> <verb> <subject> · <metadata>` with elapsed on in-progress items, 30 s TTL before completed tasks fade.
-- **Sub-agents:** horizontal colored pills instead of nested indentation, distinct color per concurrent sub-agent, spinner follows focus (unfocused agents blink their pill for activity).
-- **Streaming:** paint assistant text chunk-by-chunk, minimum 2 s thinking-block visibility so short thinks don't flicker, progress sub-messages indented under long-running tools.
-- **Architecture:** centralized state with selector-based subscriptions (GenServer emits `{:field_changed, name, value}`), tool registry owns rendering (`user_facing_name` + `render_args` callbacks), tools explicitly emit `:started|:progress|:completed|:failed` — the UI never infers status by diffing prior state.
-
 ## Medium Priority
 
 ### Parallel task execution
