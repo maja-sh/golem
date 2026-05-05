@@ -14,7 +14,7 @@ defmodule Golem.MixProject do
   end
 
   def cli do
-    [preferred_envs: ["test.e2e": :test]]
+    [preferred_envs: ["test.e2e": :test, "escript.build": :prod]]
   end
 
   defp aliases do

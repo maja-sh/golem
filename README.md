@@ -18,47 +18,60 @@ Goal --> Opus (plan) --> Sonnet (execute in loop) --> Done
 ## Setup
 
 ```bash
-# 1. Install Elixir deps
+# 1. Build the binary (one time; needs Elixir + this repo)
 mix deps.get
-
-# 2. Build the CLI binary (escript)
 mix escript.build
-# Optional: put it on your PATH
-mv golem ~/.local/bin/
+mv golem ~/.local/bin/    # or anywhere on your PATH
 
-# 3. Copy the config template and fill in your values
+# 2. Configure project + workspace
 cp .golem/config.example.yml .golem/config.yml
+$EDITOR .golem/config.yml
 
-# 4. Fill in .env (ANTHROPIC_API_KEY minimum)
-cp .env.example .env
+# 3. Export secrets in your shell rc (~/.zshrc, ~/.bashrc) — the
+#    binary reads them from the environment, never from a file.
+export ANTHROPIC_API_KEY=sk-ant-...
+export JIRA_EMAIL=you@company.com
+export JIRA_API_TOKEN=...
+export BITBUCKET_API_TOKEN=...
 
-# 5. Verify everything is wired up correctly
+# 4. Verify
 golem doctor
 ```
 
-That's it. The container and image are provisioned automatically on the first `golem run` — no manual `podman build` or `./start.sh` step. The Dockerfile + entrypoint are embedded in the binary, so the image build works even when `./golem` is run outside the source repo.
+That's it. The container and image are provisioned automatically on the first `golem run` — no manual `podman build` step. The Dockerfile + entrypoint are embedded in the binary, so the image build works wherever `golem` runs from.
 
-> The `golem` binary still expects to find `.golem/config.yml` in the current working directory — for now, run it from your golem clone (or `cd` there first). XDG-style config search (`~/.config/golem/`) is on the roadmap.
+> The `golem` binary still expects to find `.golem/config.yml` in the current working directory. For now, run it from a directory that has one (typically your golem clone). XDG-style config search (`~/.config/golem/`) is on the roadmap.
 
 ### Onboarding checklist
 
-To get a coworker from zero to `golem run --jira SA-1111`, they need:
+To get a coworker from zero to `golem run --jira SA-1111`:
 
 - [ ] `podman` (or `docker`) installed and runnable
 - [ ] `erl` on their PATH (Erlang/OTP 27+)
-- [ ] A clone of this repo (for `.golem/config.example.yml` and the `golem` binary)
-- [ ] `ANTHROPIC_API_KEY` in `.env`
-- [ ] `JIRA_EMAIL` + `JIRA_API_TOKEN` in `.env` (Atlassian API token, scopes: `read:jira-work`, `write:jira-work`)
-- [ ] `BITBUCKET_API_TOKEN` in `.env` (Bitbucket app password, scopes: Repositories Read+Write, Pull requests Write)
-- [ ] An SSH key in `ssh/id_ed25519` with the public key registered on Bitbucket (see *Git access* below)
+- [ ] The `golem` binary on PATH (built once via `mix escript.build`, then shared)
+- [ ] `ANTHROPIC_API_KEY` exported in their shell
+- [ ] `JIRA_EMAIL` + `JIRA_API_TOKEN` exported (Atlassian API token, scopes: `read:jira-work`, `write:jira-work`)
+- [ ] `BITBUCKET_API_TOKEN` exported (Bitbucket app password, scopes: Repositories Read+Write, Pull requests Write)
+- [ ] An SSH key in `ssh/id_ed25519` (next to their `config.yml`) with the public key registered on Bitbucket — see *Git access* below
 - [ ] A filled-in `.golem/config.yml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
 - [ ] `golem doctor` returns all green
 
 Then `golem run --jira SA-1111` works end-to-end on the first invocation (slow first run — the container image builds once, ~5–10 min).
 
-### Mix-task fallback
+### Developing on golem itself
 
-Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, thin shim). Use whichever you prefer — the binary is more ergonomic outside the dev loop, mix tasks are convenient when you're already iterating in the source repo.
+If you're hacking on golem (not just using it), clone the repo and use `mix` directly. In that mode, `.env` is auto-loaded by `dotenv` (a dev/test-only dependency that's not bundled into the production binary), so you can keep secrets in a file rather than your shell rc:
+
+```bash
+git clone <this repo>
+cd penbot
+mix deps.get
+cp .env.example .env && $EDITOR .env
+cp .golem/config.example.yml .golem/config.yml
+mix golem.doctor
+```
+
+Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, thin shim) — use whichever you prefer. The binary is the right answer for everyday use; mix tasks are convenient when iterating on golem itself.
 
 ### Environment variables (`.env`)
 
