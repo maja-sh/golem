@@ -31,8 +31,7 @@ RUN useradd -m -s /bin/bash agent && \
 RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/registries.conf
 
 COPY entrypoint.sh /entrypoint.sh
-COPY scaffold-tauri2.sh /usr/local/bin/scaffold-tauri2
-RUN chmod +x /entrypoint.sh /usr/local/bin/scaffold-tauri2
+RUN chmod +x /entrypoint.sh
 
 USER agent
 WORKDIR /home/agent

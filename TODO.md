@@ -47,6 +47,18 @@ Work switched from Slack to Zoom Chat, so the operator-reachable channel is Zoom
 ### Auto-commit safety net
 Auto-commit every N steps so work is never lost when the agent gets stuck in loops or hits budget limits.
 
+### Interactive setup wizard (`golem init`)
+A guided onboarding command that prompts for each piece of config a teammate needs and writes `.env` + `.golem/config.yml` for them. Today the onboarding checklist in the README is hand-followed and easy to mis-step (wrong scopes on the Atlassian token, missing SSH key, forgotten Bitbucket workspace). Steps:
+
+1. Detect podman/docker, prompt to install if missing.
+2. Prompt for ANTHROPIC_API_KEY, ping the API to validate.
+3. Prompt for Bitbucket workspace + ask if the user wants Jira integration; if yes, prompt for `JIRA_EMAIL`, `JIRA_API_TOKEN`, `BITBUCKET_API_TOKEN`, `jira.base_url`. Validate by hitting `/myself` on each API.
+4. Generate `ssh/id_ed25519` if absent, print the public key + Bitbucket account-settings URL, wait for the user to confirm they've added it.
+5. Walk through `projects:` interactively — paste a repo path (e.g. `hrdl/api`), prompt for container path + branch + setup commands.
+6. Write `.env` (mode 0600) and `.golem/config.yml`. Run `golem doctor` at the end.
+
+Effort: ~half a day for a serviceable version. Owl/IO.gets-based prompting is fine for v1.
+
 ### PR review loop — apply reviewer suggestions to an open PR
 New CLI: `mix golem.run --pr hrdl/api/3480`. Most plumbing already exists (Bitbucket client, worktrees, commit + push flow); the missing piece is turning reviewer feedback into a goal and pushing back to the same branch.
 

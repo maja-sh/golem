@@ -199,37 +199,36 @@ defmodule Golem.Sandbox do
   end
 
   # Ensure the container image exists locally. If missing, build it
-  # from containers/Dockerfile. First-run build is slow (~5-10 min
-  # depending on base layers); subsequent calls are instant.
+  # from the Dockerfile + entrypoint embedded at compile time via
+  # Golem.Container.Assets, so the escript binary is self-contained.
+  # First-run build is slow (~5-10 min); subsequent calls are instant.
   defp ensure_image(exe, image) do
     case System.cmd(exe, ["image", "exists", image], stderr_to_stdout: true) do
       {_, 0} ->
         :ok
 
       {_, _} ->
-        dockerfile = Path.join("containers", "Dockerfile")
-        context = "containers"
+        build_dir = Path.join(System.tmp_dir!(), "golem-build-#{:rand.uniform(99_999_999)}")
 
-        cond do
-          not File.exists?(dockerfile) ->
-            {:error,
-             "image #{image} not found and #{dockerfile} is missing. " <>
-               "Build it manually: #{exe} build -t #{image} -f <dockerfile> <context>"}
+        try do
+          Golem.Container.Assets.write_to(build_dir)
+          dockerfile = Path.join(build_dir, "Dockerfile")
 
-          true ->
-            Logger.info("Image #{image} not found — building from #{dockerfile} (this may take several minutes)")
+          Logger.info("Image #{image} not found — building (this may take several minutes)")
 
-            case System.cmd(exe, ["build", "-t", image, "-f", dockerfile, context],
-                   stderr_to_stdout: true,
-                   into: IO.stream(:stdio, :line)
-                 ) do
-              {_, 0} ->
-                Logger.info("Image #{image} built successfully")
-                :ok
+          case System.cmd(exe, ["build", "-t", image, "-f", dockerfile, build_dir],
+                 stderr_to_stdout: true,
+                 into: IO.stream(:stdio, :line)
+               ) do
+            {_, 0} ->
+              Logger.info("Image #{image} built successfully")
+              :ok
 
-              {_, _} ->
-                {:error, "failed to build image #{image}. Check output above."}
-            end
+            {_, _} ->
+              {:error, "failed to build image #{image}. Check output above."}
+          end
+        after
+          File.rm_rf!(build_dir)
         end
     end
   end

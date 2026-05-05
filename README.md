@@ -10,27 +10,55 @@ Goal --> Opus (plan) --> Sonnet (execute in loop) --> Done
 
 ## Requirements
 
-- Elixir 1.19+ / OTP 27+
 - Podman (or Docker)
+- Erlang/OTP 27+ — to run the `golem` binary
+- Elixir 1.19+ — only needed to build from source
 - `bat` (optional, for syntax-highlighted diffs): `brew install bat`
 
 ## Setup
 
 ```bash
-# 1. Install dependencies
+# 1. Install Elixir deps
 mix deps.get
 
-# 2. Copy the config template and fill in your values
+# 2. Build the CLI binary (escript)
+mix escript.build
+# Optional: put it on your PATH
+mv golem ~/.local/bin/
+
+# 3. Copy the config template and fill in your values
 cp .golem/config.example.yml .golem/config.yml
 
-# 3. Fill in .env (ANTHROPIC_API_KEY minimum)
+# 4. Fill in .env (ANTHROPIC_API_KEY minimum)
 cp .env.example .env
 
-# 4. Verify everything is wired up correctly
-mix golem.doctor
+# 5. Verify everything is wired up correctly
+golem doctor
 ```
 
-That's it. The container and image are provisioned automatically on the first `mix golem.run` — no manual `podman build` or `./start.sh` step.
+That's it. The container and image are provisioned automatically on the first `golem run` — no manual `podman build` or `./start.sh` step. The Dockerfile + entrypoint are embedded in the binary, so the image build works even when `./golem` is run outside the source repo.
+
+> The `golem` binary still expects to find `.golem/config.yml` in the current working directory — for now, run it from your golem clone (or `cd` there first). XDG-style config search (`~/.config/golem/`) is on the roadmap.
+
+### Onboarding checklist
+
+To get a coworker from zero to `golem run --jira SA-1111`, they need:
+
+- [ ] `podman` (or `docker`) installed and runnable
+- [ ] `erl` on their PATH (Erlang/OTP 27+)
+- [ ] A clone of this repo (for `.golem/config.example.yml` and the `golem` binary)
+- [ ] `ANTHROPIC_API_KEY` in `.env`
+- [ ] `JIRA_EMAIL` + `JIRA_API_TOKEN` in `.env` (Atlassian API token, scopes: `read:jira-work`, `write:jira-work`)
+- [ ] `BITBUCKET_API_TOKEN` in `.env` (Bitbucket app password, scopes: Repositories Read+Write, Pull requests Write)
+- [ ] An SSH key in `ssh/id_ed25519` with the public key registered on Bitbucket (see *Git access* below)
+- [ ] A filled-in `.golem/config.yml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
+- [ ] `golem doctor` returns all green
+
+Then `golem run --jira SA-1111` works end-to-end on the first invocation (slow first run — the container image builds once, ~5–10 min).
+
+### Mix-task fallback
+
+Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, thin shim). Use whichever you prefer — the binary is more ergonomic outside the dev loop, mix tasks are convenient when you're already iterating in the source repo.
 
 ### Environment variables (`.env`)
 
@@ -71,7 +99,7 @@ mcp:         # external tool servers
 2. `.golem/config.yml` — your config
 3. Built-in default in `lib/golem/application.ex`
 
-Run `mix golem.config` to see the resolved scalar values + where each came from. Run `mix golem.doctor` for a full health check (YAML parse, mount paths exist, container reachable, tokens set, MCP servers responsive, etc.).
+Run `golem config` to see the resolved scalar values + where each came from. Run `golem doctor` for a full health check (YAML parse, mount paths exist, container reachable, tokens set, MCP servers responsive, etc.).
 
 #### `models` / `limits` / `container.*` scalars
 
@@ -189,12 +217,12 @@ mcp:
         Authorization: "Bearer ${MY_TOKEN}"
 ```
 
-Check connectivity: `mix golem.mcp` or `mix golem.doctor`.
+Check connectivity: `golem mcp` or `golem doctor`.
 
 ### Health check
 
 ```bash
-mix golem.doctor
+golem doctor
 ```
 
 Validates the full setup in one command — YAML parses, mounts resolve, container is reachable, env vars set, MCP servers responsive, Jira/Bitbucket creds present. Exits non-zero on any failure (CI-friendly).
@@ -211,7 +239,7 @@ ssh-keygen -t ed25519 -f ssh/id_ed25519 -N "" -C "golem-bot"
 Add the public key (`ssh/id_ed25519.pub`) to your GitHub/Bitbucket account. The `ssh/` directory is gitignored — keys stay local. The default `container.mounts` block in `config.example.yml` already mounts `ssh/` read-only into `/home/agent/.ssh`, so no container rebuild needed — just recreate:
 
 ```bash
-podman rm -f golem-vm   # next mix golem.run will recreate with the new mount
+podman rm -f golem-vm   # next `golem run` will recreate with the new mount
 ```
 
 ## Usage
@@ -219,26 +247,26 @@ podman rm -f golem-vm   # next mix golem.run will recreate with the new mount
 ### Run a scenario
 
 ```bash
-mix golem.run --scenario smoke_maze
+golem run --scenario smoke_maze
 ```
 
 ### Run with a custom goal
 
 ```bash
-mix golem.run "Build a REST API in Python"
+golem run "Build a REST API in Python"
 ```
 
 ### Resume a paused run
 
 ```bash
-mix golem.resume --list
-mix golem.resume <run_id>
+golem resume --list
+golem resume <run_id>
 ```
 
 ### Iterate on a PR (apply reviewer feedback)
 
 After Golem has opened a PR and a human reviewer leaves feedback, drive
-another pass with `mix golem.iterate`. The agent fetches unresolved
+another pass with `golem iterate`. The agent fetches unresolved
 comments **and** unresolved Bitbucket PR tasks, checks out the PR's
 existing branch as a worktree, addresses the feedback, pushes back to
 the same branch, and replies on each affected thread with the head
@@ -248,19 +276,19 @@ weighted by type (suggestion / question / nit).
 ```bash
 # By Jira ticket key — the most common case. Resolves to whichever
 # open PR has a `golem/<KEY>-…` source branch.
-mix golem.iterate SA-2100
+golem iterate SA-2100
 
 # By workspace/repo/PR id, when you only have the URL handy.
-mix golem.iterate hrdl/api/3480
-mix golem.iterate https://bitbucket.org/hrdl/api/pull-requests/3480
+golem iterate hrdl/api/3480
+golem iterate https://bitbucket.org/hrdl/api/pull-requests/3480
 
 # Bare invocation lists open bot PRs with unresolved-item counts
 # (comments + tasks) — informative, not active. Use it when you don't
 # remember which ticket key you want.
-mix golem.iterate
+golem iterate
 
-# Cost ceiling and step ceiling work the same way as `golem.run`.
-mix golem.iterate SA-2100 --budget 20
+# Cost ceiling and step ceiling work the same way as `golem run`.
+golem iterate SA-2100 --budget 20
 ```
 
 Threads and tasks are NOT auto-resolved — that authority stays with
@@ -276,7 +304,7 @@ comments, points out bugs).
 ### Export files from container
 
 ```bash
-mix golem.export /home/agent/project ./output/project
+golem export /home/agent/project ./output/project
 ```
 
 ## Scenarios
