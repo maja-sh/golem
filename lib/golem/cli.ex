@@ -24,6 +24,11 @@ defmodule Golem.CLI do
   }
 
   def main(argv) do
+    # Escripts default `:ansi_enabled` to false, which strips the
+    # color codes and `\r\e[2K` line clears we use for the doctor
+    # output and the image-build spinner. The TUI assumes ANSI works
+    # too. Flip it on before booting the app.
+    Application.put_env(:elixir, :ansi_enabled, true)
     Application.ensure_all_started(:golem)
     dispatch(argv)
   end

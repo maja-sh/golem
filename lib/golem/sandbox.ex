@@ -202,6 +202,8 @@ defmodule Golem.Sandbox do
   # from the Dockerfile + entrypoint embedded at compile time via
   # Golem.Container.Assets, so the escript binary is self-contained.
   # First-run build is slow (~5-10 min); subsequent calls are instant.
+  # User sees a header + spinner + elapsed timer; raw podman output is
+  # captured silently and only dumped on failure.
   defp ensure_image(exe, image) do
     case System.cmd(exe, ["image", "exists", image], stderr_to_stdout: true) do
       {_, 0} ->
@@ -213,24 +215,107 @@ defmodule Golem.Sandbox do
         try do
           Golem.Container.Assets.write_to(build_dir)
           dockerfile = Path.join(build_dir, "Dockerfile")
-
-          Logger.info("Image #{image} not found — building (this may take several minutes)")
-
-          case System.cmd(exe, ["build", "-t", image, "-f", dockerfile, build_dir],
-                 stderr_to_stdout: true,
-                 into: IO.stream(:stdio, :line)
-               ) do
-            {_, 0} ->
-              Logger.info("Image #{image} built successfully")
-              :ok
-
-            {_, _} ->
-              {:error, "failed to build image #{image}. Check output above."}
-          end
+          run_image_build(exe, image, dockerfile, build_dir)
         after
           File.rm_rf!(build_dir)
         end
     end
+  end
+
+  defp run_image_build(exe, image, dockerfile, build_dir) do
+    IO.puts(
+      IO.ANSI.format([
+        "  ",
+        :bright,
+        "Building #{image}",
+        :reset,
+        :faint,
+        " (first run — ~5-10 minutes)",
+        :reset
+      ])
+    )
+
+    start = System.monotonic_time(:millisecond)
+    spinner = Task.async(fn -> spinner_loop(start, 0) end)
+
+    {output, exit_code} =
+      System.cmd(exe, ["build", "-t", image, "-f", dockerfile, build_dir],
+        stderr_to_stdout: true
+      )
+
+    send(spinner.pid, :stop)
+    Task.await(spinner, 2_000)
+    IO.write("\r\e[2K")
+
+    elapsed = System.monotonic_time(:millisecond) - start
+
+    case exit_code do
+      0 ->
+        IO.puts(
+          IO.ANSI.format([
+            "  ",
+            :green,
+            "✓ ",
+            :reset,
+            "image built in ",
+            :bright,
+            format_elapsed(elapsed),
+            :reset
+          ])
+        )
+
+        Logger.info("Image #{image} built successfully in #{format_elapsed(elapsed)}")
+        :ok
+
+      code ->
+        IO.puts(
+          IO.ANSI.format([
+            "  ",
+            :red,
+            "✗ ",
+            :reset,
+            "build failed (exit #{code})"
+          ])
+        )
+
+        IO.puts(IO.ANSI.format([:faint, output, :reset]))
+        Logger.error("Image #{image} build failed: exit #{code}")
+        {:error, "failed to build image #{image}. See output above."}
+    end
+  end
+
+  @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+
+  defp spinner_loop(start, idx) do
+    receive do
+      :stop -> :ok
+    after
+      120 ->
+        frame = Enum.at(@spinner_frames, rem(idx, length(@spinner_frames)))
+        elapsed = System.monotonic_time(:millisecond) - start
+
+        IO.write(
+          IO.ANSI.format([
+            "\r\e[2K  ",
+            :cyan,
+            frame,
+            :reset,
+            " building ",
+            :faint,
+            format_elapsed(elapsed),
+            :reset
+          ])
+        )
+
+        spinner_loop(start, idx + 1)
+    end
+  end
+
+  defp format_elapsed(ms) do
+    total = div(ms, 1000)
+    minutes = div(total, 60)
+    seconds = rem(total, 60)
+    "#{minutes}:#{String.pad_leading(to_string(seconds), 2, "0")}"
   end
 
   # Build `-v host:container[:ro]` args from the `container.mounts`
