@@ -90,6 +90,30 @@ Web UI showing active runs, cost, progress. Phoenix LiveView would be natural in
 ### Parallel project setup
 Run project clone/setup in parallel during `mix golem.setup`. System-level steps (apt-get) run once sequentially, then per-project steps (composer, npm) run in parallel. Needs dynamic TUI to show per-project status updating in place. dpkg lock contention is the main constraint.
 
+### Multi-provider LLM support (OpenAI, custom models)
+Today golem talks directly to the Anthropic API in `Golem.Claude`. Add a `Golem.LLM` behaviour with per-provider adapters so the executor and planner can run on OpenAI, Ollama/vLLM/LM Studio (OpenAI-compatible base_url), OpenRouter, etc. Provider chosen via config — either explicit (`provider: openai`) or inferred from model name.
+
+Two adapters covers ~95% of what users want:
+1. `Golem.LLM.Anthropic` — current Claude code, refactored.
+2. `Golem.LLM.OpenAI` — OpenAI + any OpenAI-compatible endpoint via configurable `base_url`. Bedrock/Vertex/Gemini deferred until asked for.
+
+Hard parts specific to golem:
+- **Prompt caching is Anthropic-only and load-bearing.** ~90% input-token discount on cache hits today. OpenAI has implicit caching (smaller, no `cache_control` knob). Others have nothing. Cache-breakpoint logic in `Golem.Prompt` + `Golem.Runner.Compaction` becomes a no-op for non-Anthropic; design for that.
+- **Tool-call format differs.** Anthropic's `tool_use`/`tool_result` blocks vs OpenAI's `tool_calls` + `role: "tool"`. Pick a canonical internal shape; adapters translate at the boundary so the runner never sees provider JSON.
+- **Extended thinking is Opus-only.** `thinking_budget` becomes provider-aware; adapters honor or silently drop.
+- **Tool fluency varies wildly.** Sonnet is reliable on read/edit/test loops; small open models often loop or fabricate args. Document "executor must be a tool-fluent model."
+
+Config sketch:
+```yaml
+models:
+  executor:
+    provider: openai
+    base_url: http://localhost:11434/v1    # ollama
+    name: qwen2.5-coder:32b
+```
+
+Effort: ~2 days for the behaviour, Anthropic refactor, one OpenAI-compatible adapter (including tool-block translation + per-model pricing). Ongoing tax: every Anthropic-specific feature thereafter needs a no-op fallback path.
+
 ### GitHub Support
 - GitHub API client (create PRs, post comments)
 - Alternative to Bitbucket in project config (e.g. `git_host: github`)
