@@ -21,26 +21,34 @@ Goal --> Opus (plan) --> Sonnet (execute in loop) --> Done
 # 1. Build the binary (one time; needs Elixir + this repo)
 mix deps.get
 mix escript.build
-mv golem ~/.local/bin/    # or anywhere on your PATH
 
-# 2. Configure project + workspace
-cp .golem/config.example.yml .golem/config.yml
-$EDITOR .golem/config.yml
+# 2. Put the binary on your PATH. Pick whichever your shell already
+#    has — `echo $PATH` to check. Common picks:
+mv golem /usr/local/bin/        # always on PATH, may need sudo
+# or:
+mv golem ~/bin/                  # add `export PATH="$HOME/bin:$PATH"` to your shell rc if it's not already there
 
-# 3. Export secrets in your shell rc (~/.zshrc, ~/.bashrc) — the
+# 3. Configure project + workspace. Either a project-local
+#    `./.golem/config.yml` (preferred when iterating in a clone) or
+#    `~/.golem/config.yml` (preferred for the binary, since you can
+#    `golem run` from anywhere).
+mkdir -p ~/.golem && cp .golem/config.example.yml ~/.golem/config.yml
+$EDITOR ~/.golem/config.yml
+
+# 4. Export secrets in your shell rc (~/.zshrc, ~/.bashrc) — the
 #    binary reads them from the environment, never from a file.
 export ANTHROPIC_API_KEY=sk-ant-...
 export JIRA_EMAIL=you@company.com
 export JIRA_API_TOKEN=...
 export BITBUCKET_API_TOKEN=...
 
-# 4. Verify
+# 5. Verify
 golem doctor
 ```
 
 That's it. The container and image are provisioned automatically on the first `golem run` — no manual `podman build` step. The Dockerfile + entrypoint are embedded in the binary, so the image build works wherever `golem` runs from.
 
-> The `golem` binary still expects to find `.golem/config.yml` in the current working directory. For now, run it from a directory that has one (typically your golem clone). XDG-style config search (`~/.config/golem/`) is on the roadmap.
+The config-file lookup checks `./.golem/config.yml` first, then `~/.golem/config.yml`. Drop your config in whichever fits your workflow.
 
 ### Onboarding checklist
 

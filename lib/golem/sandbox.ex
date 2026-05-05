@@ -240,7 +240,7 @@ defmodule Golem.Sandbox do
     mounts = Golem.Config.raw_yaml() |> get_in(["container", "mounts"]) || []
 
     Enum.flat_map(mounts, fn entry ->
-      src = Map.get(entry, "src") || ""
+      src = Golem.Config.expand_path(Map.get(entry, "src") || "")
       dest = Map.get(entry, "dest") || ""
       readonly = Map.get(entry, "readonly", false)
       required = Map.get(entry, "required", false)
@@ -280,8 +280,9 @@ defmodule Golem.Sandbox do
 
       %{"name" => name, "value" => value} = entry ->
         gate = Map.get(entry, "when_file")
+        gate_path = if gate, do: Golem.Config.expand_path(gate), else: nil
 
-        if gate == nil or File.exists?(gate) do
+        if gate_path == nil or File.exists?(gate_path) do
           ["-e", "#{name}=#{value}"]
         else
           []

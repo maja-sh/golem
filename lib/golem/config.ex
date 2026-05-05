@@ -14,7 +14,13 @@ defmodule Golem.Config do
 
   require Logger
 
-  @config_path ".golem/config.yml"
+  # Lookup order — the first existing file wins. Project-local beats
+  # the home-dir fallback so a developer in their golem clone sees their
+  # repo config, not a stray ~/.golem/config.yml.
+  @config_paths [
+    ".golem/config.yml",
+    "~/.golem/config.yml"
+  ]
 
   # Each entry: {yaml_path, app_env_key, type, env_var_name}
   #
@@ -79,8 +85,31 @@ defmodule Golem.Config do
   """
   def raw_yaml, do: load_yaml()
 
+  @doc """
+  Path of the config file that was (or would be) loaded — first match
+  in the lookup chain, or the project-local default if none exist.
+  Useful for error messages and debug tools.
+  """
+  def resolved_config_path do
+    Enum.find(Enum.map(@config_paths, &expand_path/1), &File.exists?/1) ||
+      expand_path(hd(@config_paths))
+  end
+
+  @doc """
+  Expand a leading `~` in `path` to the user's home directory. Other
+  paths are returned unchanged so podman, File.exists?, etc. handle
+  them as before.
+  """
+  def expand_path(nil), do: nil
+  def expand_path(""), do: ""
+  def expand_path("~"), do: System.user_home!()
+  def expand_path("~/" <> rest), do: Path.join(System.user_home!(), rest)
+  def expand_path(path), do: path
+
   defp load_yaml do
-    case YamlElixir.read_from_file(@config_path) do
+    path = resolved_config_path()
+
+    case YamlElixir.read_from_file(path) do
       {:ok, config} when is_map(config) ->
         config
 
@@ -91,11 +120,11 @@ defmodule Golem.Config do
         %{}
 
       {:error, %YamlElixir.ParsingError{} = e} ->
-        Logger.warning("Failed to parse #{@config_path}: #{Exception.message(e)} — using defaults")
+        Logger.warning("Failed to parse #{path}: #{Exception.message(e)} — using defaults")
         %{}
 
       {:error, reason} ->
-        Logger.warning("Failed to read #{@config_path}: #{inspect(reason)} — using defaults")
+        Logger.warning("Failed to read #{path}: #{inspect(reason)} — using defaults")
         %{}
     end
   end

@@ -86,16 +86,17 @@ container:
   # unless `required: true` is set.
   #
   # Fields:
-  #   src       — host path, relative to the golem repo root or absolute
+  #   src       — host path. `~/...` expands to your home dir.
+  #               Bare relative paths are resolved against your CWD.
   #   dest      — absolute path inside the container
   #   readonly  — mount :ro (default: false)
   #   required  — fail startup if src is missing (default: false)
   mounts:
-    - src: ssh
+    # SSH key for git push/pull. Pick whichever source matches your
+    # setup — a dedicated key in `<repo>/ssh/` (see the "Git access"
+    # section of README), or your normal `~/.ssh` directory.
+    - src: ~/.ssh
       dest: /home/agent/.ssh
-      readonly: true
-    - src: .golem/gcloud-sa.json
-      dest: /home/agent/.config/gcloud/application_default_credentials.json
       readonly: true
 
   # Environment variables passed into the container. Two forms:
@@ -104,14 +105,11 @@ container:
   #    and non-empty. Useful for per-user config like git identity.
   # 2. Map {name, value, when_file?}: static value. `when_file` (host
   #    path) gates the variable — only set if that file exists. Useful
-  #    for linking secrets to their mount (e.g. only point to gcloud
-  #    creds if the cred file was actually mounted).
+  #    for linking secrets to their mount (e.g. GOOGLE_APPLICATION_CREDENTIALS
+  #    only set if the gcloud SA file was actually mounted).
   env:
     - GIT_USER
     - GIT_EMAIL
-    - name: GOOGLE_APPLICATION_CREDENTIALS
-      value: /home/agent/.config/gcloud/application_default_credentials.json
-      when_file: .golem/gcloud-sa.json
 
 # --- Project setup ---
 #

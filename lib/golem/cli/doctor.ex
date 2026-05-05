@@ -44,26 +44,60 @@ defmodule Golem.CLI.Doctor do
   # --- checks ---
 
   defp check_config_file do
-    path = ".golem/config.yml"
+    path = Golem.Config.resolved_config_path()
+    label = "Config file"
 
     cond do
       not File.exists?(path) ->
-        {:warn, "Config file",
-         "#{path} not found (using defaults + legacy yml files). Copy .golem/config.example.yml to get started."}
+        {:warn, label,
+         "no config found in #{Enum.join(["./.golem/config.yml", "~/.golem/config.yml"], " or ")}. " <>
+           "Copy .golem/config.example.yml to get started."}
 
       true ->
         case YamlElixir.read_from_file(path) do
-          {:ok, _} -> {:ok, "Config file", "#{path} parses"}
-          {:error, e} -> {:error, "Config file", "#{path}: #{inspect(e)}"}
+          {:ok, _} -> {:ok, label, "#{display_path(path)} parses"}
+          {:error, e} -> {:error, label, "#{display_path(path)}: #{inspect(e)}"}
         end
     end
   end
 
+  # Render `~/...` instead of `/Users/<you>/...` when the config lives
+  # under home — keeps the doctor output portable in screenshots.
+  defp display_path(path) do
+    home = System.user_home!()
+    if String.starts_with?(path, home), do: "~" <> String.replace_prefix(path, home, ""), else: path
+  end
+
   defp check_anthropic_key do
     case System.get_env("ANTHROPIC_API_KEY") do
-      nil -> {:error, "ANTHROPIC_API_KEY", "not set — agent can't call Claude"}
-      "" -> {:error, "ANTHROPIC_API_KEY", "empty — agent can't call Claude"}
-      key -> {:ok, "ANTHROPIC_API_KEY", "set (#{mask(key)})"}
+      nil ->
+        {:error, "ANTHROPIC_API_KEY", "not set — agent can't call Claude"}
+
+      "" ->
+        {:error, "ANTHROPIC_API_KEY", "empty — agent can't call Claude"}
+
+      key ->
+        case ping_anthropic(key) do
+          :ok -> {:ok, "ANTHROPIC_API_KEY", "valid (#{mask(key)})"}
+          {:error, reason} -> {:error, "ANTHROPIC_API_KEY", "set but rejected: #{reason}"}
+        end
+    end
+  end
+
+  # Cheap auth check — `/v1/models` is a token-free GET. 401 means bad
+  # key; any other error is treated as a transient warning so a flaky
+  # network doesn't fail doctor outright.
+  defp ping_anthropic(key) do
+    headers = [
+      {"x-api-key", key},
+      {"anthropic-version", "2023-06-01"}
+    ]
+
+    case Req.get("https://api.anthropic.com/v1/models", headers: headers, receive_timeout: 5_000) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: 401}} -> {:error, "401 unauthorized (typo? expired key?)"}
+      {:ok, %{status: code}} -> {:error, "HTTP #{code}"}
+      {:error, reason} -> {:error, "network: #{inspect(reason)}"}
     end
   end
 
@@ -118,12 +152,13 @@ defmodule Golem.CLI.Doctor do
     mounts = Golem.Config.raw_yaml() |> get_in(["container", "mounts"]) || []
 
     Enum.map(mounts, fn entry ->
-      src = Map.get(entry, "src", "")
+      raw = Map.get(entry, "src", "")
+      src = Golem.Config.expand_path(raw)
       required = Map.get(entry, "required", false)
-      label = "Mount #{src}"
+      label = "Mount #{raw}"
 
       cond do
-        src == "" ->
+        raw == "" ->
           {:error, label, "missing src field in config"}
 
         File.exists?(src) or File.dir?(src) ->
@@ -194,6 +229,10 @@ defmodule Golem.CLI.Doctor do
         {:warn, "Jira", "not configured (fine unless you use --jira)"}
 
       %{"base_url" => url} when is_binary(url) and url != "" ->
+        # Presence-only check: Jira's API endpoints have been churning
+        # (deprecations, scope changes), so a "validity" ping here is
+        # more trouble than it's worth. Wrong creds surface during
+        # ticket evaluation, before any expensive runner work.
         missing =
           Enum.reject(["JIRA_EMAIL", "JIRA_API_TOKEN"], fn v ->
             val = System.get_env(v)
@@ -212,14 +251,46 @@ defmodule Golem.CLI.Doctor do
   defp check_bitbucket do
     case Golem.ProjectSetup.load_config() do
       {:ok, %{bitbucket_workspace: ws}} when is_binary(ws) and ws != "" ->
-        case System.get_env("BITBUCKET_API_TOKEN") do
-          nil -> {:error, "Bitbucket", "workspace=#{ws} but BITBUCKET_API_TOKEN not set"}
-          "" -> {:error, "Bitbucket", "workspace=#{ws} but BITBUCKET_API_TOKEN empty"}
-          _ -> {:ok, "Bitbucket", "workspace=#{ws}, token set"}
+        token = System.get_env("BITBUCKET_API_TOKEN")
+        email = System.get_env("JIRA_EMAIL")
+
+        cond do
+          token in [nil, ""] ->
+            {:error, "Bitbucket", "workspace=#{ws} but BITBUCKET_API_TOKEN not set"}
+
+          email in [nil, ""] ->
+            {:error, "Bitbucket", "workspace=#{ws} but JIRA_EMAIL not set (Bitbucket basic-auth uses it)"}
+
+          true ->
+            # Hit the workspace-scoped repos endpoint, which the
+            # documented scope (repository:read) actually allows.
+            # `/2.0/user` requires `account`, which our tokens don't have.
+            url = "https://api.bitbucket.org/2.0/repositories/#{ws}?pagelen=1"
+
+            case ping_basic_auth(url, "JIRA_EMAIL", "BITBUCKET_API_TOKEN") do
+              :ok -> {:ok, "Bitbucket", "workspace=#{ws}, creds valid"}
+              {:error, reason} -> {:error, "Bitbucket", "workspace=#{ws} creds rejected: #{reason}"}
+            end
         end
 
       _ ->
         {:warn, "Bitbucket", "no workspace configured"}
+    end
+  end
+
+  # Generic basic-auth GET ping. Used for both Jira /myself and
+  # Bitbucket /2.0/user — both return 200 on valid creds, 401 on bad.
+  defp ping_basic_auth(url, user_env, pass_env) do
+    user = System.get_env(user_env)
+    pass = System.get_env(pass_env)
+    encoded = Base.encode64("#{user}:#{pass}")
+
+    case Req.get(url, headers: [{"authorization", "Basic #{encoded}"}], receive_timeout: 5_000) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: 401}} -> {:error, "401 unauthorized"}
+      {:ok, %{status: 403}} -> {:error, "403 forbidden (token scope?)"}
+      {:ok, %{status: code}} -> {:error, "HTTP #{code}"}
+      {:error, reason} -> {:error, "network: #{inspect(reason)}"}
     end
   end
 
