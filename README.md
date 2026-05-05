@@ -64,7 +64,7 @@ To get a coworker from zero to `golem run --jira SA-1111`:
 - [ ] A filled-in `.golem/config.yml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
 - [ ] `golem doctor` returns all green
 
-Then `golem run --jira SA-1111` works end-to-end on the first invocation (slow first run — the container image builds once, ~5–10 min).
+Then `golem run --jira SA-1111` works end-to-end on the first invocation. The first run is slow because the container image builds once.
 
 ### Developing on golem itself
 

@@ -223,17 +223,7 @@ defmodule Golem.Sandbox do
   end
 
   defp run_image_build(exe, image, dockerfile, build_dir) do
-    IO.puts(
-      IO.ANSI.format([
-        "  ",
-        :bright,
-        "Building #{image}",
-        :reset,
-        :faint,
-        " (first run — ~5-10 minutes)",
-        :reset
-      ])
-    )
+    IO.puts(IO.ANSI.format(["  ", :bright, "Building #{image}", :reset]))
 
     start = System.monotonic_time(:millisecond)
     spinner = Task.async(fn -> spinner_loop(start, 0) end)
