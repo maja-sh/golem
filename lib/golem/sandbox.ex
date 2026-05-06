@@ -87,12 +87,23 @@ defmodule Golem.Sandbox do
 
     case System.cmd(runtime, ["cp", "#{container}:#{container_path}", tmp], stderr_to_stdout: true) do
       {_, 0} ->
-        content = File.read!(tmp)
-        File.rm(tmp)
-        {:ok, content}
+        result =
+          case File.read(tmp) do
+            {:ok, content} ->
+              {:ok, content}
+
+            {:error, :eisdir} ->
+              {:error, "#{container_path} is a directory; use list_directory to inspect it"}
+
+            {:error, reason} ->
+              {:error, "Failed to read #{container_path}: #{:file.format_error(reason)}"}
+          end
+
+        File.rm_rf(tmp)
+        result
 
       {err, _} ->
-        File.rm(tmp)
+        File.rm_rf(tmp)
         {:error, String.trim(err)}
     end
   end
