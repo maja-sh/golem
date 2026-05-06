@@ -420,6 +420,34 @@ defmodule Golem.Prompt do
       [%{type: "text", text: trailer_text}]
   end
 
+  @doc """
+  Build the planner's initial user message. Mirrors `initial_message/3`
+  but for the exploration phase: no plan yet, and the trailer just
+  restates the ask so the model's attention lands on planning rather
+  than the trailing attachment content.
+  """
+  def planner_initial_message(goal, attachment_blocks \\ [])
+
+  def planner_initial_message(goal, []) do
+    "Create a plan for this goal:\n\n#{goal}"
+  end
+
+  def planner_initial_message(goal, attachment_blocks) when is_list(attachment_blocks) do
+    lead_text = """
+    Create a plan for this goal:
+
+    #{goal}
+
+    The ticket includes #{describe_attachments(attachment_blocks)} below. Read them as primary context — screenshots, logs, or other files the author attached are often the clearest spec they can give.
+    """
+
+    trailer_text = "\nUse this context to plan the work. Explore the codebase as needed, then call `create_plan`."
+
+    [%{type: "text", text: lead_text}] ++
+      attachment_blocks ++
+      [%{type: "text", text: trailer_text}]
+  end
+
   defp describe_attachments(blocks) do
     images = Enum.count(blocks, &(&1[:type] == "image" or &1["type"] == "image"))
     texts = Enum.count(blocks, &(&1[:type] == "text" or &1["type"] == "text"))

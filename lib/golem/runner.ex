@@ -375,8 +375,10 @@ defmodule Golem.Runner do
     agents_md_content = read_project_agents_md(opts[:agents_md])
     system = Golem.Prompt.planner_system(:explore, agents_md_content)
 
+    attachment_blocks = opts[:attachment_blocks] || []
+
     messages = [
-      %{role: "user", content: "Create a plan for this goal:\n\n#{goal}"}
+      %{role: "user", content: Golem.Prompt.planner_initial_message(goal, attachment_blocks)}
     ]
 
     planner_ctx = %{seen_agents_md: MapSet.new(), explore_model: explore_model, plan_model: plan_model}
