@@ -1,0 +1,21 @@
+# Real secrets
+.env
+/ssh/
+/secrets/
+
+# Build artifacts and dependencies
+/_build/
+/deps/
+/cover/
+/doc/
+/golem
+*.ez
+erl_crash.dump
+
+# Large machine-generated output
+/screenshots/
+/output/
+/tmp/
+
+# Lockfiles
+mix.lock
