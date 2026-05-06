@@ -466,8 +466,15 @@ defmodule Golem.TUI do
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
     IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
     IO.write("\e[?25h")  # Restore cursor
+    # Re-enable the console handler at :warning. The TUI muted it
+    # entirely while the run was active so its scrollback would stay
+    # clean; once the run is done we want errors to surface, but
+    # routine `Logger.info` calls from post-run work (push/PR/Jira
+    # transition) shouldn't pollute the screen with the default
+    # `HH:MM:SS.mmm [info]` formatter — that's what logs/golem.log is
+    # for. File handler still captures everything.
     for id <- :logger.get_handler_ids(), id != :golem_file do
-      :logger.set_handler_config(id, :level, :debug)
+      :logger.set_handler_config(id, :level, :warning)
     end
     {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
   end
