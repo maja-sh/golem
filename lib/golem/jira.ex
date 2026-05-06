@@ -243,31 +243,33 @@ defmodule Golem.Jira do
 
   @claude_image_types ~w(image/png image/jpeg image/gif image/webp)
   @max_image_bytes 5 * 1024 * 1024
+  # Text attachments are decoded as UTF-8 and inlined verbatim — at
+  # ~4 chars/token, 1MB ≈ 250K tokens, which already brushes against
+  # most context windows. Anything bigger is "stupid large".
+  @max_text_bytes 1024 * 1024
+  @max_image_attachments 5
+  @max_text_attachments 10
+
+  @doc "Max image attachments embedded per ticket."
+  def max_image_attachments, do: @max_image_attachments
+
+  @doc "Max text attachments embedded per ticket."
+  def max_text_attachments, do: @max_text_attachments
 
   @doc """
-  Download an attachment's bytes from Jira (basic auth). Returns
-  `{:ok, binary}` or `{:error, reason}`. Images only — callers should
-  pre-filter by mime type.
+  Download an attachment's raw bytes from Jira (basic auth). The caller
+  is responsible for size/type checks.
   """
-  def fetch_attachment(%{content_url: url, size: size} = att) do
-    cond do
-      att.mime_type not in @claude_image_types ->
-        {:error, :unsupported_mime_type}
+  def fetch_attachment(%{content_url: url}) do
+    case Req.get(url, headers: auth_headers(), redirect: true) do
+      {:ok, %{status: 200, body: body}} when is_binary(body) ->
+        {:ok, body}
 
-      size > @max_image_bytes ->
-        {:error, {:too_large, size}}
+      {:ok, %{status: status}} ->
+        {:error, {:http_status, status}}
 
-      true ->
-        case Req.get(url, headers: auth_headers(), redirect: true) do
-          {:ok, %{status: 200, body: body}} when is_binary(body) ->
-            {:ok, body}
-
-          {:ok, %{status: status}} ->
-            {:error, {:http_status, status}}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -279,51 +281,143 @@ defmodule Golem.Jira do
     Enum.filter(attachments, &(&1.mime_type in @claude_image_types))
   end
 
-  # Each embedded image costs ~1500 tokens, so we cap how many we send
-  # in a single message to keep first-turn input from ballooning on
-  # tickets that screenshot every browser tab.
-  @max_image_attachments 5
-
-  @doc "Max image attachments embedded per ticket."
-  def max_image_attachments, do: @max_image_attachments
+  @doc """
+  Returns attachments likely to be readable as text (by mime type or
+  filename extension). Used for describing what will be embedded;
+  the actual UTF-8 decode happens in `attachment_blocks/1`.
+  """
+  def text_attachments(attachments) do
+    Enum.filter(attachments, &text_like?/1)
+  end
 
   @doc """
-  Download a ticket's image attachments and return them as Claude
-  base64 image content blocks, ready to splice into a `user` message.
-  Capped at #{@max_image_attachments} images per ticket. Failed
-  downloads are logged and skipped.
-  """
-  def image_blocks(%{attachments: attachments, key: key}) do
-    images = attachments |> image_attachments() |> Enum.take(@max_image_attachments)
+  Download a ticket's attachments and return them as Claude content
+  blocks, ready to splice into a `user` message. Images become base64
+  image blocks; text-like files are decoded as UTF-8 and inlined as
+  text blocks with a filename header. Binary or oversized attachments
+  are logged and skipped.
 
-    if images == [] do
+  Capped at #{@max_image_attachments} images and #{@max_text_attachments}
+  text files per ticket.
+  """
+  def attachment_blocks(%{attachments: attachments, key: key}) do
+    images =
+      attachments
+      |> image_attachments()
+      |> Enum.take(@max_image_attachments)
+
+    texts =
+      attachments
+      |> text_attachments()
+      |> Enum.take(@max_text_attachments)
+
+    selected = images ++ texts
+
+    if selected == [] do
       []
     else
-      Logger.info("Downloading #{length(images)} image attachment(s) for #{key}")
+      Logger.info(
+        "Downloading #{length(images)} image + #{length(texts)} text attachment(s) for #{key}"
+      )
 
-      Enum.flat_map(images, fn att ->
-        case fetch_attachment(att) do
-          {:ok, bytes} ->
-            [
-              %{
-                type: "image",
-                source: %{
-                  type: "base64",
-                  media_type: att.mime_type,
-                  data: Base.encode64(bytes)
-                }
-              }
-            ]
-
-          {:error, reason} ->
-            Logger.warning("Skipping attachment #{att.filename}: #{inspect(reason)}")
-            []
-        end
-      end)
+      Enum.flat_map(selected, &fetch_block/1)
     end
   end
 
-  def image_blocks(_), do: []
+  def attachment_blocks(_), do: []
+
+  defp fetch_block(att) do
+    cond do
+      att.mime_type in @claude_image_types -> fetch_image_block(att)
+      text_like?(att) -> fetch_text_block(att)
+      true -> []
+    end
+  end
+
+  defp fetch_image_block(%{size: size} = att) when size > @max_image_bytes do
+    Logger.warning("Skipping image #{att.filename}: too large (#{size} bytes)")
+    []
+  end
+
+  defp fetch_image_block(att) do
+    case fetch_attachment(att) do
+      {:ok, bytes} ->
+        [
+          %{
+            type: "image",
+            source: %{
+              type: "base64",
+              media_type: att.mime_type,
+              data: Base.encode64(bytes)
+            }
+          }
+        ]
+
+      {:error, reason} ->
+        Logger.warning("Skipping image #{att.filename}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp fetch_text_block(%{size: size} = att) when size > @max_text_bytes do
+    Logger.warning("Skipping text attachment #{att.filename}: too large (#{size} bytes)")
+    []
+  end
+
+  defp fetch_text_block(att) do
+    with {:ok, bytes} <- fetch_attachment(att),
+         true <- String.valid?(bytes) || {:error, :not_utf8} do
+      [
+        %{
+          type: "text",
+          text: """
+          Attachment: `#{att.filename}` (#{att.mime_type})
+          ```
+          #{bytes}
+          ```
+          """
+        }
+      ]
+    else
+      {:error, reason} ->
+        Logger.warning("Skipping text attachment #{att.filename}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  # Treat an attachment as text-like if its mime type starts with
+  # "text/", is in a known list of text-bearing application types, or
+  # the filename has a recognised text-file extension. Jira often hands
+  # back `application/octet-stream` for `.log` and `.txt` files, so the
+  # extension fallback matters.
+  @text_application_types ~w(
+    application/json application/xml application/yaml application/x-yaml
+    application/javascript application/typescript application/x-sh
+    application/x-shellscript application/sql
+  )
+  @text_extensions ~w(
+    .txt .log .csv .tsv .md .markdown .json .yaml .yml .xml .html .htm
+    .css .js .ts .jsx .tsx .ex .exs .heex .py .rb .go .rs .java .kt .swift
+    .c .h .cpp .hpp .cs .php .sh .bash .zsh .fish .sql .toml .ini .conf
+    .env .gitignore .dockerignore .editorconfig
+  )
+
+  defp text_like?(%{mime_type: mime, filename: filename}) do
+    cond do
+      is_binary(mime) and String.starts_with?(mime, "text/") -> true
+      mime in @text_application_types -> true
+      true -> filename_text?(filename)
+    end
+  end
+
+  defp text_like?(_), do: false
+
+  defp filename_text?(nil), do: false
+
+  defp filename_text?(filename) do
+    ext = filename |> Path.extname() |> String.downcase()
+    ext in @text_extensions
+  end
 
   defp extract_acceptance_criteria(fields) do
     # Common custom field names for acceptance criteria

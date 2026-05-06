@@ -39,8 +39,8 @@ defmodule Golem.Jira.Integration do
     with {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
          {:ok, ticket} <- Golem.Jira.fetch_ticket(ticket_key, config.jira_base_url),
          :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
-         image_blocks = Golem.Jira.image_blocks(ticket),
-         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval, image_blocks) do
+         attachment_blocks = Golem.Jira.attachment_blocks(ticket),
+         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval, attachment_blocks) do
 
       # Fold pre-flight evaluator spend into the run's initial cost so
       # the final total matches what actually hit the Anthropic bill.
@@ -66,7 +66,7 @@ defmodule Golem.Jira.Integration do
           |> Keyword.put(:agents_md, agents_md)
           |> Keyword.put(:run_id, run_id)
           |> Keyword.put(:initial_cost, eval_cost)
-          |> Keyword.put(:image_attachments, image_blocks)
+          |> Keyword.put(:attachment_blocks, attachment_blocks)
 
         Logger.info("Running agent for #{ticket_key}: #{ticket.summary}")
         output().planning("Starting agent...")
@@ -102,21 +102,21 @@ defmodule Golem.Jira.Integration do
 
   # --- Evaluation ---
 
-  defp evaluate_or_skip(_ticket, config, true, _image_blocks) do
+  defp evaluate_or_skip(_ticket, config, true, _attachment_blocks) do
     output().planning("Skipping evaluation (--force)")
     all_repos = Enum.map(config.projects, & &1.repo)
     {:ok, %{selected_projects: all_repos}}
   end
 
-  defp evaluate_or_skip(ticket, config, false, image_blocks) do
-    evaluate_and_filter(ticket, config, image_blocks)
+  defp evaluate_or_skip(ticket, config, false, attachment_blocks) do
+    evaluate_and_filter(ticket, config, attachment_blocks)
   end
 
-  defp evaluate_and_filter(ticket, config, image_blocks) do
+  defp evaluate_and_filter(ticket, config, attachment_blocks) do
     Logger.info("Evaluating ticket #{ticket.key}...")
     output().planning("Evaluating ticket...")
 
-    case Golem.Jira.Evaluator.evaluate(ticket, config, image_blocks: image_blocks) do
+    case Golem.Jira.Evaluator.evaluate(ticket, config, attachment_blocks: attachment_blocks) do
       {:ok, %{decision: "reject", reason: reason}} ->
         Logger.info("Ticket #{ticket.key} rejected: #{reason}")
         output().agent_text("Rejected: #{reason}")
@@ -409,27 +409,38 @@ defmodule Golem.Jira.Integration do
   defp fmt_size(_), do: "?"
 
   defp build_attachments_section(%{attachments: attachments}) when attachments != [] do
-    images = Golem.Jira.image_attachments(attachments) |> Enum.take(Golem.Jira.max_image_attachments())
-    others = attachments -- images
+    images =
+      Golem.Jira.image_attachments(attachments) |> Enum.take(Golem.Jira.max_image_attachments())
+
+    texts =
+      (Golem.Jira.text_attachments(attachments) -- images)
+      |> Enum.take(Golem.Jira.max_text_attachments())
+
+    others = attachments -- images -- texts
 
     image_lines =
       Enum.map(images, fn a ->
         "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — **embedded below as an image**"
       end)
 
-    other_lines =
-      Enum.map(others, fn a ->
-        "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — not embedded; fetch via Jira API if needed"
+    text_lines =
+      Enum.map(texts, fn a ->
+        "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — **embedded below as text**"
       end)
 
-    lines = image_lines ++ other_lines
+    other_lines =
+      Enum.map(others, fn a ->
+        "- `#{a.filename}` (#{a.mime_type}, #{fmt_size(a.size)}) — binary/oversized, contents unavailable"
+      end)
+
+    lines = image_lines ++ text_lines ++ other_lines
 
     if lines == [] do
       nil
     else
       "## Attachments\n\n" <>
         Enum.join(lines, "\n") <>
-        "\n\nImages on this ticket are embedded as content blocks in this message — read them as you would the description. Treat them as primary context; the human often screenshot a UI state or error that's hard to describe in prose."
+        "\n\nAttachments on this ticket are embedded as content blocks in this message — read them as you would the description. Treat them as primary context; the human often screenshots a UI state or attaches a log/CSV that's hard to summarise in prose."
     end
   end
 

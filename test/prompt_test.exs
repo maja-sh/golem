@@ -55,7 +55,7 @@ defmodule Golem.PromptTest do
   end
 
   describe "initial_message/3" do
-    test "returns a plain string when there are no image attachments" do
+    test "returns a plain string when there are no attachments" do
       result = Prompt.initial_message("do a thing", "- [ ] step 1", [])
       assert is_binary(result)
       assert result =~ "## Goal"
@@ -64,7 +64,7 @@ defmodule Golem.PromptTest do
       assert result =~ "step 1"
     end
 
-    test "default image_attachments arg is empty" do
+    test "default attachment_blocks arg is empty" do
       # No third arg — must still return plain string (back-compat).
       assert is_binary(Prompt.initial_message("g", "p"))
     end
@@ -83,7 +83,7 @@ defmodule Golem.PromptTest do
       assert lead.type == "text"
       assert lead.text =~ "## Goal"
       assert lead.text =~ "do a thing"
-      assert lead.text =~ "2 image attachment(s)"
+      assert lead.text =~ "2 images"
 
       assert img_a == image1
       assert img_b == image2

@@ -9,9 +9,10 @@ defmodule Golem.Jira.Evaluator do
   @doc """
   Evaluate a ticket for autonomous work.
 
-  Image attachments fetched by `Golem.Jira.image_blocks/1` can be passed
-  via `:image_blocks` so the evaluator can read screenshots that the
-  ticket description references (e.g. "see the attached list").
+  Attachment content blocks fetched by `Golem.Jira.attachment_blocks/1`
+  can be passed via `:attachment_blocks` so the evaluator can read
+  screenshots and text files that the ticket description references
+  (e.g. "see the attached list").
 
   Returns:
   - `{:ok, %{decision: "accept", reason: String.t(), selected_projects: [String.t()]}}`
@@ -20,9 +21,9 @@ defmodule Golem.Jira.Evaluator do
   """
   def evaluate(ticket, config, opts \\ []) do
     model = Application.get_env(:golem, :planner_model)
-    image_blocks = Keyword.get(opts, :image_blocks, [])
-    text = build_message(ticket, config.projects, image_blocks)
-    content = [%{type: "text", text: text} | image_blocks]
+    attachment_blocks = Keyword.get(opts, :attachment_blocks, [])
+    text = build_message(ticket, config.projects, attachment_blocks)
+    content = [%{type: "text", text: text} | attachment_blocks]
 
     case Golem.Claude.call(
            [%{role: "user", content: content}],
@@ -70,14 +71,16 @@ defmodule Golem.Jira.Evaluator do
     - The ticket is a meta-task (planning, discussion, decision-making) rather than implementation work
 
     ## Attachments
-    Image attachments on the ticket (screenshots of UI bugs, error logs,
-    mockups, lists of warnings) are embedded directly in the user
-    message — read them as primary context, just like the description.
-    Don't reject on the assumption that "the attached X" is unavailable
-    without first checking the embedded images. Non-image attachments
-    (PDFs, CSVs, etc.) are listed by filename but cannot be read by the
-    agent; rejecting is appropriate if the ticket genuinely depends on
-    their contents.
+    Attachments on the ticket are embedded directly in the user message:
+    images (screenshots of UI bugs, error states, mockups) appear as
+    image blocks; text-like files (logs, CSVs, JSON, plain text) are
+    inlined verbatim under an `Attachment: <filename>` header. Read
+    them as primary context, just like the description. Don't reject on
+    the assumption that "the attached X" is unavailable without first
+    checking the embedded blocks. Binary, oversized, or unsupported
+    attachments (PDFs, spreadsheets, archives) are listed by filename
+    only — rejecting is appropriate if the ticket genuinely depends on
+    one of those.
 
     ## Accept if:
     - The ticket describes a clear, scoped code change (feature, bug fix, refactor)
@@ -91,7 +94,7 @@ defmodule Golem.Jira.Evaluator do
     """
   end
 
-  defp build_message(ticket, projects, image_blocks) do
+  defp build_message(ticket, projects, attachment_blocks) do
     project_list =
       projects
       |> Enum.map(fn p ->
@@ -117,7 +120,7 @@ defmodule Golem.Jira.Evaluator do
       if(ticket.description && ticket.description != "", do: "**Description:**\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "**Acceptance Criteria:**\n#{ticket.acceptance_criteria}"),
       comments_section,
-      attachments_section(ticket, image_blocks),
+      attachments_section(ticket, attachment_blocks),
       "## Available Projects\n\n#{project_list}"
     ]
 
@@ -126,26 +129,30 @@ defmodule Golem.Jira.Evaluator do
     |> Enum.join("\n\n")
   end
 
-  defp attachments_section(ticket, image_blocks) do
+  defp attachments_section(ticket, attachment_blocks) do
     attachments = Map.get(ticket, :attachments, [])
     if attachments == [] do
       nil
     else
       images = Golem.Jira.image_attachments(attachments)
-      others = attachments -- images
-      embedded_count = length(image_blocks)
+      texts = Golem.Jira.text_attachments(attachments) -- images
+      others = attachments -- images -- texts
+      embedded_count = length(attachment_blocks)
 
       lines =
         Enum.map(images, fn a ->
           "- `#{a.filename}` (#{a.mime_type}) — image, embedded below"
         end) ++
+          Enum.map(texts, fn a ->
+            "- `#{a.filename}` (#{a.mime_type}) — text, embedded below"
+          end) ++
           Enum.map(others, fn a ->
-            "- `#{a.filename}` (#{a.mime_type}) — non-image, contents not available"
+            "- `#{a.filename}` (#{a.mime_type}) — binary/unsupported, contents not available"
           end)
 
       header =
         if embedded_count > 0,
-          do: "**Attachments** (#{embedded_count} image(s) embedded after this text):",
+          do: "**Attachments** (#{embedded_count} embedded after this text):",
           else: "**Attachments:**"
 
       "#{header}\n#{Enum.join(lines, "\n")}"

@@ -371,17 +371,17 @@ defmodule Golem.Prompt do
   @doc """
   Build the initial user message content.
 
-  When `image_attachments` is empty, returns a plain string (preserving
+  When `attachment_blocks` is empty, returns a plain string (preserving
   the old shape for callers that don't have attachments).
 
-  When images are present, returns a list of content blocks so the
-  images can ride alongside the prose in a single user message. The
-  text is split around the images: goal text up front so the model's
-  attention lands on the ask, then the image blocks (which benefit
-  from being near the instruction to read them), then plan + "begin"
-  directive.
+  When attachments are present, returns a list of content blocks so the
+  attachments (images and/or inlined text files) can ride alongside the
+  prose in a single user message. The text is split around the
+  attachments: goal text up front so the model's attention lands on the
+  ask, then the attachment blocks (which benefit from being near the
+  instruction to read them), then plan + "begin" directive.
   """
-  def initial_message(goal, plan, image_attachments \\ [])
+  def initial_message(goal, plan, attachment_blocks \\ [])
 
   def initial_message(goal, plan, []) do
     """
@@ -397,13 +397,13 @@ defmodule Golem.Prompt do
     """
   end
 
-  def initial_message(goal, plan, image_attachments) when is_list(image_attachments) do
+  def initial_message(goal, plan, attachment_blocks) when is_list(attachment_blocks) do
     lead_text = """
     ## Goal
 
     #{goal}
 
-    The ticket includes #{length(image_attachments)} image attachment(s) below. Treat them as primary context — screenshots of the UI, errors, or expected output are often the clearest spec the ticket author can give.
+    The ticket includes #{describe_attachments(attachment_blocks)} below. Treat them as primary context — screenshots, logs, or other files the author attached are often the clearest spec they can give.
     """
 
     trailer_text = """
@@ -416,8 +416,24 @@ defmodule Golem.Prompt do
     """
 
     [%{type: "text", text: lead_text}] ++
-      image_attachments ++
+      attachment_blocks ++
       [%{type: "text", text: trailer_text}]
+  end
+
+  defp describe_attachments(blocks) do
+    images = Enum.count(blocks, &(&1[:type] == "image" or &1["type"] == "image"))
+    texts = Enum.count(blocks, &(&1[:type] == "text" or &1["type"] == "text"))
+
+    parts =
+      [{"image", images}, {"text file", texts}]
+      |> Enum.filter(fn {_, n} -> n > 0 end)
+      |> Enum.map(fn {label, n} -> "#{n} #{label}#{if n > 1, do: "s", else: ""}" end)
+
+    case parts do
+      [] -> "0 attachments"
+      [single] -> single
+      [a, b] -> "#{a} and #{b}"
+    end
   end
 
   @doc """
