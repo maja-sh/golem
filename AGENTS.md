@@ -116,6 +116,10 @@ Test scenarios in `scenarios/`. Run with `--scenario <name>`:
 - `README.md` is the human-readable reference. Keep it in sync with this file.
 - `CLAUDE.md` and `GEMINI.md` are symlinks to `AGENTS.md` — edit `AGENTS.md` only.
 
+## Commit messages
+
+Never add agent-attribution trailers to commit messages — no `Co-Authored-By: Claude`, no `Generated with Claude Code`, no equivalent line for any other agent (Gemini, Codex, etc.). Write the commit as if a human authored it.
+
 ## Conventions
 
 - Elixir 1.19, OTP 27
