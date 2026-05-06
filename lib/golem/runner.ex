@@ -1182,6 +1182,11 @@ defmodule Golem.Runner do
 
         buffer when is_list(buffer) ->
           Process.put(:golem_sub_agent_buffer, [{tool, detail, state.step} | buffer])
+          # Update the spinner's action line so the operator can see
+          # the buffered sub-agent is alive — without printing to
+          # scrollback (the full block is flushed via sub_agent_block
+          # when the agent completes).
+          output().sub_agent_heartbeat(state.goal, tool, detail)
       end
     end
   end

@@ -157,6 +157,13 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def sub_agent_heartbeat(label, tool, detail) do
+    short_label = trunc(label, 30)
+    short_tool = "#{tool_icon(tool)} #{tool_label(tool, detail) |> trunc(45)}"
+    GenServer.cast(__MODULE__, {:update, action: "↳ #{short_label}: #{short_tool}"})
+  end
+
+  @impl true
   def pr_opened(repo, url) do
     # Plain underlined cyan URL — modern terminals auto-detect it as
     # clickable. An earlier version used an OSC 8 hyperlink escape for

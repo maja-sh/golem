@@ -88,6 +88,16 @@ defmodule Golem.Output do
             ) :: :ok
 
   @doc """
+  Live heartbeat for a buffered sub-agent: update the spinner's action
+  line to show the latest tool call, but don't print to scrollback. Lets
+  the operator see that a long-running sub-agent is still alive while
+  its full output stays buffered until completion. With multiple
+  parallel sub-agents the action line just shows whichever fired most
+  recently — that's enough as an "is it alive" indicator.
+  """
+  @callback sub_agent_heartbeat(label :: String.t(), tool :: String.t(), detail :: String.t()) :: :ok
+
+  @doc """
   Returns the currently active output backend module.
   """
   def current do
