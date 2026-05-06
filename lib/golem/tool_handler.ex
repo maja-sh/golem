@@ -49,51 +49,53 @@ defmodule Golem.ToolHandler do
   end
 
   def execute(%{name: "read_file", input: %{"path" => path} = input}, _depth) do
-    offset = Map.get(input, "offset")
-    limit = Map.get(input, "limit")
+    with {:ok, offset} <- coerce_int(Map.get(input, "offset"), "offset"),
+         {:ok, limit} <- coerce_int(Map.get(input, "limit"), "limit") do
+      # Check cache first (verifies hash against container)
+      content =
+        case Golem.FileCache.get(path) do
+          nil ->
+            case Golem.Sandbox.read_file(path) do
+              {:ok, c} ->
+                Golem.FileCache.put(path, c)
+                {:ok, c, false}
+              {:error, reason} ->
+                {:error, reason}
+            end
+          c ->
+            {:ok, c, true}
+        end
 
-    # Check cache first (verifies hash against container)
-    content =
-      case Golem.FileCache.get(path) do
-        nil ->
-          case Golem.Sandbox.read_file(path) do
-            {:ok, c} ->
-              Golem.FileCache.put(path, c)
-              {:ok, c, false}
-            {:error, reason} ->
-              {:error, reason}
-          end
-        c ->
-          {:ok, c, true}
+      case content do
+        {:error, reason} ->
+          {:continue, "[error] #{inspect(reason)}"}
+
+        {:ok, full_content, cached} ->
+          lines = String.split(full_content, "\n")
+          total_lines = length(lines)
+
+          # Apply offset/limit if provided
+          {sliced, showing_range} =
+            case {offset, limit} do
+              {nil, nil} ->
+                {full_content, nil}
+
+              {off, lim} ->
+                start = max((off || 1) - 1, 0)
+                count = lim || total_lines
+                selected = lines |> Enum.drop(start) |> Enum.take(count)
+                end_line = min(start + count, total_lines)
+                {Enum.join(selected, "\n"), "lines #{start + 1}-#{end_line} of #{total_lines}"}
+            end
+
+          prefix = if cached, do: "[cached] ", else: ""
+          range_info = if showing_range, do: "[#{showing_range}]\n", else: ""
+
+          {body, trunc_notice} = read_file_truncate(sliced, total_lines, start_line_for(offset))
+          {:continue, "#{prefix}#{range_info}#{body}#{trunc_notice}"}
       end
-
-    case content do
-      {:error, reason} ->
-        {:continue, "[error] #{inspect(reason)}"}
-
-      {:ok, full_content, cached} ->
-        lines = String.split(full_content, "\n")
-        total_lines = length(lines)
-
-        # Apply offset/limit if provided
-        {sliced, showing_range} =
-          case {offset, limit} do
-            {nil, nil} ->
-              {full_content, nil}
-
-            {off, lim} ->
-              start = max((off || 1) - 1, 0)
-              count = lim || total_lines
-              selected = lines |> Enum.drop(start) |> Enum.take(count)
-              end_line = min(start + count, total_lines)
-              {Enum.join(selected, "\n"), "lines #{start + 1}-#{end_line} of #{total_lines}"}
-          end
-
-        prefix = if cached, do: "[cached] ", else: ""
-        range_info = if showing_range, do: "[#{showing_range}]\n", else: ""
-
-        {body, trunc_notice} = read_file_truncate(sliced, total_lines, start_line_for(offset))
-        {:continue, "#{prefix}#{range_info}#{body}#{trunc_notice}"}
+    else
+      {:error, msg} -> {:continue, "[error] #{msg}"}
     end
   end
 
@@ -573,6 +575,25 @@ defmodule Golem.ToolHandler do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
+
+  # The model occasionally passes integer-typed args as strings or
+  # bracket-wrapped strings (e.g. "[2900]"). Coerce gracefully and
+  # surface a useful error back to the agent instead of crashing the
+  # runner with an ArithmeticError downstream.
+  defp coerce_int(nil, _name), do: {:ok, nil}
+  defp coerce_int(n, _name) when is_integer(n), do: {:ok, n}
+
+  defp coerce_int(s, name) when is_binary(s) do
+    trimmed = s |> String.trim() |> String.trim_leading("[") |> String.trim_trailing("]")
+
+    case Integer.parse(trimmed) do
+      {n, ""} -> {:ok, n}
+      _ -> {:error, "#{name} must be an integer, got #{inspect(s)}"}
+    end
+  end
+
+  defp coerce_int(other, name),
+    do: {:error, "#{name} must be an integer, got #{inspect(other)}"}
 
   # --- Sub-Agent File Invalidation ---
 
