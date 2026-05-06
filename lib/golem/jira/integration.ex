@@ -143,7 +143,8 @@ defmodule Golem.Jira.Integration do
 
   defp handle_success(config, ticket, branch, result) do
     Logger.info("Agent succeeded for #{ticket.key}, pushing and creating PRs")
-    pr_urls = push_all(config, ticket, branch)
+    pr_body = build_pr_body(ticket, :success, result.summary)
+    pr_urls = push_all(config, ticket, branch, pr_body)
 
     comment = build_success_comment(result.summary, pr_urls)
     comment_on_ticket(config, ticket, comment)
@@ -160,7 +161,8 @@ defmodule Golem.Jira.Integration do
 
   defp handle_rejection(config, ticket, branch, result) do
     Logger.info("Agent rejected #{ticket.key}: #{result.summary}")
-    pr_urls = push_all(config, ticket, branch)
+    pr_body = build_pr_body(ticket, :rejected, result.summary)
+    pr_urls = push_all(config, ticket, branch, pr_body)
 
     pr_section = case pr_urls do
       [] -> ""
@@ -182,7 +184,8 @@ defmodule Golem.Jira.Integration do
   # so a human can review or the run can be resumed with more budget.
   defp handle_paused(config, ticket, branch, reason) do
     Logger.info("Agent paused for #{ticket.key} (#{reason}); pushing any committed work")
-    pr_urls = push_all(config, ticket, branch)
+    pr_body = build_pr_body(ticket, :paused, reason)
+    pr_urls = push_all(config, ticket, branch, pr_body)
 
     pr_section = case pr_urls do
       [] -> "\n\nNo commits were pushed — either nothing was committed yet, or the push failed (check `logs/golem.log`)."
@@ -198,11 +201,11 @@ defmodule Golem.Jira.Integration do
     comment_on_ticket(config, ticket, comment)
   end
 
-  defp push_all(config, ticket, branch) do
+  defp push_all(config, ticket, branch, pr_body) do
     output().planning("Pushing branches and creating PRs...")
 
     config.projects
-    |> Enum.map(fn project -> push_and_pr(config, project, ticket, branch) end)
+    |> Enum.map(fn project -> push_and_pr(config, project, ticket, branch, pr_body) end)
     |> Enum.filter(&match?({:ok, _}, &1))
     |> Enum.map(fn {:ok, url} -> url end)
   end
@@ -216,7 +219,7 @@ defmodule Golem.Jira.Integration do
 
   # --- Push & PR ---
 
-  defp push_and_pr(config, project, ticket, branch) do
+  defp push_and_pr(config, project, ticket, branch, pr_body) do
     path = project.path
 
     # Commit any leftover uncommitted changes as a safety net
@@ -229,7 +232,7 @@ defmodule Golem.Jira.Integration do
          ) do
       {:ok, %{exit_code: 0, output: output}} when byte_size(output) > 0 ->
         with :ok <- push_branch(path, branch),
-             {:ok, pr_url} <- create_pr(config, project, ticket, branch) do
+             {:ok, pr_url} <- create_pr(config, project, ticket, branch, pr_body) do
           output().pr_opened(project.repo, pr_url)
           Golem.Events.emit(:pr_opened, %{repo: project.repo, url: pr_url})
           {:ok, pr_url}
@@ -274,15 +277,44 @@ defmodule Golem.Jira.Integration do
     end
   end
 
-  defp create_pr(config, project, ticket, branch) do
+  defp create_pr(config, project, ticket, branch, pr_body) do
     repo_slug = project.repo |> String.split("/") |> List.last()
 
     Golem.Bitbucket.create_draft_pr(config.bitbucket_workspace, repo_slug, %{
       title: "[#{ticket.key}] #{ticket.summary}",
       source_branch: branch,
       destination_branch: project.branch_from,
-      description: "Automated by Golem for #{ticket.key}.\n\n#{ticket.description}"
+      description: pr_body
     })
+  end
+
+  # Body shown on the Bitbucket PR. Mirrors what we put on the Jira
+  # ticket (summary + caveats) so a reviewer reading the PR sees the
+  # same context the Jira watcher does — without having to click
+  # through to find it.
+  defp build_pr_body(ticket, status, summary) do
+    header =
+      case status do
+        :success -> "Golem completed this ticket."
+        :rejected -> "Golem could not complete this ticket — see Summary below."
+        :paused -> "Golem run paused — see Summary below. Work may be incomplete."
+      end
+
+    summary_section =
+      case summary do
+        s when is_binary(s) and s != "" -> "## Summary\n\n#{s}"
+        _ -> nil
+      end
+
+    description_section =
+      case ticket.description do
+        d when is_binary(d) and d != "" -> "## Original ticket\n\n#{d}"
+        _ -> nil
+      end
+
+    [header, summary_section, description_section, "_Automated by Golem for #{ticket.key}._"]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
   end
 
   # --- Goal & context construction ---
