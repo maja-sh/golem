@@ -39,7 +39,8 @@ defmodule Golem.Jira.Integration do
     with {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
          {:ok, ticket} <- Golem.Jira.fetch_ticket(ticket_key, config.jira_base_url),
          :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
-         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval) do
+         image_blocks = Golem.Jira.image_blocks(ticket),
+         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval, image_blocks) do
 
       # Fold pre-flight evaluator spend into the run's initial cost so
       # the final total matches what actually hit the Anthropic bill.
@@ -57,7 +58,6 @@ defmodule Golem.Jira.Integration do
 
         # Use task_config which has worktree paths instead of main clone paths
         visual_verify = Keyword.get(opts, :visual_verify, false)
-        image_blocks = download_image_attachments(ticket)
         goal = build_goal(ticket, task_config)
         agents_md = build_agents_md(task_config, branch, ticket, visual_verify)
 
@@ -102,21 +102,21 @@ defmodule Golem.Jira.Integration do
 
   # --- Evaluation ---
 
-  defp evaluate_or_skip(_ticket, config, true) do
+  defp evaluate_or_skip(_ticket, config, true, _image_blocks) do
     output().planning("Skipping evaluation (--force)")
     all_repos = Enum.map(config.projects, & &1.repo)
     {:ok, %{selected_projects: all_repos}}
   end
 
-  defp evaluate_or_skip(ticket, config, false) do
-    evaluate_and_filter(ticket, config)
+  defp evaluate_or_skip(ticket, config, false, image_blocks) do
+    evaluate_and_filter(ticket, config, image_blocks)
   end
 
-  defp evaluate_and_filter(ticket, config) do
+  defp evaluate_and_filter(ticket, config, image_blocks) do
     Logger.info("Evaluating ticket #{ticket.key}...")
     output().planning("Evaluating ticket...")
 
-    case Golem.Jira.Evaluator.evaluate(ticket, config) do
+    case Golem.Jira.Evaluator.evaluate(ticket, config, image_blocks: image_blocks) do
       {:ok, %{decision: "reject", reason: reason}} ->
         Logger.info("Ticket #{ticket.key} rejected: #{reason}")
         output().agent_text("Rejected: #{reason}")
@@ -398,12 +398,6 @@ defmodule Golem.Jira.Integration do
 
   # --- Attachments ---
 
-  # Max image attachments to embed in the initial message. Each one
-  # costs ~1500 tokens to the model, so a sensible cap keeps the
-  # first turn from ballooning on tickets that have screenshots of
-  # every browser tab.
-  @max_image_attachments 5
-
   # Human-readable bytes: "18 KB", "2.3 MB"
   defp fmt_size(bytes) when is_integer(bytes) and bytes >= 1_048_576,
     do: "#{Float.round(bytes / 1_048_576, 1)} MB"
@@ -415,7 +409,7 @@ defmodule Golem.Jira.Integration do
   defp fmt_size(_), do: "?"
 
   defp build_attachments_section(%{attachments: attachments}) when attachments != [] do
-    images = Golem.Jira.image_attachments(attachments) |> Enum.take(@max_image_attachments)
+    images = Golem.Jira.image_attachments(attachments) |> Enum.take(Golem.Jira.max_image_attachments())
     others = attachments -- images
 
     image_lines =
@@ -440,38 +434,6 @@ defmodule Golem.Jira.Integration do
   end
 
   defp build_attachments_section(_), do: nil
-
-  defp download_image_attachments(%{attachments: attachments, key: key}) do
-    images = Golem.Jira.image_attachments(attachments) |> Enum.take(@max_image_attachments)
-
-    if images == [] do
-      []
-    else
-      Logger.info("Downloading #{length(images)} image attachment(s) for #{key}")
-
-      Enum.flat_map(images, fn att ->
-        case Golem.Jira.fetch_attachment(att) do
-          {:ok, bytes} ->
-            [
-              %{
-                type: "image",
-                source: %{
-                  type: "base64",
-                  media_type: att.mime_type,
-                  data: Base.encode64(bytes)
-                }
-              }
-            ]
-
-          {:error, reason} ->
-            Logger.warning("Skipping attachment #{att.filename}: #{inspect(reason)}")
-            []
-        end
-      end)
-    end
-  end
-
-  defp download_image_attachments(_), do: []
 
   # Human-readable name for the operator who receives `ask_user`
   # prompts on Discord. Prefers an explicit `GIT_USER` env, falls back

@@ -279,6 +279,52 @@ defmodule Golem.Jira do
     Enum.filter(attachments, &(&1.mime_type in @claude_image_types))
   end
 
+  # Each embedded image costs ~1500 tokens, so we cap how many we send
+  # in a single message to keep first-turn input from ballooning on
+  # tickets that screenshot every browser tab.
+  @max_image_attachments 5
+
+  @doc "Max image attachments embedded per ticket."
+  def max_image_attachments, do: @max_image_attachments
+
+  @doc """
+  Download a ticket's image attachments and return them as Claude
+  base64 image content blocks, ready to splice into a `user` message.
+  Capped at #{@max_image_attachments} images per ticket. Failed
+  downloads are logged and skipped.
+  """
+  def image_blocks(%{attachments: attachments, key: key}) do
+    images = attachments |> image_attachments() |> Enum.take(@max_image_attachments)
+
+    if images == [] do
+      []
+    else
+      Logger.info("Downloading #{length(images)} image attachment(s) for #{key}")
+
+      Enum.flat_map(images, fn att ->
+        case fetch_attachment(att) do
+          {:ok, bytes} ->
+            [
+              %{
+                type: "image",
+                source: %{
+                  type: "base64",
+                  media_type: att.mime_type,
+                  data: Base.encode64(bytes)
+                }
+              }
+            ]
+
+          {:error, reason} ->
+            Logger.warning("Skipping attachment #{att.filename}: #{inspect(reason)}")
+            []
+        end
+      end)
+    end
+  end
+
+  def image_blocks(_), do: []
+
   defp extract_acceptance_criteria(fields) do
     # Common custom field names for acceptance criteria
     cond do
