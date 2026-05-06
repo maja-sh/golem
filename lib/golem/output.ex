@@ -61,6 +61,18 @@ defmodule Golem.Output do
   @callback api_retry_cleared() :: :ok
 
   @doc """
+  Synchronously prompt the operator with a yes/no question. Used at
+  step caps so a long-running run can ask whether to keep spending
+  money. Implementations should pause any spinner/status redraws while
+  reading input and block until the user replies — there's no
+  timeout, on the assumption that the operator may be AFK and a
+  default-abort would be safer than a default-continue but neither is
+  what they actually want. Anything other than `"y"` / `"yes"` returns
+  `:abort`.
+  """
+  @callback confirm_continue(question :: String.t(), opts :: keyword()) :: :continue | :abort
+
+  @doc """
   Returns the currently active output backend module.
   """
   def current do

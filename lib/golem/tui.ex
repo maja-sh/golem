@@ -147,6 +147,11 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def confirm_continue(question, opts \\ []) do
+    GenServer.call(__MODULE__, {:confirm_continue, question, opts}, :infinity)
+  end
+
+  @impl true
   def pr_opened(repo, url) do
     # Plain underlined cyan URL — modern terminals auto-detect it as
     # clickable. An earlier version used an OSC 8 hyperlink escape for
@@ -434,6 +439,43 @@ defmodule Golem.TUI do
       :logger.set_handler_config(id, :level, :debug)
     end
     {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
+  end
+
+  def handle_call({:confirm_continue, question, _opts}, _from, state) do
+    # Pause the spinner: cancel ticker, erase status block. We re-arm
+    # both after reading input so the run resumes cleanly whether the
+    # user said yes or no. No timeout — the run hangs here until the
+    # operator responds, on the assumption that they may be AFK and
+    # don't want a wrong answer billed to them.
+    if state.ticker, do: :timer.cancel(state.ticker)
+    state = erase_status(state)
+
+    IO.write("\e[?25h")  # show cursor
+    IO.puts("")
+    IO.puts(IO.ANSI.format([:yellow, "● ", :reset, :bright, question, :reset]))
+    IO.write(
+      IO.ANSI.format([:faint, "  [y]es to continue, anything else aborts: ", :reset])
+    )
+
+    answer =
+      case IO.gets("") do
+        :eof -> :eof
+        line when is_binary(line) -> line |> String.trim() |> String.downcase()
+        _ -> :error
+      end
+
+    IO.write("\e[?25l")  # hide cursor
+    {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
+    state = draw_status(%{state | ticker: ticker})
+
+    reply =
+      case answer do
+        "y" -> :continue
+        "yes" -> :continue
+        _ -> :abort
+      end
+
+    {:reply, reply, state}
   end
 
   @impl true

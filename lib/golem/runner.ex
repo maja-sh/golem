@@ -390,12 +390,42 @@ defmodule Golem.Runner do
   defp read_project_agents_md(agents_md) when is_binary(agents_md), do: agents_md
 
   defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
-    max = Application.get_env(:golem, :planner_max_steps, 75)
+    max = Map.get(ctx, :extended_max_steps) || Application.get_env(:golem, :planner_max_steps, 75)
 
     if step > max do
-      {:error, :planner_max_steps}
+      case prompt_extend(:planner, max, costs) do
+        {:continue, new_max} ->
+          ctx = Map.put(ctx, :extended_max_steps, new_max)
+          planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
+
+        :abort ->
+          {:error, :planner_max_steps}
+      end
     else
       planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
+    end
+  end
+
+  # Ask the operator whether to keep going past a step cap. Bumps the
+  # cap by 50 if they say yes; aborts (matching the existing error
+  # path) on anything else. Sub-agent caps are not routed through here
+  # — only the outer planner and executor are.
+  @step_cap_bump 50
+
+  defp prompt_extend(kind, max, costs) do
+    spent = format_cost(costs)
+    label =
+      case kind do
+        :planner -> "Planner"
+        :executor -> "Executor"
+      end
+
+    question =
+      "#{label} hit step cap (#{max}). Continue with #{@step_cap_bump} more? Spent so far: $#{spent}."
+
+    case output().confirm_continue(question, []) do
+      :continue -> {:continue, max + @step_cap_bump}
+      :abort -> :abort
     end
   end
 
@@ -630,10 +660,23 @@ defmodule Golem.Runner do
 
   # --- Main Loop ---
 
-  defp loop(%{step: step, max_steps: max, prefix: prefix} = state, _system) when step >= max do
+  defp loop(%{step: step, max_steps: max, depth: depth, prefix: prefix} = state, system) when step >= max do
     Logger.warning("#{prefix}Hit max steps (#{max}). Saving state...")
     if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
-    {:error, :max_steps_reached}
+
+    # Sub-agents have their own (shorter) cap and shouldn't bother the
+    # operator — they just fail back up to the parent.
+    if depth == 0 do
+      case prompt_extend(:executor, max, state.costs) do
+        {:continue, new_max} ->
+          loop(%{state | max_steps: new_max}, system)
+
+        :abort ->
+          {:error, :max_steps_reached}
+      end
+    else
+      {:error, :max_steps_reached}
+    end
   end
 
   defp loop(state, _system) do
