@@ -3,18 +3,22 @@ defmodule Golem.Tools do
   Tool definitions for Claude's tool use API.
   """
 
-  @max_agent_depth 3
-
   @doc """
   Returns tool definitions for the given nesting depth.
-  Sub-agent tool is excluded when at max depth.
+  Sub-agent tools are only exposed at depth 0 — nested sub-agents
+  multiply orchestration overhead without parallel speedup (the
+  container, filesystem, and API rate limit are all shared) and they
+  freeze the parent's progress checklist while the tree resolves. If
+  a sub-agent finds itself with too much work, the right answer is
+  for the parent's planner to decompose better, not for the executor
+  to fan out further.
   ask_user is only available when Discord is connected.
   """
   def for_depth(depth \\ 0) do
     base = base_tools()
 
     extras =
-      (if depth < @max_agent_depth, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []) ++
+      (if depth == 0, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []) ++
         (if discord_available?(), do: [ask_user_tool()], else: [])
 
     base ++ extras ++ mcp_tools()

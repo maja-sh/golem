@@ -8,10 +8,14 @@ defmodule Golem.ToolsTest do
       assert "sub_agent" in names
     end
 
-    test "max depth excludes sub_agent" do
-      tools = Golem.Tools.for_depth(3)
-      names = Enum.map(tools, & &1.name)
-      refute "sub_agent" in names
+    test "non-zero depth excludes sub_agent and parallel_sub_agents" do
+      for depth <- 1..3 do
+        tools = Golem.Tools.for_depth(depth)
+        names = Enum.map(tools, & &1.name)
+        refute "sub_agent" in names, "sub_agent should not be available at depth #{depth}"
+        refute "parallel_sub_agents" in names,
+               "parallel_sub_agents should not be available at depth #{depth}"
+      end
     end
 
     test "always includes core tools" do
