@@ -258,7 +258,15 @@ defmodule Golem.Runner do
     prefix = depth_prefix(depth)
     display_name = Keyword.get(opts, :display_name)
     max_steps = Keyword.get(opts, :max_steps, @sub_agent_max_steps)
-    if parent_depth == 0, do: output().sub_agent_start(goal, display_name)
+    buffered? = Keyword.get(opts, :buffered, false)
+
+    # Buffered mode: accumulate tool entries in the Task's process
+    # dict instead of streaming them through the TUI. Used by
+    # parallel_sub_agents so 5+ concurrent agents' tool calls don't
+    # interleave under whichever header was printed last.
+    if buffered?, do: Process.put(:golem_sub_agent_buffer, [])
+
+    if parent_depth == 0 and not buffered?, do: output().sub_agent_start(goal, display_name)
 
     Golem.Events.emit(:sub_agent_start, %{
       depth: depth,
@@ -319,20 +327,38 @@ defmodule Golem.Runner do
 
     result = loop(state, system)
 
-    # Report sub-agent completion to TUI
-    if parent_depth == 0 do
-      {success, steps} = case result do
-        {:ok, %{success: s}} -> {s, state.step}
-        _ -> {false, state.step}
-      end
-      output().sub_agent_result(goal, steps, success)
+    # Pull the real step count out of the summary (the loop runs a
+    # recursive immutable state, so the closure-captured `state.step`
+    # is forever 0). For non-:done exits we fall back to 0 — those
+    # paths don't surface to sub-agent UI today.
+    {success, steps} = case result do
+      {:ok, %{success: s} = summary} -> {s, Map.get(summary, :steps, 0)}
+      _ -> {false, 0}
+    end
+
+    # Report sub-agent completion to TUI. In buffered mode the entire
+    # block (header + tool lines + footer) is printed atomically here
+    # so concurrent sub-agents' output never interleaves; in streaming
+    # mode the header was printed at start and only the trailing
+    # "done" footer is emitted now.
+    cond do
+      buffered? ->
+        entries = Process.delete(:golem_sub_agent_buffer) |> List.wrap() |> Enum.reverse()
+        label = display_name || goal
+        output().sub_agent_block(label, entries, success, steps)
+
+      parent_depth == 0 ->
+        output().sub_agent_result(goal, steps, success)
+
+      true ->
+        :ok
     end
 
     Golem.Events.emit(:sub_agent_end, %{
       depth: depth,
       goal: String.slice(goal, 0, 500),
       success: match?({:ok, %{success: true}}, result),
-      steps: state.step,
+      steps: steps,
       summary: case result do
         {:ok, %{summary: s}} -> String.slice(s || "", 0, 500)
         {:error, reason} -> "error: #{inspect(reason)}"
@@ -812,7 +838,7 @@ defmodule Golem.Runner do
                 log_phase_costs(state)
                 maybe_save(state)
                 :persistent_term.put(:golem_verify_commands, %{})
-                {:ok, Map.put(summary, :costs, costs)}
+                {:ok, summary |> Map.put(:costs, costs) |> Map.put(:steps, state.step)}
 
               {:reject, state} ->
                 maybe_save(state)
@@ -1144,13 +1170,19 @@ defmodule Golem.Runner do
 
   defp emit_sub_agent_status(state, tool, detail) do
     if tool not in @sub_agent_silent_tools do
-      output().sub_agent_status(
-        state.goal,
-        tool,
-        detail,
-        state.step,
-        state.max_steps
-      )
+      case Process.get(:golem_sub_agent_buffer) do
+        nil ->
+          output().sub_agent_status(
+            state.goal,
+            tool,
+            detail,
+            state.step,
+            state.max_steps
+          )
+
+        buffer when is_list(buffer) ->
+          Process.put(:golem_sub_agent_buffer, [{tool, detail, state.step} | buffer])
+      end
     end
   end
 

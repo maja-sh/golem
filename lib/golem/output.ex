@@ -73,6 +73,21 @@ defmodule Golem.Output do
   @callback confirm_continue(question :: String.t(), opts :: keyword()) :: :continue | :abort
 
   @doc """
+  Print an entire sub-agent's activity in one synchronized block:
+  header, every buffered tool line, and a success/fail footer. Used
+  for parallel sub-agents where streaming would interleave several
+  agents' tool calls under whichever header was printed last.
+  `entries` is a list of `{tool, detail, step}` tuples in the order
+  they ran.
+  """
+  @callback sub_agent_block(
+              label :: String.t(),
+              entries :: [{tool :: String.t(), detail :: String.t(), step :: integer()}],
+              success :: boolean(),
+              steps :: integer()
+            ) :: :ok
+
+  @doc """
   Returns the currently active output backend module.
   """
   def current do

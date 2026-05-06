@@ -152,6 +152,11 @@ defmodule Golem.TUI do
   end
 
   @impl true
+  def sub_agent_block(label, entries, success, steps) do
+    GenServer.call(__MODULE__, {:sub_agent_block, label, entries, success, steps})
+  end
+
+  @impl true
   def pr_opened(repo, url) do
     # Plain underlined cyan URL — modern terminals auto-detect it as
     # clickable. An earlier version used an OSC 8 hyperlink escape for
@@ -426,6 +431,25 @@ defmodule Golem.TUI do
       action: nil
     }
     state = draw_status(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:sub_agent_block, label, entries, success, steps}, _from, state) do
+    state = erase_status(state)
+    print_line([])
+    print_line([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
+
+    Enum.each(entries, fn {tool, detail, _step} ->
+      tool_label_text = tool_label(tool, detail) |> trunc(55)
+      print_line([
+        :faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " ", tool_label_text, :reset
+      ])
+    end)
+
+    {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
+    print_line([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
+
+    state = draw_status(%{state | last_output: :sub_agent, action: nil})
     {:reply, :ok, state}
   end
 

@@ -401,8 +401,20 @@ defmodule Golem.ToolHandler do
     {:continue, "Progress updated (#{done}/#{total} completed).#{verification_warning}"}
   end
 
+  # Per-batch timeout for parallel sub-agents. With a 50-step cap and
+  # a 2-minute stall timeout per shell, a worst-case agent runs about
+  # 30 minutes; doubling that keeps a single hung agent from
+  # indefinitely blocking the parent (which used to be `:infinity`).
+  @parallel_sub_agents_timeout_ms 60 * 60 * 1000
+
   def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
     parent_state = Process.get(:golem_parent_state)
+    # The parent process owns the events.jsonl run id in its process
+    # dict. Spawned Tasks start with an empty dict, so we capture the
+    # value here and re-seed it inside each Task — otherwise sub-agent
+    # events are silently dropped (Golem.Events.emit/2 returns :ok when
+    # current_run() is nil).
+    parent_run_id = Golem.Events.current_run()
 
     # Split agents into cached hits and ones that need to run
     {cached, to_run} =
@@ -420,10 +432,37 @@ defmodule Golem.ToolHandler do
           Enum.map(to_run, fn agent ->
             goal = Map.fetch!(agent, "goal")
             context = Map.get(agent, "context", "") |> enrich_sub_agent_context(goal)
-            Task.async(fn -> Golem.Runner.run_sub_agent(goal, context, depth, parent_state) end)
+            Task.async(fn ->
+              if parent_run_id, do: Golem.Events.set_run(parent_run_id)
+
+              # Buffered output: each Task accumulates its tool calls in
+              # its own process dict, then flushes the whole block when
+              # the sub-agent completes. Streaming would interleave 5+
+              # concurrent agents' output under one header.
+              Golem.Runner.run_sub_agent(goal, context, depth, parent_state, buffered: true)
+            end)
           end)
 
-        results = Task.await_many(tasks, :infinity)
+        # Wait with a timeout. Tasks still running at the deadline are
+        # brutally killed — better to surface a hung sub-agent as an
+        # error than block the entire parent run forever.
+        results =
+          tasks
+          |> Task.yield_many(@parallel_sub_agents_timeout_ms)
+          |> Enum.map(fn {task, outcome} ->
+            case outcome do
+              {:ok, value} ->
+                value
+
+              {:exit, reason} ->
+                {:error, {:task_exit, reason}}
+
+              nil ->
+                Task.shutdown(task, :brutal_kill)
+                {:error, :timeout}
+            end
+          end)
+
         Enum.each(results, &merge_sub_agent_costs/1)
 
         # Record successful results
