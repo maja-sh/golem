@@ -25,8 +25,6 @@ defmodule Golem.Runner do
 
   Returns {:ok, summary} or {:error, reason}.
   """
-  @sub_agent_max_steps 50
-
   def run(goal, opts \\ []) do
     max_steps = opts[:max_steps] || Application.get_env(:golem, :max_steps, 200)
     depth = opts[:depth] || 0
@@ -183,7 +181,7 @@ defmodule Golem.Runner do
         nil ->
           if depth == 0, do: output().planning()
           Logger.info("#{prefix}Planning with Opus...")
-          create_plan(goal, opts)
+          Golem.Runner.Planner.create_plan(goal, opts)
 
         plan ->
           {:ok, plan, %{total_dollars: 0.0}}
@@ -254,183 +252,20 @@ defmodule Golem.Runner do
   for context awareness and prompt cache reuse.
   """
   def run_sub_agent(goal, context, parent_depth, parent_state \\ nil, opts \\ []) do
-    depth = parent_depth + 1
-    prefix = depth_prefix(depth)
-    display_name = Keyword.get(opts, :display_name)
-    max_steps = Keyword.get(opts, :max_steps, @sub_agent_max_steps)
-    buffered? = Keyword.get(opts, :buffered, false)
-
-    # Buffered mode: accumulate tool entries in the Task's process
-    # dict instead of streaming them through the TUI. Used by
-    # parallel_sub_agents so 5+ concurrent agents' tool calls don't
-    # interleave under whichever header was printed last.
-    if buffered?, do: Process.put(:golem_sub_agent_buffer, [])
-
-    if parent_depth == 0 and not buffered?, do: output().sub_agent_start(goal, display_name)
-
-    Golem.Events.emit(:sub_agent_start, %{
-      depth: depth,
-      goal: String.slice(goal, 0, 500),
-      display_name: display_name,
-      has_context: context != nil and context != ""
-    })
-
-    # Build directive message for the sub-agent
-    context_section = if context && context != "", do: "\n\n## Additional Context\n\n#{context}", else: ""
-
-    directive = """
-    ## Sub-Agent Task
-
-    You are a sub-agent working on a specific task. The conversation above is your parent agent's full context — you know everything it knows.
-
-    Your task: #{goal}#{context_section}
-
-    Rules:
-    - Focus ONLY on this task. Do not work on other items from the plan.
-    - Do NOT spawn sub-agents yourself.
-    - When done, call `done` with a clear summary of what you accomplished and which files you created/modified.
-    - You have a limited number of steps. Be efficient.
-    """
-
-    # Fork model: inherit parent's messages for full context + prompt cache reuse
-    # Fall back to fresh context if no parent state (e.g., tests, direct calls)
-    {messages, system, errors} =
-      if parent_state && parent_state.messages != [] do
-        forked = parent_state.messages ++ [
-          %{role: "assistant", content: "I'll delegate this to a sub-agent."},
-          %{role: "user", content: directive}
-        ]
-        # Use parent's system prompt for cache hits
-        parent_errors = Map.get(parent_state, :errors, [])
-        agents_md = Map.get(parent_state, :agents_md)
-        sys = Golem.Prompt.executor_system(parent_errors, agents_md)
-        {forked, sys, parent_errors}
-      else
-        fresh = [%{role: "user", content: directive}]
-        {fresh, Golem.Prompt.sub_agent_system(), []}
-      end
-
-    state = %{
-      goal: goal,
-      plan: Map.get(parent_state || %{}, :plan),
-      messages: messages,
-      step: 0,
-      max_steps: max_steps,
-      depth: depth,
-      prefix: prefix,
-      history: [],
-      costs: %{total_dollars: 0.0},
-      errors: errors,
-      phase_costs: [],
-      last_completed: 0
-    }
-
-    result = loop(state, system)
-
-    # Pull the real step count out of the summary (the loop runs a
-    # recursive immutable state, so the closure-captured `state.step`
-    # is forever 0). For non-:done exits we fall back to 0 — those
-    # paths don't surface to sub-agent UI today.
-    {success, steps} = case result do
-      {:ok, %{success: s} = summary} -> {s, Map.get(summary, :steps, 0)}
-      _ -> {false, 0}
-    end
-
-    # Report sub-agent completion to TUI. In buffered mode the entire
-    # block (header + tool lines + footer) is printed atomically here
-    # so concurrent sub-agents' output never interleaves; in streaming
-    # mode the header was printed at start and only the trailing
-    # "done" footer is emitted now.
-    cond do
-      buffered? ->
-        entries = Process.delete(:golem_sub_agent_buffer) |> List.wrap() |> Enum.reverse()
-        label = display_name || goal
-        output().sub_agent_block(label, entries, success, steps)
-
-      parent_depth == 0 ->
-        output().sub_agent_result(goal, steps, success)
-
-      true ->
-        :ok
-    end
-
-    Golem.Events.emit(:sub_agent_end, %{
-      depth: depth,
-      goal: String.slice(goal, 0, 500),
-      success: match?({:ok, %{success: true}}, result),
-      steps: steps,
-      summary: case result do
-        {:ok, %{summary: s}} -> String.slice(s || "", 0, 500)
-        {:error, reason} -> "error: #{inspect(reason)}"
-        _ -> ""
-      end
-    })
-
-    # Extract files from the sub-agent for parent awareness
-    # Costs are already in summary.costs from the loop
-    case result do
-      {:ok, summary} ->
-        files = extract_modified_files(state)
-        {:ok, Map.put(summary, :files, files)}
-
-      other ->
-        other
-    end
+    Golem.Runner.SubAgent.run(goal, context, parent_depth, parent_state, opts)
   end
 
-  defp extract_modified_files(%{history: history}) do
+  @doc false
+  def extract_modified_files(%{history: history}) do
     history
     |> Enum.filter(fn {tool, _, _} -> tool in ["write_file", "edit_file"] end)
     |> Enum.map(fn {_, input, _} -> to_string(input) end)
     |> Enum.uniq()
   end
 
-  defp extract_modified_files(_), do: []
+  def extract_modified_files(_), do: []
 
-  # --- Plan Creation ---
-
-  defp create_plan(goal, opts) do
-    explore_model = Application.get_env(:golem, :executor_model)   # Sonnet for exploration
-    plan_model = Application.get_env(:golem, :planner_model)       # Opus for final plan
-    max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
-    thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
-    tools = Golem.Tools.for_planner()
-    costs = %{total_dollars: 0.0}
-
-    # Read AGENTS.md / CLAUDE.md from project roots for planner context
-    agents_md_content = read_project_agents_md(opts[:agents_md])
-    system = Golem.Prompt.planner_system(:explore, agents_md_content)
-
-    attachment_blocks = opts[:attachment_blocks] || []
-
-    messages = [
-      %{role: "user", content: Golem.Prompt.planner_initial_message(goal, attachment_blocks)}
-    ]
-
-    planner_ctx = %{seen_agents_md: MapSet.new(), explore_model: explore_model, plan_model: plan_model}
-    planner_loop(messages, explore_model, max_tokens, thinking_budget, tools, system, costs, planner_ctx, 1)
-  end
-
-  # Read AGENTS.md content that was already built by the integration module
-  defp read_project_agents_md(nil), do: nil
-  defp read_project_agents_md(agents_md) when is_binary(agents_md), do: agents_md
-
-  defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
-    max = Map.get(ctx, :extended_max_steps) || Application.get_env(:golem, :planner_max_steps, 75)
-
-    if step > max do
-      case prompt_extend(:planner, max, costs) do
-        {:continue, new_max} ->
-          ctx = Map.put(ctx, :extended_max_steps, new_max)
-          planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
-
-        :abort ->
-          {:error, :planner_max_steps}
-      end
-    else
-      planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
-    end
-  end
+  # --- Step-cap prompt (shared by planner + executor) ---
 
   # Ask the operator whether to keep going past a step cap. Bumps the
   # cap by 50 if they say yes; aborts (matching the existing error
@@ -438,7 +273,8 @@ defmodule Golem.Runner do
   # — only the outer planner and executor are.
   @step_cap_bump 50
 
-  defp prompt_extend(kind, max, costs) do
+  @doc false
+  def prompt_extend(kind, max, costs) do
     spent = format_cost(costs)
     label =
       case kind do
@@ -455,238 +291,10 @@ defmodule Golem.Runner do
     end
   end
 
-  defp planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
-
-    result = Golem.Claude.call(messages,
-      model: model,
-      max_tokens: max_tokens,
-      system: system,
-      tools: tools,
-      thinking_budget: thinking_budget
-    )
-
-    case result do
-      {:ok, %{tool_use: tool_calls} = response} when tool_calls != [] ->
-        costs = accumulate_costs(costs, response.usage, model)
-        output().update_cost("$#{format_cost(costs)}")
-
-        # Show planner text in TUI
-        if response.text, do: output().agent_text(response.text)
-
-        # Check if create_plan was called — Sonnet signals it's done exploring
-        case Enum.find(tool_calls, &(&1.name == "create_plan")) do
-          %{input: %{"plan" => sonnet_plan}} ->
-            # Hand off to Opus for the final plan, using Sonnet's draft as input
-            output().planning("Creating plan with Opus...")
-            finalize_plan(messages, sonnet_plan, ctx.plan_model, max_tokens, thinking_budget, system, costs)
-
-          nil ->
-            # Execute read-only tools and continue the loop
-            {tool_results, ctx} = execute_planner_tools(tool_calls, ctx)
-
-            # Build the assistant message with tool_use blocks
-            assistant_content =
-              (if response.text, do: [%{type: "text", text: response.text}], else: []) ++
-              Enum.map(tool_calls, fn tc ->
-                %{type: "tool_use", id: tc.id, name: tc.name, input: tc.input}
-              end)
-
-            # Build tool_result messages
-            result_content =
-              Enum.map(tool_results, fn {id, result_text} ->
-                %{type: "tool_result", tool_use_id: id, content: result_text}
-              end)
-
-            updated = messages ++ [
-              %{role: "assistant", content: assistant_content},
-              %{role: "user", content: result_content}
-            ]
-
-            planner_loop(updated, model, max_tokens, thinking_budget, tools, system, costs, ctx, step + 1)
-        end
-
-      # No tool calls — planner responded with text only (legacy behavior)
-      {:ok, %{text: text} = response} when is_binary(text) ->
-        costs = accumulate_costs(costs, response.usage, model)
-        output().update_cost("$#{format_cost(costs)}")
-        {:ok, text, costs}
-
-      {:ok, _} ->
-        {:error, :no_plan_text}
-
-      {:error, reason} when reason in [:planner_max_steps] ->
-        {:error, reason}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # One Opus call with full context to produce the final plan
-  defp finalize_plan(messages, sonnet_plan, model, max_tokens, thinking_budget, system, costs) do
-    final_messages = messages ++ [
-      %{role: "user", content: """
-      The exploration phase is complete. Here is a draft plan based on what was found:
-
-      #{sonnet_plan}
-
-      Review the exploration above and produce the final plan. Refine, reorder, or restructure as needed. \
-      Return the plan as a markdown checklist grouped into phases. Include verify commands where applicable.
-      """}
-    ]
-
-    case Golem.Claude.call(final_messages,
-           model: model,
-           max_tokens: max_tokens,
-           system: system,
-           thinking_budget: thinking_budget
-         ) do
-      {:ok, %{text: text} = response} when is_binary(text) ->
-        costs = accumulate_costs(costs, response.usage, model)
-        output().update_cost("$#{format_cost(costs)}")
-        {:ok, text, costs}
-
-      {:ok, _} ->
-        {:error, :no_plan_text}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp execute_planner_tools(tool_calls, ctx) do
-    # Show all tool calls in TUI first
-    Enum.each(tool_calls, fn tc ->
-      output().tool_call(tc.name, summarize_planner_input(tc))
-    end)
-
-    # Execute all read-only tools in parallel
-    results =
-      tool_calls
-      |> Task.async_stream(fn tc ->
-        start = System.monotonic_time(:millisecond)
-        {_tag, result_text} = Golem.ToolHandler.execute(tc, 0)
-        elapsed = System.monotonic_time(:millisecond) - start
-
-        display = String.slice(result_text, 0, 200)
-        output().tool_result(tc.name, summarize_planner_input(tc), display, elapsed, nil)
-
-        # Collect file paths from tool calls for AGENTS.md discovery
-        paths = extract_paths_from_tool(tc)
-        {tc.id, result_text, paths}
-      end, max_concurrency: 8, timeout: 60_000)
-      |> Enum.map(fn {:ok, result} -> result end)
-
-    # Discover AGENTS.md files in directories touched by these tool calls
-    all_paths = Enum.flat_map(results, fn {_id, _text, paths} -> paths end)
-    {agents_md_results, ctx} = discover_agents_md(all_paths, ctx)
-
-    # Append discovered AGENTS.md contents to the last tool result
-    results =
-      if agents_md_results != "" do
-        results
-        |> Enum.map(fn {id, text, _paths} -> {id, text} end)
-        |> List.update_at(-1, fn {id, text} ->
-          {id, text <> "\n\n--- Auto-discovered project documentation ---\n" <> agents_md_results}
-        end)
-      else
-        Enum.map(results, fn {id, text, _paths} -> {id, text} end)
-      end
-
-    {results, ctx}
-  end
-
-  defp extract_paths_from_tool(%{name: "read_file", input: %{"path" => path}}), do: [path]
-  defp extract_paths_from_tool(%{name: "grep", input: %{"path" => path}}) when is_binary(path), do: [path]
-  defp extract_paths_from_tool(%{name: "glob", input: %{"path" => path}}) when is_binary(path), do: [path]
-  defp extract_paths_from_tool(%{name: "list_directory", input: %{"path" => path}}), do: [path]
-  defp extract_paths_from_tool(_), do: []
-
-  defp discover_agents_md(paths, ctx) do
-    # Collect all unique directories from the paths
-    dirs =
-      paths
-      |> Enum.flat_map(&ancestor_dirs/1)
-      |> Enum.uniq()
-
-    # Check each directory for AGENTS.md or CLAUDE.md
-    new_docs =
-      dirs
-      |> Enum.flat_map(fn dir ->
-        ["AGENTS.md", "CLAUDE.md"]
-        |> Enum.map(fn name -> "#{dir}/#{name}" end)
-        |> Enum.reject(&MapSet.member?(ctx.seen_agents_md, &1))
-      end)
-      |> Task.async_stream(fn path ->
-        case Golem.Sandbox.exec("cat #{path} 2>/dev/null", timeout: 5_000) do
-          {:ok, %{exit_code: 0, output: content}} when byte_size(content) > 0 ->
-            {path, content}
-          _ ->
-            nil
-        end
-      end, max_concurrency: 8, timeout: 10_000)
-      |> Enum.map(fn {:ok, result} -> result end)
-      |> Enum.reject(&is_nil/1)
-
-    # Update seen set
-    new_seen = Enum.reduce(new_docs, ctx.seen_agents_md, fn {path, _}, acc -> MapSet.put(acc, path) end)
-
-    # Also mark checked-but-missing paths as seen to avoid rechecking
-    all_checked = dirs |> Enum.flat_map(fn dir -> ["#{dir}/AGENTS.md", "#{dir}/CLAUDE.md"] end)
-    new_seen = Enum.reduce(all_checked, new_seen, &MapSet.put(&2, &1))
-
-    content =
-      new_docs
-      |> Enum.map(fn {path, content} ->
-        Golem.Events.emit(:agents_md_discovered, %{path: path})
-        "## #{path}\n\n#{String.trim(content)}"
-      end)
-      |> Enum.join("\n\n")
-
-    {content, %{ctx | seen_agents_md: new_seen}}
-  end
-
-  defp ancestor_dirs(path) do
-    dir = Path.dirname(path)
-    if dir == "/" or dir == "." do
-      []
-    else
-      [dir | ancestor_dirs(dir)]
-    end
-  end
-
-  defp summarize_planner_input(%{name: "read_file", input: input}), do: input["path"] || ""
-  defp summarize_planner_input(%{name: "list_directory", input: input}), do: input["path"] || ""
-  defp summarize_planner_input(%{name: "glob", input: input}), do: input["pattern"] || ""
-  defp summarize_planner_input(%{name: "grep", input: input}), do: "#{input["pattern"]} #{input["path"] || ""}"
-  defp summarize_planner_input(%{name: name}), do: name
-
-  defp replan(goal, current_plan, reasoning, recent_history) do
-    model = Application.get_env(:golem, :planner_model)
-    max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
-    thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
-
-    message = Golem.Prompt.replan_message(goal, current_plan, reasoning, recent_history)
-
-    messages = [
-      %{role: "user", content: message}
-    ]
-
-    case Golem.Claude.call(messages,
-           model: model,
-           max_tokens: max_tokens,
-           system: Golem.Prompt.planner_system(),
-           thinking_budget: thinking_budget
-         ) do
-      {:ok, %{text: text}} when is_binary(text) -> {:ok, text}
-      {:ok, _} -> {:error, :no_plan_text}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   # --- Main Loop ---
 
-  defp loop(%{step: step, max_steps: max, depth: depth, prefix: prefix} = state, system) when step >= max do
+  @doc false
+  def loop(%{step: step, max_steps: max, depth: depth, prefix: prefix} = state, system) when step >= max do
     Logger.warning("#{prefix}Hit max steps (#{max}). Saving state...")
     if run_id = Map.get(state, :run_id), do: Golem.State.save(run_id, state)
 
@@ -705,7 +313,7 @@ defmodule Golem.Runner do
     end
   end
 
-  defp loop(state, _system) do
+  def loop(state, _system) do
     # Check cost budget (only at depth 0)
     max_cost = Application.get_env(:golem, :max_cost, nil)
     current_cost = Map.get(state.costs, :total_dollars, 0.0)
@@ -1264,7 +872,7 @@ defmodule Golem.Runner do
       recent = Enum.take(state.history, -20)
 
       # State already has the tool exchange messages appended from execute_tool_calls
-      case replan(state.goal, state.plan, reasoning, recent) do
+      case Golem.Runner.Planner.replan(state.goal, state.plan, reasoning, recent) do
         {:ok, new_plan} ->
 
           Golem.Events.emit(:replan_done, %{
@@ -1850,7 +1458,6 @@ defmodule Golem.Runner do
   def summarize_input(%{name: "browse", input: %{"url" => u}}), do: u
   def summarize_input(%{name: "sub_agent", input: %{"goal" => g}}), do: String.slice(g, 0, 100)
   def summarize_input(%{name: "parallel_sub_agents", input: %{"agents" => a}}), do: "#{length(a)} agents"
-  def summarize_input(%{name: "ask_user", input: %{"question" => q}}), do: String.slice(q, 0, 100)
   def summarize_input(%{name: "update_progress", input: _}), do: "progress"
 
   def summarize_input(%{name: name, input: input}) do
@@ -2415,17 +2022,20 @@ defmodule Golem.Runner do
       cache_create / 1_000_000 * p.cache_create
   end
 
-  defp accumulate_costs(costs, usage, model) do
+  @doc false
+  def accumulate_costs(costs, usage, model) do
     step_cost = usage_cost(usage, model)
     Map.update(costs, :total_dollars, step_cost, &(&1 + step_cost))
   end
 
-  defp format_cost(%{total_dollars: dollars}) do
+  @doc false
+  def format_cost(%{total_dollars: dollars}) do
     :erlang.float_to_binary(dollars, decimals: 4)
   end
 
-  defp format_cost(_costs), do: "0.0000"
+  def format_cost(_costs), do: "0.0000"
 
-  defp depth_prefix(0), do: ""
-  defp depth_prefix(depth), do: String.duplicate("│ ", depth)
+  @doc false
+  def depth_prefix(0), do: ""
+  def depth_prefix(depth), do: String.duplicate("│ ", depth)
 end
