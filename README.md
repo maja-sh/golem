@@ -87,8 +87,6 @@ Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, t
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Claude API key |
 | `PERPLEXITY_API_KEY` | For web_search | Perplexity API key |
-| `DISCORD_TOKEN` | For `ask_user` | Discord bot token |
-| `DISCORD_CHANNEL_ID` | For `ask_user` | Discord channel ID |
 | `JIRA_EMAIL` | For `--jira` | Atlassian account email |
 | `JIRA_API_TOKEN` | For `--jira` | Atlassian API token |
 | `BITBUCKET_API_TOKEN` | For `--jira` (push/PR) | Bitbucket app password |

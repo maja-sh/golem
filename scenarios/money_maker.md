@@ -46,7 +46,7 @@ Don't do exhaustive market research. Instead:
 1. Search for "Show HN" posts that went viral — what made people excited?
 2. Search for "I built this" posts that developers loved — what's the common thread?
 3. Use `think` to brainstorm 5 genuinely creative ideas. Be weird. Be opinionated.
-4. Use `ask_user` to present your top 3 ideas to the human. Include a one-sentence pitch for each.
+4. Use `think` again to narrow to your top pick — the one most likely to make a developer say "holy shit, I need that." Commit to it and move on; don't relitigate.
 
 ### Phase 2: Build it
 

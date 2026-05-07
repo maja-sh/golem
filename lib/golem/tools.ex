@@ -12,14 +12,12 @@ defmodule Golem.Tools do
   a sub-agent finds itself with too much work, the right answer is
   for the parent's planner to decompose better, not for the executor
   to fan out further.
-  ask_user is only available when Discord is connected.
   """
   def for_depth(depth \\ 0) do
     base = base_tools()
 
     extras =
-      (if depth == 0, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []) ++
-        (if discord_available?(), do: [ask_user_tool()], else: [])
+      if depth == 0, do: [sub_agent_tool(), parallel_sub_agents_tool()], else: []
 
     base ++ extras ++ mcp_tools()
   end
@@ -97,16 +95,6 @@ defmodule Golem.Tools do
         }
       },
       required: ["agents"]
-    })
-  end
-
-  defp ask_user_tool do
-    tool("ask_user", "Ask the human operator a question via Discord and wait for their response. Use this when you face a decision that significantly affects the outcome — e.g. choosing between product ideas, picking a tech stack, or confirming a risky action. The question is sent via Discord and the run pauses until they reply. Don't use this for trivial decisions you can make yourself.", %{
-      type: "object",
-      properties: %{
-        question: %{type: "string", description: "The question to ask. Be specific — present options if applicable, include your recommendation and reasoning."}
-      },
-      required: ["question"]
     })
   end
 
@@ -566,10 +554,6 @@ defmodule Golem.Tools do
         required: ["success", "summary"]
       })
     ]
-  end
-
-  defp discord_available? do
-    System.get_env("DISCORD_TOKEN") != nil
   end
 
   defp mcp_tools do

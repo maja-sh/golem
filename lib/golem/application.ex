@@ -26,12 +26,6 @@ defmodule Golem.Application do
       :logger.set_handler_config(id, :level, console_level)
     end
 
-    token = System.get_env("DISCORD_TOKEN")
-
-    if token do
-      Application.put_env(:nostrum, :token, token)
-    end
-
     children = [
       Golem.Sandbox,
       Golem.FileCache,
@@ -40,16 +34,7 @@ defmodule Golem.Application do
     ]
 
     opts = [strategy: :one_for_one, name: Golem.Supervisor]
-    {:ok, pid} = Supervisor.start_link(children, opts)
-
-    # Start Discord if token is available
-    if token do
-      Golem.Discord.init_waiter()
-      Application.ensure_all_started(:nostrum)
-      Supervisor.start_child(Golem.Supervisor, Golem.Discord)
-    end
-
-    {:ok, pid}
+    Supervisor.start_link(children, opts)
   end
 
   defp ensure_defaults do
@@ -81,10 +66,6 @@ defmodule Golem.Application do
         Application.put_env(:golem, key, default)
       end
     end
-
-    # Suppress Nostrum warnings
-    Application.put_env(:nostrum, :youtubedl, nil)
-    Application.put_env(:nostrum, :streamlink, nil)
   end
 
   defp detect_runtime do

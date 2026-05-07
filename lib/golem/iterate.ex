@@ -381,9 +381,8 @@ defmodule Golem.Iterate do
         the question hanging.
       - **Nit / opinion** ("could be cleaner") → use judgment; apply if \
         cheap and clearly an improvement, otherwise skip.
-      - **Genuinely ambiguous** → call `ask_user` if Discord is wired \
-        up; otherwise make a defensible choice and explain it in the \
-        commit message.
+      - **Genuinely ambiguous** → make a defensible choice and \
+        explain it in the commit message.
 
       Commit each addressed item as its own commit when reasonable, \
       with a message that references the reviewer's name (e.g. \
@@ -417,8 +416,7 @@ defmodule Golem.Iterate do
 
       If a comment quotes a CI bot's test output or vulnerability \
       report, the actionable part is the failing tests / fixed \
-      behavior — NOT the CVE bumps. When in doubt, skip and call \
-      `ask_user` if Discord is wired up; otherwise leave it.
+      behavior — NOT the CVE bumps. When in doubt, skip it.
 
       Out-of-scope changes waste budget and produce surprise diffs \
       the reviewer didn't ask for. Stick to the list.

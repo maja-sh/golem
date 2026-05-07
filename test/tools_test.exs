@@ -46,17 +46,5 @@ defmodule Golem.ToolsTest do
         assert schema_type == "object", "#{tool.name} schema not object type"
       end
     end
-
-    test "ask_user included only when discord token set" do
-      # This depends on env var — just test the function doesn't crash
-      tools = Golem.Tools.for_depth(0)
-      names = Enum.map(tools, & &1.name)
-
-      if System.get_env("DISCORD_TOKEN") do
-        assert "ask_user" in names
-      else
-        refute "ask_user" in names
-      end
-    end
   end
 end

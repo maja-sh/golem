@@ -287,8 +287,7 @@ defmodule Golem.TUI do
 
   def handle_call({:init, run_id, goal}, _from, state) do
     # Suppress ALL console logger handlers — not just :default.
-    # Nostrum/Gun deps may add extra handlers. Any console output
-    # outside the GenServer corrupts cursor tracking.
+    # Any console output outside the GenServer corrupts cursor tracking.
     for id <- :logger.get_handler_ids(), id != :golem_file do
       :logger.set_handler_config(id, :level, :none)
     end
@@ -778,7 +777,6 @@ defmodule Golem.TUI do
   def tool_icon("update_progress"), do: "·"
   def tool_icon("done"), do: "✓"
   def tool_icon("sub_agent"), do: "●"
-  def tool_icon("ask_user"), do: "?"
   def tool_icon("browse"), do: "◎"
   def tool_icon(_), do: "▸"
 
@@ -796,7 +794,6 @@ defmodule Golem.TUI do
   def tool_label("update_progress", _), do: "Progress update"
   def tool_label("done", _), do: "Done"
   def tool_label("think", _), do: "Thinking..."
-  def tool_label("ask_user", _), do: "Asking user..."
   def tool_label("browse", url), do: "Browse #{wtrunc(url, 12)}"
   def tool_label(name, _), do: name
 

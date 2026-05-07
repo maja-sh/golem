@@ -272,21 +272,6 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "ask_user", input: %{"question" => question}}, _depth) do
-
-    # Get run_id from the process dictionary (set by the runner)
-    run_id = Process.get(:golem_run_id, "unknown")
-
-    case Golem.Discord.ask(question, run_id) do
-      {:ok, reply} ->
-        {:continue, "User replied: #{reply}"}
-
-      {:error, reason} ->
-        Logger.error("  [ask_user] Discord error: #{inspect(reason)}")
-        {:continue, "[error] Could not reach the user via Discord. Make your best judgment and continue."}
-    end
-  end
-
   def execute(%{name: "browse", input: %{"url" => url}}, _depth) do
 
     # Kill any existing Firefox, then open the URL

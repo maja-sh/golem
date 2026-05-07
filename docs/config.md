@@ -132,8 +132,6 @@ Set in `.env` (loaded by dotenv):
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | yes | Claude API key | — |
 | `PERPLEXITY_API_KEY` | for web_search | Perplexity search API key | — |
-| `DISCORD_TOKEN` | for ask_user | Discord bot token | Send Messages, Read Message History |
-| `DISCORD_CHANNEL_ID` | for ask_user | Discord channel for ask_user | — |
 | `JIRA_EMAIL` | for Jira | Atlassian account email | Shared with Bitbucket basic auth |
 | `JIRA_API_TOKEN` | for Jira | Atlassian API token | `read:jira-work`, `write:jira-work` (read issues, post comments) |
 | `BITBUCKET_API_TOKEN` | for Bitbucket | Bitbucket app password | `Repositories: Read`, `Repositories: Write`, `Pull requests: Write` (clone, push, create PRs) |
