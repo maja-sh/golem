@@ -25,12 +25,15 @@ defmodule Golem.E2E.ClaudeCacheTest do
     # make turn 1 look like a cache hit instead of a write.
     marker = :erlang.unique_integer([:positive]) |> Integer.to_string()
 
+    # Anthropic requires ≥1024 tokens for cacheable content on Sonnet 4.x.
+    # 500 reps lands around 1500 tokens — close to the threshold and seen
+    # to come back uncached in practice. 1500 reps clears it with margin.
     system = [
       %{
         type: "text",
         text:
           "You are a helpful assistant. marker=#{marker} " <>
-            String.duplicate("Context fragment. ", 500),
+            String.duplicate("Context fragment. ", 1500),
         cache_control: %{type: "ephemeral"}
       }
     ]
