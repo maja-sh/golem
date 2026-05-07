@@ -277,6 +277,19 @@ golem run --scenario smoke_maze
 golem run "Build a REST API in Python"
 ```
 
+### Run a Jira ticket
+
+```bash
+golem run --jira SA-1111
+
+# Add an --nudge to steer interpretation when the ticket offers
+# multiple approaches or is ambiguous. The note is injected near the
+# top of the goal and is also visible to the pre-flight evaluator.
+golem run --jira SA-1111 --nudge "go with approach 2 from the description"
+```
+
+Other `--jira` flags: `--force` (skip evaluation), `--budget <n>` (raise the cost ceiling), `--max-steps <n>`, `--visual` (require browser verification), `--model <id>`.
+
 ### Resume a paused run
 
 ```bash

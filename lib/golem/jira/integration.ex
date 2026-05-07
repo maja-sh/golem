@@ -35,12 +35,14 @@ defmodule Golem.Jira.Integration do
     output().planning("Fetching ticket #{ticket_key}...")
 
     skip_eval = Keyword.get(opts, :skip_eval, false)
+    nudge = normalize_nudge(opts[:nudge])
+    if nudge, do: output().agent_text("Nudge: #{nudge}")
 
     with {:ok, config} <- Golem.ProjectSetup.load_config_with_jira(),
          {:ok, ticket} <- Golem.Jira.fetch_ticket(ticket_key, config.jira_base_url),
          :ok <- (output().agent_text("#{ticket.key}: #{ticket.summary}"); :ok),
          attachment_blocks = Golem.Jira.attachment_blocks(ticket),
-         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval, attachment_blocks) do
+         {:ok, evaluation} <- evaluate_or_skip(ticket, config, skip_eval, attachment_blocks, nudge) do
 
       # Fold pre-flight evaluator spend into the run's initial cost so
       # the final total matches what actually hit the Anthropic bill.
@@ -58,7 +60,7 @@ defmodule Golem.Jira.Integration do
 
         # Use task_config which has worktree paths instead of main clone paths
         visual_verify = Keyword.get(opts, :visual_verify, false)
-        goal = build_goal(ticket, task_config)
+        goal = build_goal(ticket, task_config, nudge)
         agents_md = build_agents_md(task_config, branch, ticket, visual_verify)
 
         runner_opts =
@@ -102,21 +104,24 @@ defmodule Golem.Jira.Integration do
 
   # --- Evaluation ---
 
-  defp evaluate_or_skip(_ticket, config, true, _attachment_blocks) do
+  defp evaluate_or_skip(_ticket, config, true, _attachment_blocks, _nudge) do
     output().planning("Skipping evaluation (--force)")
     all_repos = Enum.map(config.projects, & &1.repo)
     {:ok, %{selected_projects: all_repos}}
   end
 
-  defp evaluate_or_skip(ticket, config, false, attachment_blocks) do
-    evaluate_and_filter(ticket, config, attachment_blocks)
+  defp evaluate_or_skip(ticket, config, false, attachment_blocks, nudge) do
+    evaluate_and_filter(ticket, config, attachment_blocks, nudge)
   end
 
-  defp evaluate_and_filter(ticket, config, attachment_blocks) do
+  defp evaluate_and_filter(ticket, config, attachment_blocks, nudge) do
     Logger.info("Evaluating ticket #{ticket.key}...")
     output().planning("Evaluating ticket...")
 
-    case Golem.Jira.Evaluator.evaluate(ticket, config, attachment_blocks: attachment_blocks) do
+    case Golem.Jira.Evaluator.evaluate(ticket, config,
+           attachment_blocks: attachment_blocks,
+           nudge: nudge
+         ) do
       {:ok, %{decision: "reject", reason: reason}} ->
         Logger.info("Ticket #{ticket.key} rejected: #{reason}")
         output().agent_text("Rejected: #{reason}")
@@ -319,7 +324,7 @@ defmodule Golem.Jira.Integration do
 
   # --- Goal & context construction ---
 
-  defp build_goal(ticket, config) do
+  defp build_goal(ticket, config, nudge) do
     project_list =
       config.projects
       |> Enum.map(fn p ->
@@ -334,44 +339,7 @@ defmodule Golem.Jira.Integration do
         labels -> "**Labels:** #{Enum.join(labels, ", ")}"
       end
 
-    ask_human_label? = Enum.any?(ticket.labels, &(String.downcase(&1) == "ask-human"))
-    discord_available? = System.get_env("DISCORD_TOKEN") not in [nil, ""]
-    operator_name = operator_display_name()
-
     attachments_section = build_attachments_section(ticket)
-
-    ask_user_section =
-      cond do
-        not discord_available? ->
-          nil
-
-        ask_human_label? ->
-          """
-          ## Operator is watching
-
-          This ticket is tagged **`ask-human`**: #{operator_name} explicitly \
-          flagged it as one where human judgment is likely needed. Call \
-          `ask_user` freely for any genuine ambiguity — choosing between \
-          architectural approaches, interpreting a vague acceptance \
-          criterion, or confirming which existing pattern to copy. \
-          Don't burn 20 steps exploring a fork when a 30-second reply \
-          can settle it. Keep questions focused: one decision, one or two \
-          choices plus your recommendation.
-          """
-
-        true ->
-          """
-          ## Fast feedback is available
-
-          You can call `ask_user` to reach #{operator_name} on Discord for \
-          a fast answer. Use it **only** when a wrong guess would waste \
-          significant budget — e.g. architectural forks, genuinely \
-          ambiguous acceptance criteria, or confirming a destructive \
-          action. Do NOT use it for small UI details or things you can \
-          reasonably infer from existing code. If in doubt, make a \
-          defensible choice and document it; errors get caught at PR review.
-          """
-      end
 
     comments_section =
       case ticket.comments do
@@ -391,6 +359,21 @@ defmodule Golem.Jira.Integration do
           """
       end
 
+    nudge_section =
+      if nudge do
+        """
+        ## Operator note
+
+        #{nudge}
+
+        This is a direct instruction from the operator who started this \
+        run. It overrides any conflicting interpretation of the ticket — \
+        if the description offers multiple approaches, pick the one this \
+        note specifies; if it resolves an ambiguity, treat the ambiguity \
+        as resolved and don't relitigate it.
+        """
+      end
+
     parts = [
       """
       ## #{ticket.key}: #{ticket.summary}
@@ -406,6 +389,7 @@ defmodule Golem.Jira.Integration do
       reasonable interpretation and move on — mistakes surface in code \
       review and the author will push back there.
       """,
+      nudge_section,
       labels_section,
       if(ticket.description && ticket.description != "", do: "## Description\n\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "## Acceptance Criteria\n\n#{ticket.acceptance_criteria}"),
@@ -419,8 +403,7 @@ defmodule Golem.Jira.Integration do
       Map each step in your plan to the specific project directory where the changes belong. \
       If the ticket has acceptance criteria, ensure every criterion has a corresponding plan step. \
       If comments reference existing patterns or components, find and study them before planning.
-      """,
-      ask_user_section
+      """
     ]
 
     parts
@@ -477,22 +460,6 @@ defmodule Golem.Jira.Integration do
   end
 
   defp build_attachments_section(_), do: nil
-
-  # Human-readable name for the operator who receives `ask_user`
-  # prompts on Discord. Prefers an explicit `GIT_USER` env, falls back
-  # to the local-part of `JIRA_EMAIL` title-cased, finally "the operator".
-  defp operator_display_name do
-    cond do
-      (name = System.get_env("GIT_USER")) not in [nil, ""] ->
-        name
-
-      (email = System.get_env("JIRA_EMAIL")) not in [nil, ""] ->
-        email |> String.split("@") |> hd() |> String.capitalize()
-
-      true ->
-        "the operator"
-    end
-  end
 
   defp build_agents_md(config, branch, ticket, visual_verify) do
     project_list =
@@ -588,5 +555,13 @@ defmodule Golem.Jira.Integration do
 
   defp escape_shell(str) do
     String.replace(str, "'", "'\\''")
+  end
+
+  defp normalize_nudge(nil), do: nil
+  defp normalize_nudge(text) when is_binary(text) do
+    case String.trim(text) do
+      "" -> nil
+      trimmed -> trimmed
+    end
   end
 end

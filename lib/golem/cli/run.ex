@@ -9,6 +9,7 @@ defmodule Golem.CLI.Run do
       golem run --plan plan.md "Build a web scraper in Python"
       golem run --max-steps 50 "Set up a Phoenix project"
       golem run --jira SA-1111
+      golem run --jira SA-1111 --nudge "go with approach 2 from the description"
   """
 
   def run(argv) do
@@ -22,7 +23,8 @@ defmodule Golem.CLI.Run do
           force: :boolean,
           budget: :float,
           model: :string,
-          visual: :boolean
+          visual: :boolean,
+          nudge: :string
         ],
         aliases: [
           p: :plan,
@@ -32,7 +34,8 @@ defmodule Golem.CLI.Run do
           f: :force,
           b: :budget,
           m: :model,
-          v: :visual
+          v: :visual,
+          n: :nudge
         ]
       )
 
@@ -63,7 +66,12 @@ defmodule Golem.CLI.Run do
         n -> [max_steps: n]
       end) ++
         (if opts[:force], do: [skip_eval: true], else: []) ++
-        (if opts[:visual], do: [visual_verify: true], else: [])
+        (if opts[:visual], do: [visual_verify: true], else: []) ++
+        (case opts[:nudge] do
+          nil -> []
+          "" -> []
+          text -> [nudge: text]
+        end)
 
     case Golem.Jira.Integration.run(ticket_key, runner_opts) do
       {:ok, _} -> :ok
@@ -100,6 +108,13 @@ defmodule Golem.CLI.Run do
       IO.puts(:stderr, "       golem run --jira SA-1111")
       exit({:shutdown, 1})
     end
+
+    goal =
+      case opts[:nudge] do
+        nil -> goal
+        "" -> goal
+        text -> "## Operator note\n\n#{text}\n\n#{goal}"
+      end
 
     runner_opts =
       case opts[:plan] do

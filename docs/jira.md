@@ -20,6 +20,17 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
 5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira, transitions the ticket to `jira.done_transition`.
 
+### Nudging interpretation
+
+When a ticket offers multiple approaches or is genuinely ambiguous, pass `--nudge` (alias `-n`) to steer the run without editing the ticket itself:
+
+```bash
+mix golem.run --jira SA-1111 --nudge "go with approach 2 from the description"
+mix golem.run --jira SA-1111 -n "use the Phoenix LiveView pattern, not the Vue one"
+```
+
+The note is shown to the pre-flight evaluator and injected as an **Operator note** section near the top of the agent's goal — flagged as overriding any conflicting interpretation. It's per-run and not recorded on the ticket; for decisions that should be visible to teammates, leave a Jira comment instead.
+
 ## Iterating on reviewer feedback
 
 After a human reviews a Golem-opened PR, drive another pass with `mix golem.iterate <ticket | pr-path | pr-url>`. Pipeline:

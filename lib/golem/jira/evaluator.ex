@@ -22,7 +22,8 @@ defmodule Golem.Jira.Evaluator do
   def evaluate(ticket, config, opts \\ []) do
     model = Application.get_env(:golem, :planner_model)
     attachment_blocks = Keyword.get(opts, :attachment_blocks, [])
-    text = build_message(ticket, config.projects, attachment_blocks)
+    nudge = Keyword.get(opts, :nudge)
+    text = build_message(ticket, config.projects, attachment_blocks, nudge)
     content = [%{type: "text", text: text} | attachment_blocks]
 
     case Golem.Claude.call(
@@ -94,7 +95,7 @@ defmodule Golem.Jira.Evaluator do
     """
   end
 
-  defp build_message(ticket, projects, attachment_blocks) do
+  defp build_message(ticket, projects, attachment_blocks, nudge) do
     project_list =
       projects
       |> Enum.map(fn p ->
@@ -113,12 +114,18 @@ defmodule Golem.Jira.Evaluator do
           "**Comments:**\n#{formatted}"
       end
 
+    nudge_section =
+      if nudge do
+        "**Operator note:** #{nudge}\n\nThe operator who started this run provided the note above. If it resolves an ambiguity in the ticket, treat the ambiguity as resolved when deciding whether to accept."
+      end
+
     parts = [
       "## Ticket: #{ticket.key}",
       "**Summary:** #{ticket.summary}",
       "**Type:** #{ticket.issue_type} | **Priority:** #{ticket.priority}",
       if(ticket.description && ticket.description != "", do: "**Description:**\n#{ticket.description}"),
       if(ticket.acceptance_criteria, do: "**Acceptance Criteria:**\n#{ticket.acceptance_criteria}"),
+      nudge_section,
       comments_section,
       attachments_section(ticket, attachment_blocks),
       "## Available Projects\n\n#{project_list}"

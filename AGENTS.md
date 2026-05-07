@@ -21,6 +21,7 @@ mix golem.resume <run_id>
 # Run a Jira ticket
 mix golem.run --jira SA-1111
 mix golem.run --jira SA-1111 --visual
+mix golem.run --jira SA-1111 --nudge "go with approach 2 from the description"
 mix golem.run --jira SA-1111 --force --budget 30 --model claude-opus-4-20250514
 
 # Iterate on reviewer feedback
