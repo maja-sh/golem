@@ -5,7 +5,24 @@ defmodule Golem.ConfigTest do
   alias Golem.Config
 
   @test_dir "test/tmp_config"
-  @test_path Path.join(@test_dir, "config.yml")
+  @test_path Path.join(@test_dir, "config.yaml")
+
+  # Settings managed outside the @settings catalogue
+  # (load_models_block / load_providers_block). The setup hook needs to
+  # snapshot + clear these manually because the catalogue doesn't know
+  # about them.
+  @extra_app_keys ~w(
+    planner_model planner_provider
+    executor_model executor_provider
+    compaction_model compaction_provider
+    anthropic_api_key_env openrouter_api_key_env openrouter_base_url
+  )a
+
+  @extra_env_vars ~w(
+    GOLEM_PLANNER_MODEL GOLEM_PLANNER_PROVIDER
+    GOLEM_EXECUTOR_MODEL GOLEM_EXECUTOR_PROVIDER
+    GOLEM_COMPACTION_MODEL GOLEM_COMPACTION_PROVIDER
+  )
 
   setup do
     File.mkdir_p!(@test_dir)
@@ -16,22 +33,33 @@ defmodule Golem.ConfigTest do
         {app_key, Application.get_env(:golem, app_key)}
       end
 
+    extra_snapshot =
+      for app_key <- @extra_app_keys, into: %{} do
+        {app_key, Application.get_env(:golem, app_key)}
+      end
+
     env_snapshot =
       for {_, _, _, env_var} <- Config.settings(), into: %{} do
         {env_var, System.get_env(env_var)}
       end
 
+    extra_env_snapshot =
+      for env_var <- @extra_env_vars, into: %{} do
+        {env_var, System.get_env(env_var)}
+      end
+
     # Clear any lingering test env vars to isolate precedence tests.
     for {var, _} <- env_snapshot, do: System.delete_env(var)
+    for {var, _} <- extra_env_snapshot, do: System.delete_env(var)
 
     on_exit(fn ->
-      for {key, val} <- snapshot do
+      for {key, val} <- Map.merge(snapshot, extra_snapshot) do
         if val == nil,
           do: Application.delete_env(:golem, key),
           else: Application.put_env(:golem, key, val)
       end
 
-      for {var, val} <- env_snapshot do
+      for {var, val} <- Map.merge(env_snapshot, extra_env_snapshot) do
         if val == nil, do: System.delete_env(var), else: System.put_env(var, val)
       end
 
@@ -45,12 +73,12 @@ defmodule Golem.ConfigTest do
 
   defp with_config_path(fun) do
     # Golem.Config hard-codes the path. We stub by chdir so the relative
-    # ".golem/config.yml" resolves under our test dir.
+    # ".golem/config.yaml" resolves under our test dir.
     original = File.cwd!()
     File.mkdir_p!(Path.join(@test_dir, ".golem"))
 
     case File.read(@test_path) do
-      {:ok, content} -> File.write!(Path.join([@test_dir, ".golem", "config.yml"]), content)
+      {:ok, content} -> File.write!(Path.join([@test_dir, ".golem", "config.yaml"]), content)
       _ -> :ok
     end
 
@@ -75,20 +103,6 @@ defmodule Golem.ConfigTest do
   end
 
   describe "load/0 — YAML" do
-    test "applies string values" do
-      write_config("""
-      models:
-        planner: claude-sonnet-4-6
-        executor: claude-haiku-4-5
-      """)
-
-      with_config_path(fn ->
-        Config.load()
-        assert Application.get_env(:golem, :planner_model) == "claude-sonnet-4-6"
-        assert Application.get_env(:golem, :executor_model) == "claude-haiku-4-5"
-      end)
-    end
-
     test "applies integer values" do
       write_config("""
       limits:
@@ -130,7 +144,9 @@ defmodule Golem.ConfigTest do
     test "missing keys are not touched" do
       write_config("""
       models:
-        planner: opus-foo
+        planner:
+          provider: anthropic
+          model: opus-foo
       """)
 
       with_config_path(fn ->
@@ -146,7 +162,9 @@ defmodule Golem.ConfigTest do
     test "env var overrides yaml" do
       write_config("""
       models:
-        planner: yaml-planner
+        planner:
+          provider: anthropic
+          model: yaml-planner
       """)
 
       System.put_env("GOLEM_PLANNER_MODEL", "env-planner")
@@ -178,7 +196,9 @@ defmodule Golem.ConfigTest do
     test "empty env var is treated as unset (falls through to yaml)" do
       write_config("""
       models:
-        planner: yaml-planner
+        planner:
+          provider: anthropic
+          model: yaml-planner
       """)
 
       System.put_env("GOLEM_PLANNER_MODEL", "")
@@ -205,8 +225,101 @@ defmodule Golem.ConfigTest do
     test "exposes the catalogue" do
       catalogue = Config.settings()
       assert is_list(catalogue)
-      assert Enum.any?(catalogue, fn {_, key, _, _} -> key == :planner_model end)
-      assert Enum.any?(catalogue, fn {_, _, _, env} -> env == "GOLEM_EXECUTOR_MODEL" end)
+      # Models are handled by load_models_block/1 outside the catalogue.
+      # Check a representative scalar setting is present.
+      assert Enum.any?(catalogue, fn {_, key, _, _} -> key == :max_steps end)
+      assert Enum.any?(catalogue, fn {_, _, _, env} -> env == "GOLEM_MAX_STEPS" end)
+    end
+  end
+
+  describe "load/0 — models block" do
+    test "string form is rejected with a helpful error" do
+      write_config("""
+      models:
+        planner: claude-opus-4-7
+      """)
+
+      with_config_path(fn ->
+        assert_raise RuntimeError, ~r/Invalid model entry/, fn -> Config.load() end
+      end)
+    end
+
+    test "map form sets both provider and model" do
+      write_config("""
+      models:
+        executor:
+          provider: openrouter
+          model: qwen/qwen-2.5-coder-32b-instruct
+      """)
+
+      with_config_path(fn ->
+        Config.load()
+        assert Application.get_env(:golem, :executor_provider) == :openrouter
+        assert Application.get_env(:golem, :executor_model) == "qwen/qwen-2.5-coder-32b-instruct"
+      end)
+    end
+
+    test "GOLEM_*_PROVIDER env var overrides yaml provider" do
+      write_config("""
+      models:
+        executor:
+          provider: anthropic
+          model: claude-sonnet-4-6
+      """)
+
+      System.put_env("GOLEM_EXECUTOR_PROVIDER", "openrouter")
+
+      with_config_path(fn ->
+        Config.load()
+        assert Application.get_env(:golem, :executor_provider) == :openrouter
+        # Model from yaml is preserved.
+        assert Application.get_env(:golem, :executor_model) == "claude-sonnet-4-6"
+      end)
+    end
+
+    test "unknown provider in yaml falls back to :anthropic with a warning" do
+      write_config("""
+      models:
+        executor:
+          provider: bogus
+          model: foo
+      """)
+
+      with_config_path(fn ->
+        Config.load()
+        assert Application.get_env(:golem, :executor_provider) == :anthropic
+        assert Application.get_env(:golem, :executor_model) == "foo"
+      end)
+    end
+  end
+
+  describe "load/0 — providers block" do
+    test "anthropic.api_key_env override is applied" do
+      write_config("""
+      providers:
+        anthropic:
+          api_key_env: MY_ANTHROPIC_KEY
+      """)
+
+      with_config_path(fn ->
+        Config.load()
+        assert Application.get_env(:golem, :anthropic_api_key_env) == "MY_ANTHROPIC_KEY"
+      end)
+    end
+
+    test "openrouter.api_key_env and base_url overrides are applied" do
+      write_config("""
+      providers:
+        openrouter:
+          api_key_env: MY_OR_KEY
+          base_url: https://openrouter.example.com/api/v1
+      """)
+
+      with_config_path(fn ->
+        Config.load()
+        assert Application.get_env(:golem, :openrouter_api_key_env) == "MY_OR_KEY"
+        assert Application.get_env(:golem, :openrouter_base_url) == "https://openrouter.example.com/api/v1"
+      end)
     end
   end
 end

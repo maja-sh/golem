@@ -12,7 +12,7 @@ else
 fi
 
 CONTAINER_NAME="${1:-golem-vm}"
-IMAGE="${2:-golem-vm:latest}"
+IMAGE="${2:-localhost/golem-vm:latest}"
 
 # Check if container already exists
 if $RUNTIME container inspect "$CONTAINER_NAME" &>/dev/null; then

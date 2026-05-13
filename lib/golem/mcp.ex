@@ -118,7 +118,7 @@ defmodule Golem.MCP do
 
   # --- Config ---
 
-  # Config source: `.golem/config.yml` under the `mcp.servers` key.
+  # Config source: `.golem/config.yaml` under the `mcp.servers` key.
   # No servers configured = empty list (not an error).
   defp load_config do
     case Golem.Config.raw_yaml() |> get_in(["mcp", "servers"]) do

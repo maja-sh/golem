@@ -268,11 +268,15 @@ defmodule Golem.TUI do
   def init(_opts) do
     {:ok, %{
       active: false, cost: "$0.0000", step: 0, max_steps: 0,
-      progress: [], action: nil, status_lines: 0,
+      progress: [], action: nil,
       pending_batch: [],
       retry: nil,
       started_at: nil, spinner_idx: 0, verb: Enum.random(@forge_verbs),
-      ticker: nil, last_output: nil, sub_agent_depth: 0
+      ticker: nil, last_output: nil, sub_agent_depth: 0,
+      # Whether PinnedStatus is currently running. Started lazily on
+      # init_display and stopped in :stop. status_lines is no longer
+      # tracked here — PinnedStatus handles diff-render internally.
+      pinned: false
     }}
   end
 
@@ -280,8 +284,8 @@ defmodule Golem.TUI do
   def handle_call({:init, _run_id, _goal}, _from, %{active: true} = state) do
     # Idempotent: the Jira integration calls init_display early so the
     # status bar is visible during fetch/eval/setup, and Runner.run
-    # calls it again when the agent loop starts. Re-printing the
-    # header and restarting the ticker would corrupt the TUI.
+    # calls it again when the agent loop starts. Re-starting
+    # PinnedStatus + restarting the ticker would corrupt the TUI.
     {:reply, :ok, state}
   end
 
@@ -291,24 +295,26 @@ defmodule Golem.TUI do
     for id <- :logger.get_handler_ids(), id != :golem_file do
       :logger.set_handler_config(id, :level, :none)
     end
-    IO.write("\e[?25l")  # Hide cursor
-    width = terminal_width() - 4
-    goal_lines =
-      goal
-      |> String.split("\n", trim: true)
-      |> Enum.take(5)
-      |> Enum.flat_map(&wrap_text(&1, width))
-      |> Enum.map(fn line -> IO.ANSI.format([:faint, "  #{line}", :reset]) end)
 
-    IO.puts("")
-    IO.puts(IO.ANSI.format([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset]))
-    Enum.each(goal_lines, &IO.puts/1)
-    IO.puts("")
+    {:ok, _pid} = PinnedStatus.start_link()
+
+    width = terminal_width() - 4
+
+    println([])
+    println([:cyan, "● ", :reset, :bright, "Forge ", :reset, :faint, run_id, :reset])
+
+    goal
+    |> String.split("\n", trim: true)
+    |> Enum.take(5)
+    |> Enum.flat_map(&wrap_text(&1, width))
+    |> Enum.each(fn line -> println([:faint, "  #{line}", :reset]) end)
+
+    println([])
 
     {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
 
     {:reply, :ok, %{state |
-      active: true, status_lines: 0,
+      active: true, pinned: true,
       started_at: System.monotonic_time(:second),
       verb: Enum.random(@forge_verbs),
       ticker: ticker
@@ -316,15 +322,12 @@ defmodule Golem.TUI do
   end
 
   def handle_call({:print, lines}, _from, state) do
-    state = erase_status(state)
-    Enum.each(lines, &print_line/1)
-    state = draw_status(%{state | last_output: :other})
+    Enum.each(lines, &println/1)
+    state = push_status(%{state | last_output: :other})
     {:reply, :ok, state}
   end
 
   def handle_call({:print, lines, output_type}, _from, state) do
-    state = erase_status(state)
-
     # Add spacing based on what came before
     lines =
       case {output_type, state.last_output} do
@@ -336,57 +339,48 @@ defmodule Golem.TUI do
         _ -> lines
       end
 
-    Enum.each(lines, &print_line/1)
-    state = draw_status(%{state | last_output: output_type})
+    Enum.each(lines, &println/1)
+    state = push_status(%{state | last_output: output_type})
     {:reply, :ok, state}
   end
 
   def handle_call({:print_raw, lines}, _from, state) do
-    state = erase_status(state)
     max_w = terminal_width() - 1
     Enum.each(lines, fn
-      [] -> IO.puts("")
-      [raw] when is_binary(raw) -> IO.puts(truncate_visible(raw, max_w))
-      tokens -> print_line(tokens)
+      [] -> println([])
+      [raw] when is_binary(raw) -> println_raw(truncate_visible(raw, max_w))
+      tokens -> println(tokens)
     end)
-    state = draw_status(state)
+    state = push_status(state)
     {:reply, :ok, state}
   end
 
   def handle_call({:print_and_update, lines, updates}, _from, state) do
-    state = erase_status(state)
-    Enum.each(lines, &print_line/1)
+    Enum.each(lines, &println/1)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
-    state = draw_status(%{state | last_output: :other})
+    state = push_status(%{state | last_output: :other})
     {:reply, :ok, state}
   end
 
   def handle_call({:set_progress, items}, _from, state) do
-    state = erase_status(state)
-    state = %{state | progress: items}
-    state = draw_status(state)
+    state = push_status(%{state | progress: items})
     {:reply, :ok, state}
   end
 
   def handle_call({:batch_start, items}, _from, state) do
-    state = erase_status(state)
-
     pending =
       Enum.map(items, fn %{id: id, name: name, detail: detail} ->
         %{id: id, name: name, detail: detail, status: :pending, elapsed_ms: nil}
       end)
 
     # Blank line before the batch so it visually separates from prior output.
-    if state.pending_batch == [] and pending != [], do: print_line([])
+    if state.pending_batch == [] and pending != [], do: println([])
 
-    state = %{state | pending_batch: pending, action: nil}
-    state = draw_status(state)
+    state = push_status(%{state | pending_batch: pending, action: nil})
     {:reply, :ok, state}
   end
 
   def handle_call({:batch_item_done, id, outcome}, _from, state) do
-    state = erase_status(state)
-
     {status, elapsed_ms} =
       case outcome do
         {:ok, ms} -> {:ok, ms}
@@ -403,68 +397,73 @@ defmodule Golem.TUI do
     state =
       if all_terminal do
         # Promote the completed batch to the scroll buffer so it persists.
-        Enum.each(pending, fn item -> print_line(batch_item_line(item)) end)
+        Enum.each(pending, fn item -> println(batch_item_line(item)) end)
         %{state | pending_batch: [], last_output: :other}
       else
         %{state | pending_batch: pending}
       end
 
-    state = draw_status(state)
+    state = push_status(state)
     {:reply, :ok, state}
   end
 
   def handle_call({:sub_agent_start, label}, _from, state) do
-    state = erase_status(state)
-    print_line([])
-    print_line([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
+    println([])
+    println([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
 
-    # Suppress the main-agent progress checklist while a sub-agent
-    # runs. It doesn't change during verification/sub-tasks and its
-    # continuous redraw was the leading cause of the "stacked
-    # checklist" visual bug during long sub-agent runs.
+    # sub_agent_depth previously suppressed the main-agent checklist to
+    # avoid a "stacked checklist" scrollback artifact caused by the old
+    # erase-then-redraw model. With PinnedStatus' diff-render the
+    # checklist no longer rewrites itself on every tick, so this flag
+    # is kept only for backwards-compat — build_status_lines/1 no
+    # longer reads it. Remove the field next time the struct shape
+    # changes.
     state = %{state | sub_agent_depth: state.sub_agent_depth + 1, last_output: :sub_agent, action: nil}
-    state = draw_status(state)
+    state = push_status(state)
     {:reply, :ok, state}
   end
 
   def handle_call({:sub_agent_end, icon, color, steps}, _from, state) do
-    state = erase_status(state)
-    print_line([])
-    print_line([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
+    println([])
+    println([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
     state = %{state |
       sub_agent_depth: max(state.sub_agent_depth - 1, 0),
       last_output: :sub_agent,
       action: nil
     }
-    state = draw_status(state)
+    state = push_status(state)
     {:reply, :ok, state}
   end
 
   def handle_call({:sub_agent_block, label, entries, success, steps}, _from, state) do
-    state = erase_status(state)
-    print_line([])
-    print_line([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
+    println([])
+    println([:magenta, "  ● Sub-agent: ", :reset, :faint, label, :reset])
 
     Enum.each(entries, fn {tool, detail, _step} ->
       tool_label_text = tool_label(tool, detail) |> trunc(55)
-      print_line([
+      println([
         :faint, "  │ ", :magenta, tool_icon(tool), :reset, :faint, " ", tool_label_text, :reset
       ])
     end)
 
     {icon, color} = if success, do: {"✓", :green}, else: {"✗", :red}
-    print_line([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
+    println([color, "  #{icon} Sub-agent done ", :reset, :faint, "· #{steps} steps", :reset])
 
-    state = draw_status(%{state | last_output: :sub_agent, action: nil})
+    state = push_status(%{state | last_output: :sub_agent, action: nil})
     {:reply, :ok, state}
   end
 
   def handle_call(:stop, _from, state) do
     if state.ticker, do: :timer.cancel(state.ticker)
-    state = erase_status(state)
+
+    if state.pinned do
+      PinnedStatus.set_status([])
+      PinnedStatus.stop()
+    end
+
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
     IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
-    IO.write("\e[?25h")  # Restore cursor
+
     # Re-enable the console handler at :warning. The TUI muted it
     # entirely while the run was active so its scrollback would stay
     # clean; once the run is done we want errors to surface, but
@@ -475,35 +474,31 @@ defmodule Golem.TUI do
     for id <- :logger.get_handler_ids(), id != :golem_file do
       :logger.set_handler_config(id, :level, :warning)
     end
-    {:reply, :ok, %{state | active: false, status_lines: 0, ticker: nil}}
+    {:reply, :ok, %{state | active: false, pinned: false, ticker: nil}}
   end
 
   def handle_call({:confirm_continue, question, _opts}, _from, state) do
-    # Pause the spinner: cancel ticker, erase status block. We re-arm
-    # both after reading input so the run resumes cleanly whether the
-    # user said yes or no. No timeout — the run hangs here until the
-    # operator responds, on the assumption that they may be AFK and
-    # don't want a wrong answer billed to them.
+    # Pause the spinner: cancel ticker so it doesn't fire while we
+    # block on input. PinnedStatus.pause handles the cursor + status
+    # erase, and reattaches the saved status when we return. No
+    # timeout — the run hangs here until the operator responds.
     if state.ticker, do: :timer.cancel(state.ticker)
-    state = erase_status(state)
-
-    IO.write("\e[?25h")  # show cursor
-    IO.puts("")
-    IO.puts(IO.ANSI.format([:yellow, "● ", :reset, :bright, question, :reset]))
-    IO.write(
-      IO.ANSI.format([:faint, "  [y]es to continue, anything else aborts: ", :reset])
-    )
 
     answer =
-      case IO.gets("") do
-        :eof -> :eof
-        line when is_binary(line) -> line |> String.trim() |> String.downcase()
-        _ -> :error
-      end
+      PinnedStatus.pause(fn ->
+        IO.puts("")
+        IO.puts(IO.ANSI.format([:yellow, "● ", :reset, :bright, question, :reset]))
+        IO.write(IO.ANSI.format([:faint, "  [y]es to continue, anything else aborts: ", :reset]))
 
-    IO.write("\e[?25l")  # hide cursor
+        case IO.gets("") do
+          :eof -> :eof
+          line when is_binary(line) -> line |> String.trim() |> String.downcase()
+          _ -> :error
+        end
+      end)
+
     {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
-    state = draw_status(%{state | ticker: ticker})
+    state = push_status(%{state | ticker: ticker})
 
     reply =
       case answer do
@@ -516,30 +511,22 @@ defmodule Golem.TUI do
   end
 
   @impl true
-  def handle_info(:tick, %{active: true, status_lines: n} = state) when n > 0 do
-    state = erase_status(state)
-    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
-    state = draw_status(state)
-    {:noreply, state}
-  end
-
   def handle_info(:tick, %{active: true} = state) do
-    {:noreply, %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}}
+    state = %{state | spinner_idx: rem(state.spinner_idx + 1, length(@spinner_frames))}
+    state = push_status(state)
+    {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def handle_cast({:update, updates}, state) do
-    state = erase_status(state)
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
-    state = draw_status(state)
+    state = push_status(state)
     {:noreply, state}
   end
 
   def handle_cast({:api_retry, attempt, max, delay_ms, reason}, state) do
-    state = erase_status(state)
-
     retry = %{
       attempt: attempt,
       max: max,
@@ -548,43 +535,37 @@ defmodule Golem.TUI do
       started_at: System.monotonic_time(:millisecond)
     }
 
-    state = draw_status(%{state | retry: retry})
+    state = push_status(%{state | retry: retry})
     {:noreply, state}
   end
 
   def handle_cast(:api_retry_cleared, state) do
-    state = erase_status(state)
-    state = draw_status(%{state | retry: nil})
+    state = push_status(%{state | retry: nil})
     {:noreply, state}
   end
 
   # --- Status Area ---
   #
-  # The status area is a block of lines pinned at the bottom of the terminal.
-  # It contains the progress checklist and the spinner line.
-  # Before printing any output, erase_status moves the cursor up and clears
-  # the lines. After printing, draw_status redraws them. This ensures the
-  # status area is always at the bottom and never interleaves with output.
+  # The pinned status block lives in PinnedStatus. We build the desired
+  # lines from `state` and hand them off — PinnedStatus diffs against
+  # what's on screen and only rewrites lines that changed. That
+  # eliminates the flicker the old erase-then-redraw model caused
+  # every spinner tick, and means the progress checklist can stay
+  # visible during sub-agent runs (it previously had to be hidden
+  # because the constant redraws leaked duplicates into scrollback).
 
-  defp erase_status(%{status_lines: 0} = state), do: state
-  defp erase_status(%{status_lines: n} = state) do
-    IO.write("\e[#{n}A\e[J")
-    %{state | status_lines: 0}
-  end
-
-  defp draw_status(%{active: false} = state), do: state
-  defp draw_status(state) do
-    lines = build_status_lines(state)
+  defp push_status(%{pinned: false} = state), do: state
+  defp push_status(state) do
     max_w = terminal_width() - 1
-    buf =
-      lines
+
+    lines =
+      build_status_lines(state)
       |> Enum.map(fn line ->
-        formatted = IO.ANSI.format(line) |> IO.chardata_to_string()
-        ["\e[2K", truncate_visible(formatted, max_w)]
+        IO.ANSI.format(line) |> IO.chardata_to_string() |> truncate_visible(max_w)
       end)
-      |> Enum.intersperse("\n")
-    IO.write([buf, "\n"])
-    %{state | status_lines: length(lines)}
+
+    PinnedStatus.set_status(lines)
+    state
   end
 
   defp build_bottom_line(state) do
@@ -598,26 +579,17 @@ defmodule Golem.TUI do
   end
 
   defp build_status_lines(state) do
-    # While a sub-agent is active, skip the progress checklist — the
-    # main agent's items don't change during sub-agent execution, and
-    # the repeated redraws visibly leak copies into scrollback on some
-    # terminals. A single-line status (blank + spinner) is enough and
-    # far more robust.
     progress_lines =
-      if state.sub_agent_depth > 0 do
-        []
-      else
-        Enum.map(state.progress, fn item ->
-          {icon, color} = case item.status do
-            :completed -> {"✓", :green}
-            :done -> {"✓", :faint}
-            :in_progress -> {"→", :yellow}
-            :pending -> {"·", :faint}
-          end
-          style = if item.status in [:pending, :done], do: :faint, else: :white
-          [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
-        end)
-      end
+      Enum.map(state.progress, fn item ->
+        {icon, color} = case item.status do
+          :completed -> {"✓", :green}
+          :done -> {"✓", :faint}
+          :in_progress -> {"→", :yellow}
+          :pending -> {"·", :faint}
+        end
+        style = if item.status in [:pending, :done], do: :faint, else: :white
+        [:faint, " [", color, icon, :reset, :faint, "] ", :reset, style, wtrunc(item.text, 6), :reset]
+      end)
 
     # Only render the pending-batch block when there are at least 2
     # items. A 1-item "batch" is just a single tool call and already
@@ -680,10 +652,24 @@ defmodule Golem.TUI do
 
   # --- Helpers ---
 
-  defp print_line([]), do: IO.puts("")
-  defp print_line(tokens) do
+  # Emit one scroll-buffer line above the pinned status area. iodata
+  # is formatted, truncated to terminal width, and forwarded to
+  # PinnedStatus.println — which handles erasing + redrawing the
+  # pinned block around the new content. When PinnedStatus isn't
+  # running (e.g. before init_display), falls back to plain IO.
+  defp println([]), do: maybe_println("")
+  defp println(tokens) do
     formatted = IO.ANSI.format(tokens) |> IO.chardata_to_string()
-    IO.puts(truncate_visible(formatted, terminal_width() - 1))
+    maybe_println(truncate_visible(formatted, terminal_width() - 1))
+  end
+
+  defp println_raw(text), do: maybe_println(text)
+
+  defp maybe_println(text) do
+    case Process.whereis(PinnedStatus) do
+      nil -> IO.puts(text)
+      _ -> PinnedStatus.println(text)
+    end
   end
 
   # Truncate a string containing ANSI escapes to a visible width.

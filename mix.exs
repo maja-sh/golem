@@ -37,7 +37,8 @@ defmodule Golem.MixProject do
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:dotenv, "~> 3.0", only: [:dev, :test]},
-      {:yaml_elixir, "~> 2.9"}
+      {:yaml_elixir, "~> 2.9"},
+      {:pinned_status, path: "pinned_status"}
     ]
   end
 end

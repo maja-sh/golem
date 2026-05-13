@@ -132,7 +132,7 @@ defmodule Golem.Sandbox do
   def init(_opts) do
     Process.flag(:trap_exit, true)
     container = Application.get_env(:golem, :container, "golem-vm")
-    image = Application.get_env(:golem, :container_image, "golem-vm:latest")
+    image = Application.get_env(:golem, :container_image, "localhost/golem-vm:latest")
     Logger.debug("Sandbox initialized, container: #{container}")
 
     # Auto-provision the container on boot so the user never has to
@@ -150,7 +150,7 @@ defmodule Golem.Sandbox do
   #
   # Replicates the essential parts of containers/start.sh so the user
   # doesn't need to run it manually. Idempotent. Mounts and env vars
-  # come from .golem/config.yml — nothing about SSH, gcloud, or other
+  # come from .golem/config.yaml — nothing about SSH, gcloud, or other
   # secrets is hardcoded in this file.
   defp ensure_container(name, image) do
     runtime = Golem.Runtime.cmd()
@@ -320,7 +320,7 @@ defmodule Golem.Sandbox do
   end
 
   # Build `-v host:container[:ro]` args from the `container.mounts`
-  # list in .golem/config.yml. Missing `src` paths are silently
+  # list in .golem/config.yaml. Missing `src` paths are silently
   # skipped unless the entry has `required: true`.
   defp build_mount_args do
     mounts = Golem.Config.raw_yaml() |> get_in(["container", "mounts"]) || []
@@ -525,9 +525,14 @@ defmodule Golem.Sandbox do
     case state.mode do
       {:exec, ^ref, from, _timer, stall_timer} ->
         cancel_stall_timer(stall_timer)
-        Logger.warning("Sandbox exec timed out, partial output: #{byte_size(state.buffer)} bytes")
+        Logger.warning("Sandbox exec timed out, partial output: #{byte_size(state.buffer)} bytes — recycling bash port")
         GenServer.reply(from, {:error, {:timeout, state.buffer}})
-        {:noreply, %{state | buffer: "", mode: :idle, stall_ms: nil}}
+        # The stuck command is still running inside bash. If we leave
+        # the port open, bash will sit behind it forever and every
+        # subsequent exec will queue waiting for sentinels that never
+        # come. Close the port so the next exec gets a fresh bash.
+        state = close_port(state)
+        {:noreply, %{state | stall_ms: nil}}
 
       _ ->
         {:noreply, state}
@@ -539,14 +544,20 @@ defmodule Golem.Sandbox do
       {:exec, ^ref, from, timer, _stall_timer} ->
         Process.cancel_timer(timer)
         stall_s = if is_integer(state.stall_ms), do: div(state.stall_ms, 1000), else: "?"
-        Logger.warning("Sandbox exec stalled — no output for #{stall_s}s, partial: #{byte_size(state.buffer)} bytes")
+        Logger.warning("Sandbox exec stalled — no output for #{stall_s}s, partial: #{byte_size(state.buffer)} bytes — recycling bash port")
         GenServer.reply(from, {:error, {:stall_timeout, state.buffer}})
-        {:noreply, %{state | buffer: "", mode: :idle, stall_ms: nil}}
+        # See note in :exec_timeout — same reason for closing the port.
+        state = close_port(state)
+        {:noreply, %{state | stall_ms: nil}}
 
       _ ->
         {:noreply, state}
     end
   end
+
+  # Stale messages from a port we've already closed (late {:data, _}
+  # or {:exit_status, _} from a recycled bash). Drop silently.
+  def handle_info(_msg, state), do: {:noreply, state}
 
   # --- Private ---
 

@@ -29,11 +29,11 @@ mv golem /usr/local/bin/        # always on PATH, may need sudo
 mv golem ~/bin/                  # add `export PATH="$HOME/bin:$PATH"` to your shell rc if it's not already there
 
 # 3. Configure project + workspace. Either a project-local
-#    `./.golem/config.yml` (preferred when iterating in a clone) or
-#    `~/.golem/config.yml` (preferred for the binary, since you can
+#    `./.golem/config.yaml` (preferred when iterating in a clone) or
+#    `~/.golem/config.yaml` (preferred for the binary, since you can
 #    `golem run` from anywhere).
-mkdir -p ~/.golem && cp .golem/config.example.yml ~/.golem/config.yml
-$EDITOR ~/.golem/config.yml
+mkdir -p ~/.golem && cp .golem/config.example.yaml ~/.golem/config.yaml
+$EDITOR ~/.golem/config.yaml
 
 # 4. Export secrets in your shell rc (~/.zshrc, ~/.bashrc) — the
 #    binary reads them from the environment, never from a file.
@@ -48,7 +48,7 @@ golem doctor
 
 That's it. The container and image are provisioned automatically on the first `golem run` — no manual `podman build` step. The Dockerfile + entrypoint are embedded in the binary, so the image build works wherever `golem` runs from.
 
-The config-file lookup checks `./.golem/config.yml` first, then `~/.golem/config.yml`. Drop your config in whichever fits your workflow.
+The config-file lookup checks `./.golem/config.yaml` first, then `~/.golem/config.yaml`. Drop your config in whichever fits your workflow.
 
 ### Onboarding checklist
 
@@ -60,8 +60,8 @@ To get a coworker from zero to `golem run --jira SA-1111`:
 - [ ] `ANTHROPIC_API_KEY` exported in their shell
 - [ ] `JIRA_EMAIL` + `JIRA_API_TOKEN` exported (Atlassian API token, scopes: `read:jira-work`, `write:jira-work`)
 - [ ] `BITBUCKET_API_TOKEN` exported (Bitbucket app password, scopes: Repositories Read+Write, Pull requests Write)
-- [ ] An SSH key in `ssh/id_ed25519` (next to their `config.yml`) with the public key registered on Bitbucket — see *Git access* below
-- [ ] A filled-in `.golem/config.yml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
+- [ ] An SSH key in `ssh/id_ed25519` (next to their `config.yaml`) with the public key registered on Bitbucket — see *Git access* below
+- [ ] A filled-in `.golem/config.yaml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
 - [ ] `golem doctor` returns all green
 
 Then `golem run --jira SA-1111` works end-to-end on the first invocation. The first run is slow because the container image builds once.
@@ -75,7 +75,7 @@ git clone <this repo>
 cd penbot
 mix deps.get
 cp .env.example .env && $EDITOR .env
-cp .golem/config.example.yml .golem/config.yml
+cp .golem/config.example.yaml .golem/config.yaml
 mix golem.doctor
 ```
 
@@ -93,11 +93,11 @@ Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, t
 | `GIT_USER` | No | Git commit author name (forwarded into container) |
 | `GIT_EMAIL` | No | Git commit author email (forwarded into container) |
 
-All `GOLEM_*` env vars (listed in the table below) override settings from `.golem/config.yml`.
+All `GOLEM_*` env vars (listed in the table below) override settings from `.golem/config.yaml`.
 
 ### Configuration — one file, everything
 
-Everything non-secret lives in **`.golem/config.yml`**. There's no separate `projects.yml` / `jira.yml` / `mcp.yml` — they were consolidated. See `.golem/config.example.yml` for a fully-annotated template.
+Everything non-secret lives in **`.golem/config.yaml`**. There's no separate `projects.yml` / `jira.yml` / `mcp.yml` — they were consolidated. See `.golem/config.example.yaml` for a fully-annotated template.
 
 Top-level keys:
 
@@ -115,7 +115,7 @@ mcp:         # external tool servers
 **Precedence** (highest first):
 
 1. `GOLEM_*` environment variable — per-shell override for CI/ops
-2. `.golem/config.yml` — your config
+2. `.golem/config.yaml` — your config
 3. Built-in default in `lib/golem/application.ex`
 
 Run `golem config` to see the resolved scalar values + where each came from. Run `golem doctor` for a full health check (YAML parse, mount paths exist, container reachable, tokens set, MCP servers responsive, etc.).
@@ -124,9 +124,14 @@ Run `golem config` to see the resolved scalar values + where each came from. Run
 
 | YAML key | Env var | Default | Description |
 |---|---|---|---|
-| `models.planner` | `GOLEM_PLANNER_MODEL` | `claude-opus-4-7` | Model used to plan and revise |
-| `models.executor` | `GOLEM_EXECUTOR_MODEL` | `claude-sonnet-4-6` | Model used to execute steps. Default is Sonnet — ~5× cheaper and faster than Opus, reliable on repetitive read/edit/test loops. Switch to `claude-opus-4-7` if you see quality regressions. |
+| `models.planner.model` | `GOLEM_PLANNER_MODEL` | `claude-opus-4-7` | Model used to plan and revise. Each role under `models:` is a map of `provider` + `model`. |
+| `models.planner.provider` | `GOLEM_PLANNER_PROVIDER` | `anthropic` | Provider for the planner role. One of `anthropic`, `openrouter`. |
+| `models.executor.model` | `GOLEM_EXECUTOR_MODEL` | `claude-sonnet-4-6` | Model used to execute steps. Default is Sonnet — ~5× cheaper and faster than Opus, reliable on repetitive read/edit/test loops. Switch to `claude-opus-4-7` if you see quality regressions. |
+| `models.executor.provider` | `GOLEM_EXECUTOR_PROVIDER` | `anthropic` | Provider for the executor role. |
 | `models.compaction` | `GOLEM_COMPACTION_MODEL` | (uses executor) | Model used to summarize context during compaction |
+| `providers.anthropic.api_key_env` | — | `ANTHROPIC_API_KEY` | Env var to read the Anthropic key from |
+| `providers.openrouter.api_key_env` | — | `OPENROUTER_API_KEY` | Env var to read the OpenRouter key from |
+| `providers.openrouter.base_url` | — | `https://openrouter.ai/api/v1` | Override for self-hosted OpenRouter gateways |
 | `limits.max_steps` | `GOLEM_MAX_STEPS` | `200` | Hard step ceiling for a run |
 | `limits.max_cost` | `GOLEM_MAX_COST` | `10.0` | Cost ceiling in USD |
 | `limits.thinking_budget` | `GOLEM_THINKING_BUDGET` | unset | Extended thinking budget. **Caveat**: enabling this on Opus 4.7 disables prompt caching — each call creates a fresh cache entry. Leave unset unless reasoning quality matters more than the ~90% input-token discount. |
@@ -135,8 +140,10 @@ Run `golem config` to see the resolved scalar values + where each came from. Run
 | `limits.planner_max_tokens` | `GOLEM_PLANNER_MAX_TOKENS` | `16000` | Max tokens per planner response |
 | `limits.planner_max_steps` | `GOLEM_PLANNER_MAX_STEPS` | `75` | Step cap for the planner phase |
 | `limits.executor_max_tokens` | `GOLEM_EXECUTOR_MAX_TOKENS` | `16000` | Max tokens per executor response |
+| `limits.context_window` | `GOLEM_CONTEXT_WINDOW` | `200000` | Total prompt budget per model call. Raising above 200K auto-enables Anthropic's 1M-context beta (`anthropic-beta: context-1m-2025-08-07`); tokens past 200K bill at 2× input. Compaction triggers at `context_window − 15000`. |
+| `jira.comment_on_ticket` | `GOLEM_JIRA_COMMENT_ON_TICKET` | `true` | Post status comments on the Jira ticket (evaluation, success, failure, paused, error). Set to `false` to keep the ticket activity stream clean while still pushing PRs. |
 | `container.name` | `GOLEM_CONTAINER` | `golem-vm` | Podman/docker container name |
-| `container.image` | `GOLEM_CONTAINER_IMAGE` | `golem-vm:latest` | Image used to create the container |
+| `container.image` | `GOLEM_CONTAINER_IMAGE` | `localhost/golem-vm:latest` | Image used to create the container |
 | `container.user` | `GOLEM_CONTAINER_USER` | `agent` | Default setup-step user |
 
 #### `container.mounts` — host → container volume mounts
@@ -255,7 +262,7 @@ mkdir -p ssh
 ssh-keygen -t ed25519 -f ssh/id_ed25519 -N "" -C "golem-bot"
 ```
 
-Add the public key (`ssh/id_ed25519.pub`) to your GitHub/Bitbucket account. The `ssh/` directory is gitignored — keys stay local. The default `container.mounts` block in `config.example.yml` already mounts `ssh/` read-only into `/home/agent/.ssh`, so no container rebuild needed — just recreate:
+Add the public key (`ssh/id_ed25519.pub`) to your GitHub/Bitbucket account. The `ssh/` directory is gitignored — keys stay local. The default `container.mounts` block in `config.example.yaml` already mounts `ssh/` read-only into `/home/agent/.ssh`, so no container rebuild needed — just recreate:
 
 ```bash
 podman rm -f golem-vm   # next `golem run` will recreate with the new mount
@@ -396,7 +403,7 @@ Unit tests cover pure logic (`Golem.Runner.Compaction`, `Golem.Runner.Triggers`,
 - **Dual model**: Opus plans, Sonnet executes. `think(request_replan: true)` triggers re-planning.
 - **Verification gate**: When the agent calls `done`, the runner runs compile+test and spawns an adversarial verification sub-agent before accepting.
 - **Prompt cache split**: Static instructions are cached across turns; dynamic content (errors, AGENTS.md) doesn't break the cache.
-- **Microcompaction**: Old tool results are cleared every turn; full LLM-powered compaction at 40 messages.
+- **Context compaction**: Full LLM-powered summary triggered only when estimated tokens get within 15K of the configured `limits.context_window`. Old tool_results are kept verbatim — clearing them caused re-read loops.
 - **Read-only parallelism**: Concurrent-safe tools (grep, glob, read_file) run in parallel; mutating tools run serially.
 - **Fuzzy edit matching**: Whitespace-normalized fallback when exact `old_string` match fails.
 - **Sub-agents**: Isolated context, 50-step cap, depth capped at 3.

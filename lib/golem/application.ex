@@ -3,7 +3,7 @@ defmodule Golem.Application do
 
   @impl true
   def start(_type, _args) do
-    # Load user config from .golem/config.yml and GOLEM_* env vars first.
+    # Load user config from .golem/config.yaml and GOLEM_* env vars first.
     # ensure_defaults/0 only fills in keys that are still unset, so anything
     # the user configured takes precedence over the hard-coded fallbacks.
     Golem.Config.load()
@@ -29,6 +29,8 @@ defmodule Golem.Application do
     children = [
       Golem.Sandbox,
       Golem.FileCache,
+      # Golem.TUI lazy-starts PinnedStatus inside init_display so the
+      # cursor isn't hidden for non-TUI mix tasks like `mix golem.config`.
       Golem.TUI,
       Golem.MCP
     ]
@@ -40,13 +42,26 @@ defmodule Golem.Application do
   defp ensure_defaults do
     defaults = [
       container: "golem-vm",
-      container_image: "golem-vm:latest",
+      container_image: "localhost/golem-vm:latest",
       container_user: "agent",
       planner_model: "claude-opus-4-7",
+      planner_provider: :anthropic,
       executor_model: "claude-sonnet-4-6",
+      executor_provider: :anthropic,
+      compaction_provider: :anthropic,
       planner_max_tokens: 16_000,
       planner_max_steps: 75,
       executor_max_tokens: 16_000,
+      # Total prompt budget per model call. 200_000 is the standard
+      # context for Sonnet 4.6 / Opus 4.7. Setting this above 200_000
+      # automatically enables Anthropic's 1M-context beta and incurs
+      # 2× input pricing on tokens above the 200K mark.
+      context_window: 200_000,
+      # Whether to post status comments on the Jira ticket — accept/reject
+      # evaluation, success, failure, paused, and error outcomes. Set to
+      # false in `.golem/config.yaml` (`jira.comment_on_ticket: false`)
+      # to keep the ticket history clean and have Golem operate silently.
+      jira_comment_on_ticket: true,
       # Extended thinking. With Opus 4.7 and later, thinking.type: "adaptive"
       # breaks prompt caching — every call creates a fresh cache entry, wiping
       # out the ~90% input savings. Leave disabled unless a specific run needs

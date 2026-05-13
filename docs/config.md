@@ -1,6 +1,6 @@
 # Configuration Reference
 
-User-facing config lives in `.golem/config.yml` (see `.golem/config.example.yml` for the template). `Golem.Config.load/0` runs at application boot and merges three layers in precedence order: `GOLEM_*` env vars → `.golem/config.yml` → built-in defaults in `Golem.Application.ensure_defaults/0`.
+User-facing config lives in `.golem/config.yaml` (see `.golem/config.example.yaml` for the template). `Golem.Config.load/0` runs at application boot and merges three layers in precedence order: `GOLEM_*` env vars → `.golem/config.yaml` → built-in defaults in `Golem.Application.ensure_defaults/0`.
 
 Run `mix golem.config` to print the resolved values and their source.
 
@@ -21,6 +21,27 @@ limits:
   planner_max_tokens: 16000      # GOLEM_PLANNER_MAX_TOKENS
   planner_max_steps: 75          # GOLEM_PLANNER_MAX_STEPS
   executor_max_tokens: 16000     # GOLEM_EXECUTOR_MAX_TOKENS
+  context_window: 200000         # GOLEM_CONTEXT_WINDOW
+
+providers:                       # Per-provider settings (all optional)
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+
+# Each role is a map of `provider` + `model`.
+#
+# models:
+#   planner:
+#     provider: anthropic
+#     model: claude-opus-4-7
+#   executor:
+#     provider: openrouter
+#     model: qwen/qwen-2.5-coder-32b-instruct
+
+jira:
+  comment_on_ticket: true        # GOLEM_JIRA_COMMENT_ON_TICKET
 
 container:
   name: golem-vm                 # GOLEM_CONTAINER
@@ -31,7 +52,7 @@ Adding a new setting: append a row to `@settings` in `lib/golem/config.ex` (yaml
 
 ## Project Config
 
-Project setup lives under the `projects:` block in `.golem/config.yml`:
+Project setup lives under the `projects:` block in `.golem/config.yaml`:
 
 ```yaml
 bitbucket:
@@ -85,7 +106,7 @@ Test the setup with `mix golem.setup` — clones all repos into the container an
 
 ## MCP Servers
 
-External tool servers are configured under the `mcp:` block in `.golem/config.yml`:
+External tool servers are configured under the `mcp:` block in `.golem/config.yaml`:
 
 ### stdio transport (local subprocess)
 

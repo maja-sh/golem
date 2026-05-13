@@ -27,8 +27,10 @@ defmodule Golem.Runner.Planner do
   `{:error, reason}`.
   """
   def create_plan(goal, opts) do
-    explore_model = Application.get_env(:golem, :executor_model)   # Sonnet for exploration
-    plan_model = Application.get_env(:golem, :planner_model)       # Opus for final plan
+    explore_model = Application.get_env(:golem, :executor_model)
+    explore_provider = Application.get_env(:golem, :executor_provider, :anthropic)
+    plan_model = Application.get_env(:golem, :planner_model)
+    plan_provider = Application.get_env(:golem, :planner_provider, :anthropic)
     max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
     tools = Golem.Tools.for_planner()
@@ -44,8 +46,14 @@ defmodule Golem.Runner.Planner do
       %{role: "user", content: Golem.Prompt.planner_initial_message(goal, attachment_blocks)}
     ]
 
-    planner_ctx = %{seen_agents_md: MapSet.new(), explore_model: explore_model, plan_model: plan_model}
-    planner_loop(messages, explore_model, max_tokens, thinking_budget, tools, system, costs, planner_ctx, 1)
+    planner_ctx = %{
+      seen_agents_md: MapSet.new(),
+      explore_model: explore_model,
+      explore_provider: explore_provider,
+      plan_model: plan_model,
+      plan_provider: plan_provider
+    }
+    planner_loop(messages, explore_model, explore_provider, max_tokens, thinking_budget, tools, system, costs, planner_ctx, 1)
   end
 
   @doc """
@@ -54,6 +62,7 @@ defmodule Golem.Runner.Planner do
   """
   def replan(goal, current_plan, reasoning, recent_history) do
     model = Application.get_env(:golem, :planner_model)
+    provider = Application.get_env(:golem, :planner_provider, :anthropic)
     max_tokens = Application.get_env(:golem, :planner_max_tokens, 4096)
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
 
@@ -63,7 +72,8 @@ defmodule Golem.Runner.Planner do
       %{role: "user", content: message}
     ]
 
-    case Golem.Claude.call(messages,
+    case Golem.LLM.call(messages,
+           provider: provider,
            model: model,
            max_tokens: max_tokens,
            system: Golem.Prompt.planner_system(),
@@ -79,26 +89,27 @@ defmodule Golem.Runner.Planner do
   defp read_project_agents_md(nil), do: nil
   defp read_project_agents_md(agents_md) when is_binary(agents_md), do: agents_md
 
-  defp planner_loop(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
+  defp planner_loop(messages, model, provider, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
     max = Map.get(ctx, :extended_max_steps) || Application.get_env(:golem, :planner_max_steps, 75)
 
     if step > max do
       case Golem.Runner.prompt_extend(:planner, max, costs) do
         {:continue, new_max} ->
           ctx = Map.put(ctx, :extended_max_steps, new_max)
-          planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
+          planner_step(messages, model, provider, max_tokens, thinking_budget, tools, system, costs, ctx, step)
 
         :abort ->
           {:error, :planner_max_steps}
       end
     else
-      planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step)
+      planner_step(messages, model, provider, max_tokens, thinking_budget, tools, system, costs, ctx, step)
     end
   end
 
-  defp planner_step(messages, model, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
+  defp planner_step(messages, model, provider, max_tokens, thinking_budget, tools, system, costs, ctx, step) do
 
-    result = Golem.Claude.call(messages,
+    result = Golem.LLM.call(messages,
+      provider: provider,
       model: model,
       max_tokens: max_tokens,
       system: system,
@@ -119,7 +130,7 @@ defmodule Golem.Runner.Planner do
           %{input: %{"plan" => sonnet_plan}} ->
             # Hand off to Opus for the final plan, using Sonnet's draft as input
             output().planning("Creating plan with Opus...")
-            finalize_plan(messages, sonnet_plan, ctx.plan_model, max_tokens, thinking_budget, system, costs)
+            finalize_plan(messages, sonnet_plan, ctx.plan_model, ctx.plan_provider, max_tokens, thinking_budget, system, costs)
 
           nil ->
             # Execute read-only tools and continue the loop
@@ -143,7 +154,7 @@ defmodule Golem.Runner.Planner do
               %{role: "user", content: result_content}
             ]
 
-            planner_loop(updated, model, max_tokens, thinking_budget, tools, system, costs, ctx, step + 1)
+            planner_loop(updated, model, provider, max_tokens, thinking_budget, tools, system, costs, ctx, step + 1)
         end
 
       # No tool calls — planner responded with text only (legacy behavior)
@@ -164,7 +175,7 @@ defmodule Golem.Runner.Planner do
   end
 
   # One Opus call with full context to produce the final plan
-  defp finalize_plan(messages, sonnet_plan, model, max_tokens, thinking_budget, system, costs) do
+  defp finalize_plan(messages, sonnet_plan, model, provider, max_tokens, thinking_budget, system, costs) do
     final_messages = messages ++ [
       %{role: "user", content: """
       The exploration phase is complete. Here is a draft plan based on what was found:
@@ -176,7 +187,8 @@ defmodule Golem.Runner.Planner do
       """}
     ]
 
-    case Golem.Claude.call(final_messages,
+    case Golem.LLM.call(final_messages,
+           provider: provider,
            model: model,
            max_tokens: max_tokens,
            system: system,

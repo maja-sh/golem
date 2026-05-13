@@ -349,23 +349,28 @@ defmodule Golem.Runner do
     agents_md = Map.get(state, :agents_md)
     system = Golem.Prompt.executor_system(errors, agents_md)
 
-    # Escalate to Opus when stuck, drop back after a few steps
-    model =
+    # Escalate to the planner model when stuck, drop back after a few
+    # steps. The planner is typically a stronger (and pricier) model
+    # than the executor — Opus 4.7 in the default config.
+    {model, provider} =
       if Map.get(state, :escalated_until, 0) > step do
-        Application.get_env(:golem, :planner_model)
+        {
+          Application.get_env(:golem, :planner_model),
+          Application.get_env(:golem, :planner_provider, :anthropic)
+        }
       else
-        Application.get_env(:golem, :executor_model)
+        {
+          Application.get_env(:golem, :executor_model),
+          Application.get_env(:golem, :executor_provider, :anthropic)
+        }
       end
 
     max_tokens = Application.get_env(:golem, :executor_max_tokens, 8000)
     thinking_budget = Application.get_env(:golem, :thinking_budget, 10_000)
     tools = Golem.Tools.for_depth(state.depth)
 
-    # Microcompact: clear bulky tool results from older messages
-    messages = microcompact(state.messages)
-
     # Snip: cheap middle-out removal before expensive LLM summary
-    messages = snip_messages(messages)
+    messages = snip_messages(state.messages)
 
     # Trim: full LLM summary as last resort
     messages = trim_messages(messages)
@@ -377,7 +382,8 @@ defmodule Golem.Runner do
 
     llm_start = System.monotonic_time(:millisecond)
 
-    result = Golem.Claude.call(messages,
+    result = Golem.LLM.call(messages,
+      provider: provider,
       model: model,
       max_tokens: max_tokens,
       system: system,
@@ -1038,81 +1044,6 @@ defmodule Golem.Runner do
     end
   end
 
-  # --- Microcompaction ---
-
-  # Selectively compress bulky tool results from older messages.
-  # Keeps the last @micro_keep_recent messages untouched. For older messages,
-  # replaces large tool_result content with a compact signature that preserves
-  # tool name, input summary, success/exit code, and result size. This keeps
-  # the model's memory of "what did I already try?" so it doesn't re-run
-  # failing commands just because the raw output was cleared.
-  @micro_keep_recent 6
-  @micro_clearable_tools ~w(shell read_file grep glob web_search web_fetch list_directory browse)
-  @micro_min_size 200
-
-  defp microcompact(messages) when length(messages) <= @micro_keep_recent, do: messages
-
-  defp microcompact(messages) do
-    split_at = max(0, length(messages) - @micro_keep_recent)
-    {old, recent} = Enum.split(messages, split_at)
-
-    # Build a map of tool_use_id → {tool_name, input_summary}
-    tool_index = build_tool_index(old)
-
-    Enum.map(old, &microcompact_message(&1, tool_index)) ++ recent
-  end
-
-  defp build_tool_index(messages) do
-    messages
-    |> Enum.filter(&(&1.role == "assistant"))
-    |> Enum.flat_map(fn msg ->
-      case msg.content do
-        blocks when is_list(blocks) ->
-          Enum.flat_map(blocks, fn
-            %{type: "tool_use", id: id, name: name} = b ->
-              [{id, %{name: name, input: Map.get(b, :input, %{})}}]
-            %{"type" => "tool_use", "id" => id, "name" => name} = b ->
-              [{id, %{name: name, input: Map.get(b, "input", %{})}}]
-            _ -> []
-          end)
-        _ -> []
-      end
-    end)
-    |> Map.new()
-  end
-
-  defp microcompact_message(%{role: "user", content: content} = msg, tool_index) when is_list(content) do
-    %{msg | content: Enum.map(content, &maybe_clear_tool_result(&1, tool_index))}
-  end
-
-  defp microcompact_message(msg, _tool_index), do: msg
-
-  defp maybe_clear_tool_result(%{type: "tool_result", content: content} = block, tool_index) when is_binary(content) do
-    id = Map.get(block, :tool_use_id) || Map.get(block, "tool_use_id")
-    entry = Map.get(tool_index, id)
-
-    if byte_size(content) > @micro_min_size and entry && entry.name in @micro_clearable_tools do
-      %{block | content: build_cleared_signature(entry, content)}
-    else
-      block
-    end
-  end
-
-  defp maybe_clear_tool_result(%{"type" => "tool_result", "content" => content} = block, tool_index) when is_binary(content) do
-    id = Map.get(block, "tool_use_id")
-    entry = Map.get(tool_index, id)
-
-    if byte_size(content) > @micro_min_size and entry && entry.name in @micro_clearable_tools do
-      Map.put(block, "content", build_cleared_signature(entry, content))
-    else
-      block
-    end
-  end
-
-  defp maybe_clear_tool_result(block, _tool_index), do: block
-
-  # Signature builders moved to Golem.Runner.Compaction for testability.
-  defdelegate build_cleared_signature(entry, content), to: Golem.Runner.Compaction
   defdelegate truncate_str(s, max), to: Golem.Runner.Compaction
 
   # --- Snip Compact ---
@@ -1169,34 +1100,37 @@ defmodule Golem.Runner do
 
   # --- Message Management ---
 
-  # Keep conversation manageable. Compact when EITHER:
-  # - Message count exceeds @compact_threshold (prevents very long histories)
-  # - Estimated tokens exceed @compact_token_threshold (prevents context window overflow)
+  # Compaction is lossy (it summarizes old messages via an LLM call) so
+  # it's a last resort. We compact only when the estimated token count
+  # gets close to the configured context_window. A previous version
+  # gated on message count (@compact_threshold = 100) but that fired
+  # every ~30 exploratory turns at ~30K tokens, triggering re-read
+  # loops where the agent would summarize a file and then re-read it
+  # minutes later because the verbatim content was gone.
   #
-  # These are set high intentionally — compaction is lossy and should be a last
-  # resort, not routine. Microcompaction (clearing old tool results) handles the
-  # common case of large outputs without losing conversation structure.
-  @compact_threshold 100
-  @compact_token_threshold 150_000
+  # The 15K buffer mirrors Claude Code's posture (it auto-compacts at
+  # `context_window − 13K`); the extra ~2K leaves headroom for the
+  # model's own response.
+  @compact_window_buffer 15_000
   @compact_keep_recent 30
 
-  defp trim_messages(messages) do
-    msg_count = length(messages)
-    token_est = estimate_tokens(messages)
+  defp compact_token_threshold do
+    Application.get_env(:golem, :context_window, 200_000) - @compact_window_buffer
+  end
 
-    if msg_count <= @compact_threshold and token_est <= @compact_token_threshold do
+  defp trim_messages(messages) do
+    token_est = estimate_tokens(messages)
+    threshold = compact_token_threshold()
+
+    if token_est <= threshold do
       messages
     else
-      reason =
-        if token_est > @compact_token_threshold,
-          do: "token_threshold",
-          else: "message_threshold"
-
       Golem.Events.emit(:compaction, %{
         type: "full",
-        reason: reason,
-        message_count: msg_count,
-        token_estimate: token_est
+        reason: "token_threshold",
+        message_count: length(messages),
+        token_estimate: token_est,
+        threshold: threshold
       })
 
       do_trim_messages(messages)
@@ -1350,9 +1284,15 @@ defmodule Golem.Runner do
       %{role: "user", content: "Here is the tool call log to summarize:\n\n#{input}"}
     ]
 
-    model = Application.get_env(:golem, :executor_model)
+    # Compaction uses its own role so users can route summarization
+    # to a different (typically cheaper) model than the executor.
+    # Falls back to executor model/provider if no compaction role is
+    # configured.
+    model = Application.get_env(:golem, :compaction_model) || Application.get_env(:golem, :executor_model)
+    provider = Application.get_env(:golem, :compaction_provider) || Application.get_env(:golem, :executor_provider, :anthropic)
 
-    case Golem.Claude.call(messages,
+    case Golem.LLM.call(messages,
+           provider: provider,
            model: model,
            max_tokens: 4_000,
            system: @compaction_prompt
@@ -1817,8 +1757,9 @@ defmodule Golem.Runner do
     ]
 
     model = Application.get_env(:golem, :executor_model)
+    provider = Application.get_env(:golem, :executor_provider, :anthropic)
 
-    case Golem.Claude.call(messages, model: model, max_tokens: 200, system: @drift_prompt) do
+    case Golem.LLM.call(messages, provider: provider, model: model, max_tokens: 200, system: @drift_prompt) do
       {:ok, %{text: text}} when is_binary(text) ->
         trimmed = String.trim(text)
 
@@ -1972,36 +1913,11 @@ defmodule Golem.Runner do
 
   # --- Cost Tracking ---
 
-  # Pricing per million tokens (as of 2025)
-  # Pricing per million tokens in USD. Defaults match Anthropic's
-  # public pricing as of 2026-04. Users can override any model in
-  # `.golem/config.yml` under the `pricing:` block — useful if
-  # Anthropic bumps prices between Golem releases, or to model other
-  # providers once multi-provider lands.
-  #
-  # Example override:
-  #
-  #     pricing:
-  #       claude-opus-4-7:
-  #         input: 15.0
-  #         output: 75.0
-  #         cache_read: 1.5
-  #         cache_create: 18.75
-  @default_sonnet_pricing %{input: 3.0, output: 15.0, cache_read: 0.3, cache_create: 3.75}
-  @default_opus_pricing %{input: 15.0, output: 75.0, cache_read: 1.5, cache_create: 18.75}
-
-  defp pricing_for(model) when is_binary(model) do
-    overrides = Golem.Config.raw_yaml() |> get_in(["pricing", model]) || %{}
-    base = if String.contains?(model, "opus"), do: @default_opus_pricing, else: @default_sonnet_pricing
-
-    # Accept both string and atom keys; users will almost always write
-    # strings in YAML. Merge over the matching base so partial
-    # overrides (e.g. just `input:`) work.
-    Enum.reduce(base, %{}, fn {key, default}, acc ->
-      override = overrides[to_string(key)] || overrides[key]
-      Map.put(acc, key, if(is_number(override), do: override * 1.0, else: default))
-    end)
-  end
+  # Pricing is resolved by `Golem.Pricing.for/1`. Lookup chain:
+  # explicit override in `.golem/config.yaml` → built-in Anthropic
+  # defaults → OpenRouter `/api/v1/models` (cached for an hour) → zero
+  # + one-time warning for unknown models. See `lib/golem/pricing.ex`.
+  defp pricing_for(model) when is_binary(model), do: Golem.Pricing.for(model)
 
   @doc """
   Compute the dollar cost of a single Claude.call usage map for the

@@ -3,8 +3,8 @@ defmodule Golem.CLI.Config do
   Print the resolved Golem configuration.
 
   Shows the effective value of each setting along with where it came
-  from (env var, config.yml, or built-in default). Useful for verifying
-  the precedence chain after editing `.golem/config.yml` or exporting
+  from (env var, config.yaml, or built-in default). Useful for verifying
+  the precedence chain after editing `.golem/config.yaml` or exporting
   GOLEM_* env vars.
   """
 
@@ -15,7 +15,7 @@ defmodule Golem.CLI.Config do
 
     IO.puts("")
     IO.puts(IO.ANSI.format([:bright, "Golem config", :reset]))
-    IO.puts(IO.ANSI.format([:faint, "  precedence: env > .golem/config.yml > default", :reset]))
+    IO.puts(IO.ANSI.format([:faint, "  precedence: env > .golem/config.yaml > default", :reset]))
     IO.puts("")
 
     Enum.each(Golem.Config.settings(), fn {yaml_path, app_key, _type, env_var} ->

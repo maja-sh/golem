@@ -6,7 +6,7 @@ Autonomous agent that takes a goal, plans with Claude Opus, and executes with Cl
 
 ```bash
 # One-time setup
-cp .golem/config.example.yml .golem/config.yml   # then edit
+cp .golem/config.example.yaml .golem/config.yaml   # then edit
 cp .env.example .env                              # set ANTHROPIC_API_KEY
 mix golem.doctor                                  # validate config + runtime
 
@@ -45,7 +45,10 @@ Goal → Opus (plan) → Sonnet (execute in loop) → Done
 ```
 
 - **Runner** (`lib/golem/runner.ex`) — Main loop. Plans with Opus, executes with Sonnet, handles re-planning, multi-tool turns, context compaction, state persistence.
-- **Claude** (`lib/golem/claude.ex`) — API client with prompt caching, extended thinking, exponential backoff retry.
+- **LLM** (`lib/golem/llm.ex`) — Provider-agnostic facade. Dispatches to `Golem.Provider` implementations based on the `provider:` opt or role config.
+- **Claude** (`lib/golem/claude.ex`) — Anthropic provider. Prompt caching, extended thinking, 1M-context beta, exponential backoff retry. Implements `Golem.Provider`.
+- **OpenRouter** (`lib/golem/openrouter.ex`) — OpenAI-compatible provider for Qwen / DeepSeek / Llama / etc. Translates the Anthropic-flavored message + tool shapes both ways. No extended thinking, no prompt caching.
+- **Pricing** (`lib/golem/pricing.ex`) — Per-model `$/million tokens` lookup. Chain: explicit `pricing:` config override → built-in Anthropic defaults → OpenRouter `/api/v1/models` (fetched once, cached an hour) → zero + one-time warning. Provider detected from the model-name shape (`claude-*` → Anthropic, `vendor/model` → OpenRouter).
 - **Sandbox** (`lib/golem/sandbox.ex`) — GenServer wrapping `podman exec` with sentinel-based output parsing.
 - **Tools** (`lib/golem/tools.ex`) — Tool definitions for Claude's tool use API. `for_depth/1` controls sub-agent nesting.
 - **ToolHandler** (`lib/golem/tool_handler.ex`) — Dispatches tool calls to implementations.
@@ -53,6 +56,8 @@ Goal → Opus (plan) → Sonnet (execute in loop) → Done
 - **State** (`lib/golem/state.ex`) — Save/load run state for resume support.
 - **Screenshot** (`lib/golem/screenshot.ex`) — Captures Xvfb display, saves to host, returns base64 for Claude.
 - **Web** (`lib/golem/web.ex`) — Perplexity search and URL fetching.
+- **TUI** (`lib/golem/tui.ex`) — Terminal UI. Builds the Golem-specific status block (forge verbs, tool icons, progress checklist, batch + retry sections) and delegates pinned-area rendering to `pinned_status`.
+- **PinnedStatus** (`pinned_status/`) — Sibling package. Diff-rendered pinned status block: only the lines that actually change emit bytes, so the spinner ticking doesn't flicker or rewrite the checklist. Scriptable via `PinnedStatus.Scenario` + `mix pinned_status.demo`. Designed to be lifted out of the repo if it's worth open-sourcing.
 
 ## Tools (16)
 
@@ -60,9 +65,9 @@ shell, write_file, read_file, edit_file, list_directory, glob, grep, web_search,
 
 ## Key Design Decisions
 
-- **Dual model**: Opus plans, Sonnet executes. `think(request_replan: true)` triggers Opus re-plan.
+- **Dual model**: Opus plans, Sonnet executes. `think(request_replan: true)` triggers Opus re-plan. Each role's provider is independently configurable — e.g. Opus for planning via Anthropic, Qwen for execution via OpenRouter.
 - **Multi-tool turns**: All tool_use blocks in a response are executed, not just the first.
-- **Context compaction**: Old messages are summarized into a structured recap at 40 messages instead of being dropped.
+- **Context compaction**: Old messages are summarized into a structured recap only when the estimated token count gets within 15K of the configured `limits.context_window` (default 200K). Setting `context_window` above 200K automatically enables Anthropic's 1M-context beta (2× pricing above 200K). Microcompaction (clearing tool_results from old messages) is intentionally absent — it caused re-read loops where the agent would summarize a file then re-read it because the verbatim content was gone.
 - **State persistence**: Saved every 10 steps and on max_steps. Resume with `Golem.resume(id)`.
 - **Sub-agents**: Isolated context, 50-step cap, depth capped at 3.
 - **Container**: Agent runs as root. Xvfb on :99 for GUI. Volume `golem-data` for persistence.
@@ -70,7 +75,7 @@ shell, write_file, read_file, edit_file, list_directory, glob, grep, web_search,
 
 ## Config
 
-User-facing config lives in `.golem/config.yml` (see `.golem/config.example.yml` for the template). `Golem.Config.load/0` runs at boot and merges three layers in precedence order: `GOLEM_*` env vars → `.golem/config.yml` → built-in defaults in `Golem.Application.ensure_defaults/0`. Run `mix golem.config` to print the resolved values and their source.
+User-facing config lives in `.golem/config.yaml` (see `.golem/config.example.yaml` for the template). `Golem.Config.load/0` runs at boot and merges three layers in precedence order: `GOLEM_*` env vars → `.golem/config.yaml` → built-in defaults in `Golem.Application.ensure_defaults/0`. Run `mix golem.config` to print the resolved values and their source.
 
 Top-level YAML keys: `models`, `limits`, `container`, `bitbucket`, `default_branch`, `projects`, `jira`, `mcp`. See [docs/config.md](docs/config.md) for the full schema, project setup, MCP servers, and environment variables.
 
@@ -113,7 +118,7 @@ Test scenarios in `scenarios/`. Run with `--scenario <name>`:
 
 ## Documentation Rules
 
-- When adding or changing config schema (any top-level key in `.golem/config.yml`), environment variables, or CLI flags, always update **both** this file and `README.md`. If detail belongs in `docs/config.md` or `docs/jira.md`, update that file as the source of truth and link from here.
+- When adding or changing config schema (any top-level key in `.golem/config.yaml`), environment variables, or CLI flags, always update **both** this file and `README.md`. If detail belongs in `docs/config.md` or `docs/jira.md`, update that file as the source of truth and link from here.
 - `README.md` is the human-readable reference. Keep it in sync with this file.
 - `CLAUDE.md` and `GEMINI.md` are symlinks to `AGENTS.md` — edit `AGENTS.md` only.
 
@@ -125,7 +130,7 @@ Never add agent-attribution trailers to commit messages — no `Co-Authored-By: 
 
 - Elixir 1.19, OTP 27
 - Uses podman (not docker)
-- Container image: `golem-vm:latest`
+- Container image: `localhost/golem-vm:latest`
 - Container name: `golem-vm`
 - Logs: `logs/golem.log`
 - Screenshots: `screenshots/`

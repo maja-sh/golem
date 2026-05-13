@@ -2,7 +2,7 @@ defmodule Golem.CLI.Doctor do
   @moduledoc """
   Validate Golem's configuration and runtime environment.
 
-  Runs a sequence of checks against `.golem/config.yml`, required host
+  Runs a sequence of checks against `.golem/config.yaml`, required host
   binaries, the container image + state, and optional external services
   (Jira, MCP servers, Anthropic API). Each check prints `✓`/`⚠`/`✗`
   with a short reason. Exits non-zero if any check fails.
@@ -50,8 +50,8 @@ defmodule Golem.CLI.Doctor do
     cond do
       not File.exists?(path) ->
         {:warn, label,
-         "no config found in #{Enum.join(["./.golem/config.yml", "~/.golem/config.yml"], " or ")}. " <>
-           "Copy .golem/config.example.yml to get started."}
+         "no config found in #{Enum.join(["./.golem/config.yaml", "~/.golem/config.yaml"], " or ")}. " <>
+           "Copy .golem/config.example.yaml to get started."}
 
       true ->
         case YamlElixir.read_from_file(path) do
@@ -111,7 +111,7 @@ defmodule Golem.CLI.Doctor do
   end
 
   defp check_image do
-    image = Application.get_env(:golem, :container_image, "golem-vm:latest")
+    image = Application.get_env(:golem, :container_image, "localhost/golem-vm:latest")
     runtime = Golem.Runtime.cmd()
 
     case System.find_executable(runtime) do

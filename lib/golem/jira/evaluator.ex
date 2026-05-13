@@ -21,13 +21,15 @@ defmodule Golem.Jira.Evaluator do
   """
   def evaluate(ticket, config, opts \\ []) do
     model = Application.get_env(:golem, :planner_model)
+    provider = Application.get_env(:golem, :planner_provider, :anthropic)
     attachment_blocks = Keyword.get(opts, :attachment_blocks, [])
     nudge = Keyword.get(opts, :nudge)
     text = build_message(ticket, config.projects, attachment_blocks, nudge)
     content = [%{type: "text", text: text} | attachment_blocks]
 
-    case Golem.Claude.call(
+    case Golem.LLM.call(
            [%{role: "user", content: content}],
+           provider: provider,
            model: model,
            max_tokens: 1024,
            system: system_prompt(),

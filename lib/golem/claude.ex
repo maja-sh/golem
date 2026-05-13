@@ -1,7 +1,11 @@
 defmodule Golem.Claude do
   @moduledoc """
-  Claude API client. Supports tool use with extended thinking.
+  Anthropic API client. Supports tool use with extended thinking and
+  prompt caching. Implements `Golem.Provider` so it can be selected via
+  `Golem.LLM.call/2` with `provider: :anthropic`.
   """
+
+  @behaviour Golem.Provider
 
   require Logger
 
@@ -44,11 +48,7 @@ defmodule Golem.Claude do
       |> maybe_put(:tools, tools)
       |> maybe_put_thinking(thinking_budget)
 
-    headers = [
-      {"x-api-key", api_key},
-      {"anthropic-version", "2023-06-01"},
-      {"content-type", "application/json"}
-    ]
+    headers = build_headers(api_key)
 
     result = do_call(body, headers, model, 0)
     Golem.Output.current().api_retry_cleared()
@@ -77,15 +77,29 @@ defmodule Golem.Claude do
       |> maybe_put(:tools, tools)
       |> maybe_put_thinking(thinking_budget)
 
-    headers = [
+    headers = build_headers(api_key)
+
+    result = do_call_stream(body, headers, model, on_text, 0)
+    Golem.Output.current().api_retry_cleared()
+    result
+  end
+
+  # Build request headers. Auto-enables the 1M-context beta when the
+  # configured context_window exceeds the standard 200K — needed by
+  # Sonnet/Opus to accept prompts above that mark. Note: tokens above
+  # 200K are billed at 2× input price.
+  defp build_headers(api_key) do
+    base = [
       {"x-api-key", api_key},
       {"anthropic-version", "2023-06-01"},
       {"content-type", "application/json"}
     ]
 
-    result = do_call_stream(body, headers, model, on_text, 0)
-    Golem.Output.current().api_retry_cleared()
-    result
+    if Application.get_env(:golem, :context_window, 200_000) > 200_000 do
+      [{"anthropic-beta", "context-1m-2025-08-07"} | base]
+    else
+      base
+    end
   end
 
   # Surface a retry to the TUI and sleep. Callers must still recurse
@@ -415,8 +429,10 @@ defmodule Golem.Claude do
   end
 
   defp api_key! do
-    System.get_env("ANTHROPIC_API_KEY") ||
-      raise "ANTHROPIC_API_KEY environment variable not set"
+    var = Application.get_env(:golem, :anthropic_api_key_env, "ANTHROPIC_API_KEY")
+
+    System.get_env(var) ||
+      raise "#{var} environment variable not set"
   end
 
   defp empty_message?(%{content: nil}), do: true

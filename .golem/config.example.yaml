@@ -1,4 +1,4 @@
-# Golem configuration — copy to `.golem/config.yml` and customize.
+# Golem configuration — copy to `.golem/config.yaml` and customize.
 #
 # All settings are optional. Anything you omit falls back to the
 # built-in default in lib/golem/application.ex.
@@ -9,20 +9,46 @@
 #   3. Built-in default
 #
 # The whole .golem/ directory is gitignored — your personal config
-# stays local. Commit this `.example.yml` as the template.
+# stays local. Commit this `.example.yaml` as the template.
 
 models:
+  # Each role is a map of `provider` + `model`. Supported providers:
+  # `anthropic`, `openrouter`.
+
   # Used to produce the initial plan and revisions.
-  planner: claude-opus-4-7
+  planner:
+    provider: anthropic
+    model: claude-opus-4-7
 
   # Used for step-by-step execution. Sonnet is the default: ~1/5 the
   # cost of Opus with faster TTFT, reliable on read/edit/test loops.
-  # Switch to claude-opus-4-7 if you see executor quality regressions.
-  executor: claude-sonnet-4-6
+  # Switch to claude-opus-4-7 if you see executor quality regressions,
+  # or route to OpenRouter for cheaper models:
+  #
+  #   executor:
+  #     provider: openrouter
+  #     model: qwen/qwen-2.5-coder-32b-instruct
+  executor:
+    provider: anthropic
+    model: claude-sonnet-4-6
 
   # Optional: model used for compaction summaries. Falls back to
-  # `executor` if unset. Sonnet is a good cost/quality pick here.
-  # compaction: claude-sonnet-4-6
+  # `executor` if unset.
+  # compaction:
+  #   provider: anthropic
+  #   model: claude-sonnet-4-6
+
+# Per-provider settings. Most users only need the defaults — the
+# Anthropic key is read from ANTHROPIC_API_KEY and OpenRouter's from
+# OPENROUTER_API_KEY. Override `api_key_env` to look in a different
+# env var, or `base_url` for a self-hosted gateway.
+#
+# providers:
+#   anthropic:
+#     api_key_env: ANTHROPIC_API_KEY
+#   openrouter:
+#     api_key_env: OPENROUTER_API_KEY
+#     base_url: https://openrouter.ai/api/v1
 
 # Optional: override token pricing per model. Values are USD per
 # million tokens. Useful when Anthropic bumps prices between Golem
@@ -70,12 +96,19 @@ limits:
   # Max tokens per executor response.
   executor_max_tokens: 16000
 
+  # Total prompt budget per model call, in tokens. 200000 is the
+  # standard window for Sonnet 4.6 / Opus 4.7. Raising this above
+  # 200000 automatically enables Anthropic's 1M-context beta header
+  # and incurs 2× input pricing on every token beyond the 200K mark.
+  # The compaction trigger is derived as `context_window - 15000`.
+  context_window: 200000
+
 container:
   # Name of the podman/docker container to exec into.
   name: golem-vm
 
   # Image used to create the container if it doesn't exist yet.
-  image: golem-vm:latest
+  image: localhost/golem-vm:latest
 
   # User to run setup steps as by default (can be overridden per-step
   # in .golem/projects.yml).
@@ -142,6 +175,9 @@ container:
 # jira:
 #   base_url: https://your-company.atlassian.net
 #   done_transition: "Pull Request / Deployable"
+#   # Post status comments on the ticket (evaluation, success, failure,
+#   # paused, error). Set to false to operate silently.
+#   comment_on_ticket: true
 
 # --- MCP servers ---
 #

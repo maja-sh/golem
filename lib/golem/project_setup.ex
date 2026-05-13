@@ -7,7 +7,7 @@ defmodule Golem.ProjectSetup do
   require Logger
 
   @doc """
-  Load project config from `.golem/config.yml`.
+  Load project config from `.golem/config.yaml`.
 
   Returns `{:ok, %{bitbucket_workspace, projects, ...}}` or
   `{:error, reason}` if the file is missing the `projects:` block.
@@ -25,12 +25,12 @@ defmodule Golem.ProjectSetup do
        }}
     else
       {:error,
-       "No `projects:` block in .golem/config.yml. See .golem/config.example.yml for the format."}
+       "No `projects:` block in .golem/config.yaml. See .golem/config.example.yaml for the format."}
     end
   end
 
   @doc """
-  Load project config merged with Jira settings from `.golem/config.yml`.
+  Load project config merged with Jira settings from `.golem/config.yaml`.
 
   Returns `{:ok, %{bitbucket_workspace, projects, jira_base_url, ...}}`.
   """
@@ -54,7 +54,7 @@ defmodule Golem.ProjectSetup do
 
       _ ->
         {:error,
-         "No `jira:` block in .golem/config.yml. See .golem/config.example.yml for the format."}
+         "No `jira:` block in .golem/config.yaml. See .golem/config.example.yaml for the format."}
     end
   end
 
@@ -168,7 +168,7 @@ defmodule Golem.ProjectSetup do
   # clone (real work lives in worktrees), so a non-fast-forward from
   # origin is always something we want to accept rather than block on.
   defp ensure_branch_fetched(repo_path, branch) do
-    cmd = "cd #{repo_path} && git fetch origin +#{branch}:refs/remotes/origin/#{branch} --depth 1"
+    cmd = "cd #{repo_path} && git fetch origin +#{branch}:refs/remotes/origin/#{branch}"
     run_cmd(cmd, timeout: 600_000, verbose: false)
   end
 
@@ -309,14 +309,29 @@ defmodule Golem.ProjectSetup do
     end
   end
 
-  # Ensure the main clone exists and is up to date. Reuses existing clone.
+  # Ensure the main clone exists and is up to date. Reuses existing
+  # clone; fetches origin and fast-forwards the local `branch_from`
+  # ref to match the remote so worktrees branched off it (and any
+  # `git log <branch_from>..HEAD` reports the agent runs) reflect the
+  # true upstream state. Clones are full-history — shallow clones lose
+  # blame/log context that the agent uses for repo understanding.
   defp ensure_main_clone(repo_path, clone_url, branch_from) do
     cuser = container_user()
 
     case Golem.Sandbox.exec("test -d #{repo_path}/.git", timeout: 5_000) do
       {:ok, %{exit_code: 0}} ->
-        # Pull latest
-        run_cmd("cd #{repo_path} && git fetch origin", timeout: 60_000, verbose: false)
+        with :ok <- maybe_unshallow(repo_path),
+             :ok <- run_cmd("cd #{repo_path} && git fetch origin --tags", timeout: 600_000, verbose: false) do
+          # Fast-forward local branch_from to origin/branch_from.
+          # update-ref works regardless of the clone's current HEAD —
+          # the main clone is a parking spot for worktrees, not a
+          # checkout the user works in.
+          run_cmd(
+            "cd #{repo_path} && git update-ref refs/heads/#{branch_from} refs/remotes/origin/#{branch_from}",
+            timeout: 10_000,
+            verbose: false
+          )
+        end
 
       _ ->
         # Fresh clone. `--progress` forces git to emit progress output
@@ -324,11 +339,29 @@ defmodule Golem.ProjectSetup do
         # networks (airplane wifi, hotspot) silently download the pack
         # and trip the 120 s stall detector.
         run_cmd("mkdir -p #{@repos_dir}", timeout: 5_000, verbose: false)
-        cmd = "git clone --progress --depth 1 --branch #{branch_from} #{clone_url} #{repo_path}"
+        cmd = "git clone --progress --branch #{branch_from} #{clone_url} #{repo_path}"
         display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
-        with :ok <- run_cmd(cmd, timeout: 600_000, verbose: false, display: display) do
+        with :ok <- run_cmd(cmd, timeout: 1_800_000, verbose: false, display: display) do
           run_cmd("chown -R #{cuser}:#{cuser} #{repo_path}", timeout: 60_000, verbose: false)
         end
+    end
+  end
+
+  # Detect and deepen any pre-existing shallow clone left behind by an
+  # earlier `--depth 1` run. `--unshallow` is a one-shot — once the
+  # repo is full, subsequent fetches just fast-forward normally.
+  defp maybe_unshallow(repo_path) do
+    case Golem.Sandbox.exec("cd #{repo_path} && git rev-parse --is-shallow-repository", timeout: 5_000) do
+      {:ok, %{exit_code: 0, output: output}} ->
+        if String.trim(output) == "true" do
+          Logger.info("Unshallowing #{repo_path}...")
+          run_cmd("cd #{repo_path} && git fetch --unshallow origin --tags", timeout: 1_800_000, verbose: false)
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
     end
   end
 
@@ -347,9 +380,9 @@ defmodule Golem.ProjectSetup do
     # Remove existing directory for a clean clone
     Golem.Sandbox.exec("rm -rf #{path}", timeout: 60_000)
 
-    cmd = "git clone --progress --depth 1 --branch #{branch_from} #{clone_url} #{path}"
+    cmd = "git clone --progress --branch #{branch_from} #{clone_url} #{path}"
     display = String.replace(cmd, ~r/x-bitbucket-api-token-auth:[^@]+@/, "x-bitbucket-api-token-auth:<token>@")
-    result = run_cmd(cmd, timeout: 600_000, verbose: verbose, display: display)
+    result = run_cmd(cmd, timeout: 1_800_000, verbose: verbose, display: display)
 
     # Git runs as root via sandbox — fix ownership so agent user can work with the files
     with :ok <- result do

@@ -1,6 +1,6 @@
 defmodule Mix.Tasks.Golem.Setup do
   @moduledoc """
-  Test project setup from `.golem/config.yml` without running the agent.
+  Test project setup from `.golem/config.yaml` without running the agent.
 
       mix golem.setup
       mix golem.setup --destroy

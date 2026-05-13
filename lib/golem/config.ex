@@ -1,11 +1,11 @@
 defmodule Golem.Config do
   @moduledoc """
-  Loads user config from `.golem/config.yml` and `GOLEM_*` env vars into
+  Loads user config from `.golem/config.yaml` and `GOLEM_*` env vars into
   `Application.put_env(:golem, …)` at boot.
 
   Precedence (highest first):
     1. `GOLEM_*` environment variable
-    2. Value in `.golem/config.yml`
+    2. Value in `.golem/config.yaml`
     3. Hard-coded default in `Golem.Application.ensure_defaults/0`
 
   Missing file or missing keys are not errors — each setting is
@@ -16,22 +16,24 @@ defmodule Golem.Config do
 
   # Lookup order — the first existing file wins. Project-local beats
   # the home-dir fallback so a developer in their golem clone sees their
-  # repo config, not a stray ~/.golem/config.yml.
+  # repo config, not a stray ~/.golem/config.yaml.
   @config_paths [
-    ".golem/config.yml",
-    "~/.golem/config.yml"
+    ".golem/config.yaml",
+    "~/.golem/config.yaml"
   ]
 
   # Each entry: {yaml_path, app_env_key, type, env_var_name}
   #
   # Adding a new setting: add a row here, document it in the example
-  # file (`.golem/config.example.yml`) and AGENTS.md. `ensure_defaults/0`
+  # file (`.golem/config.example.yaml`) and AGENTS.md. `ensure_defaults/0`
   # in `Golem.Application` still needs the hard-coded fallback.
   @settings [
-    # models
-    {["models", "planner"], :planner_model, :string, "GOLEM_PLANNER_MODEL"},
-    {["models", "executor"], :executor_model, :string, "GOLEM_EXECUTOR_MODEL"},
-    {["models", "compaction"], :compaction_model, :string, "GOLEM_COMPACTION_MODEL"},
+    # models — each role is a map `{provider, model}` handled by
+    # `load_models_block/1`, NOT by the generic @settings loader,
+    # because cast_value can't write two app-env keys from one YAML
+    # value. (The `:planner_model` / `:executor_model` /
+    # `:compaction_model` app-env keys are still written; they just
+    # come from the helper.)
 
     # limits
     {["limits", "max_steps"], :max_steps, :int, "GOLEM_MAX_STEPS"},
@@ -42,11 +44,15 @@ defmodule Golem.Config do
     {["limits", "planner_max_tokens"], :planner_max_tokens, :int, "GOLEM_PLANNER_MAX_TOKENS"},
     {["limits", "planner_max_steps"], :planner_max_steps, :int, "GOLEM_PLANNER_MAX_STEPS"},
     {["limits", "executor_max_tokens"], :executor_max_tokens, :int, "GOLEM_EXECUTOR_MAX_TOKENS"},
+    {["limits", "context_window"], :context_window, :int, "GOLEM_CONTEXT_WINDOW"},
 
     # container
     {["container", "name"], :container, :string, "GOLEM_CONTAINER"},
     {["container", "image"], :container_image, :string, "GOLEM_CONTAINER_IMAGE"},
-    {["container", "user"], :container_user, :string, "GOLEM_CONTAINER_USER"}
+    {["container", "user"], :container_user, :string, "GOLEM_CONTAINER_USER"},
+
+    # jira
+    {["jira", "comment_on_ticket"], :jira_comment_on_ticket, :bool, "GOLEM_JIRA_COMMENT_ON_TICKET"}
   ]
 
   @doc """
@@ -70,8 +76,93 @@ defmodule Golem.Config do
       end
     end)
 
+    load_models_block(yaml)
+    load_providers_block(yaml)
+
     :ok
   end
+
+  # Handle the `models:` block. Each role is a map of the form
+  # `{provider: "...", model: "..."}`. Env vars override either field
+  # independently.
+  defp load_models_block(yaml) do
+    models = get_in(yaml, ["models"]) || %{}
+
+    for role <- ~w(planner executor compaction) do
+      {yaml_model, yaml_provider} = parse_model_entry(Map.get(models, role))
+      env_model = nonempty(System.get_env("GOLEM_#{String.upcase(role)}_MODEL"))
+      env_provider = nonempty(System.get_env("GOLEM_#{String.upcase(role)}_PROVIDER"))
+
+      if model = env_model || yaml_model do
+        Application.put_env(:golem, :"#{role}_model", model)
+      end
+
+      if provider = env_provider || yaml_provider do
+        Application.put_env(:golem, :"#{role}_provider", to_provider_atom(provider))
+      end
+    end
+  end
+
+  defp parse_model_entry(nil), do: {nil, nil}
+
+  defp parse_model_entry(%{} = m) do
+    {m["model"] || m[:model], m["provider"] || m[:provider]}
+  end
+
+  defp parse_model_entry(other) do
+    raise """
+    Invalid model entry in .golem/config.yaml: #{inspect(other)}
+
+    Each role under `models:` must be a map with `provider` and `model` keys:
+
+        models:
+          executor:
+            provider: anthropic
+            model: claude-sonnet-4-6
+    """
+  end
+
+  # Whitelisted set — String.to_atom on untrusted YAML input would
+  # silently accept typos and then explode in Golem.LLM's provider
+  # lookup. Be loud here instead.
+  @known_providers ~w(anthropic openrouter)
+
+  defp to_provider_atom(p) when is_atom(p) and p in [:anthropic, :openrouter], do: p
+
+  defp to_provider_atom(p) when is_binary(p) do
+    if p in @known_providers do
+      String.to_atom(p)
+    else
+      Logger.warning("Unknown provider #{inspect(p)} — defaulting to :anthropic")
+      :anthropic
+    end
+  end
+
+  defp to_provider_atom(_), do: :anthropic
+
+  # Handle the `providers:` block. Each provider currently exposes
+  # `api_key_env` (env var to look up the key in) and, for OpenRouter,
+  # `base_url` (override for testing or self-hosted gateways).
+  defp load_providers_block(yaml) do
+    providers = get_in(yaml, ["providers"]) || %{}
+
+    if anthropic = providers["anthropic"] do
+      maybe_put_env(:anthropic_api_key_env, anthropic["api_key_env"])
+    end
+
+    if openrouter = providers["openrouter"] do
+      maybe_put_env(:openrouter_api_key_env, openrouter["api_key_env"])
+      maybe_put_env(:openrouter_base_url, openrouter["base_url"])
+    end
+  end
+
+  defp maybe_put_env(_key, nil), do: :ok
+  defp maybe_put_env(_key, ""), do: :ok
+  defp maybe_put_env(key, value), do: Application.put_env(:golem, key, value)
+
+  defp nonempty(nil), do: nil
+  defp nonempty(""), do: nil
+  defp nonempty(s), do: s
 
   @doc """
   Settings catalogue, used by `Golem.Config` itself and by the
@@ -140,6 +231,16 @@ defmodule Golem.Config do
   defp cast_value(v, :int) when is_binary(v) do
     case Integer.parse(v) do
       {n, ""} -> n
+      _ -> :skip
+    end
+  end
+
+  defp cast_value(v, :bool) when is_boolean(v), do: v
+
+  defp cast_value(v, :bool) when is_binary(v) do
+    case String.downcase(v) do
+      x when x in ~w(true 1 yes on) -> true
+      x when x in ~w(false 0 no off) -> false
       _ -> :skip
     end
   end

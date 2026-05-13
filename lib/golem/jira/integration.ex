@@ -531,9 +531,14 @@ defmodule Golem.Jira.Integration do
   # --- Helpers ---
 
   defp comment_on_ticket(config, ticket, body) do
-    case Golem.Jira.add_comment(ticket.key, body, config.jira_base_url) do
-      :ok -> Logger.info("Commented on #{ticket.key}")
-      {:error, reason} -> Logger.error("Failed to comment on #{ticket.key}: #{reason}")
+    if Application.get_env(:golem, :jira_comment_on_ticket, true) do
+      case Golem.Jira.add_comment(ticket.key, body, config.jira_base_url) do
+        :ok -> Logger.info("Commented on #{ticket.key}")
+        {:error, reason} -> Logger.error("Failed to comment on #{ticket.key}: #{reason}")
+      end
+    else
+      Logger.debug("Skipping Jira comment on #{ticket.key} (jira.comment_on_ticket=false)")
+      :ok
     end
   end
 

@@ -2,13 +2,16 @@
 
 ## Configuration
 
-Jira settings live under the `jira:` block in `.golem/config.yml`:
+Jira settings live under the `jira:` block in `.golem/config.yaml`:
 
 ```yaml
 jira:
   base_url: https://yoursite.atlassian.net
   done_transition: "Pull Request / Deployable"   # optional, default "Done"
+  comment_on_ticket: true                        # optional, default true
 ```
+
+Setting `comment_on_ticket: false` silences all five Jira comment paths — evaluation reject, success (with PR links), agent self-reject, paused (step/budget cap), and unexpected error. Useful when you want Golem to push PRs but leave the ticket activity stream alone. PR creation and the `done_transition` are unaffected.
 
 ## Run a ticket
 

@@ -1,6 +1,6 @@
 defmodule Golem.CLI.Setup do
   @moduledoc """
-  Test project setup from `.golem/config.yml` without running the agent.
+  Test project setup from `.golem/config.yaml` without running the agent.
 
   Loads the config, clones/pulls all projects into the container, runs
   setup scripts, and prints the layout. Stays on the default branch.
@@ -122,9 +122,9 @@ defmodule Golem.CLI.Setup do
           # --progress forces git to emit progress on stderr so the stall
           # detector doesn't misread a slow-but-alive download as hung.
           cmd =
-            "git clone --progress --depth 1 --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
+            "git clone --progress --branch #{project.branch_from} #{clone_url} #{project.path} 2>&1"
 
-          run_step("clone (#{project.branch_from})", cmd, timeout: 600_000)
+          run_step("clone (#{project.branch_from})", cmd, timeout: 1_800_000)
       end
 
     with :ok <- result do

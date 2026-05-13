@@ -16,7 +16,7 @@ else
 fi
 
 CONTAINER_NAME="${1:-golem-vm}"
-IMAGE="${2:-golem-vm:latest}"
+IMAGE="${2:-localhost/golem-vm:latest}"
 
 echo "Building $IMAGE..."
 $RUNTIME build -t "$IMAGE" -f "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR"
