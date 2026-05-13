@@ -265,6 +265,15 @@ defmodule Golem.TUI do
   def stream_text(_chunk), do: :ok
   def stream_end, do: :ok
 
+  @doc """
+  Toggle operator pause. Called by `Golem.KeyListener` when the user
+  presses `p`. The runner polls `paused?/0` between turns.
+  """
+  def toggle_pause, do: GenServer.cast(__MODULE__, :toggle_pause)
+
+  @doc "True when the operator has paused the run via the `p` key."
+  def paused?, do: GenServer.call(__MODULE__, :paused?)
+
   # Public helpers
   def format_elapsed(nil), do: "..."
   def format_elapsed(ms) when ms < 1000, do: "#{ms}ms"
@@ -289,7 +298,10 @@ defmodule Golem.TUI do
       # Whether PinnedStatus is currently running. Started lazily on
       # init_display and stopped in :stop. status_lines is no longer
       # tracked here — PinnedStatus handles diff-render internally.
-      pinned: false
+      pinned: false,
+      # Operator-initiated pause (toggled by `p` keystroke via
+      # Golem.KeyListener). When true the runner waits between turns.
+      paused: false
     }}
   end
 
@@ -310,6 +322,10 @@ defmodule Golem.TUI do
     end
 
     {:ok, _pid} = PinnedStatus.start_link()
+    # KeyListener may be unavailable (no TTY, e.g. test harness) — its
+    # init returns ok with an inert state in that case, so just start
+    # it. Failure to start would be a real error and worth surfacing.
+    {:ok, _kpid} = Golem.KeyListener.start_link()
 
     width = terminal_width() - 4
 
@@ -477,6 +493,11 @@ defmodule Golem.TUI do
       PinnedStatus.stop()
     end
 
+    # Restore terminal modes (cooked/echo) before we hand control back
+    # to the user's shell. KeyListener's terminate/2 does this on its
+    # own when stopped cleanly.
+    if Process.whereis(Golem.KeyListener), do: GenServer.stop(Golem.KeyListener, :normal, 1_000)
+
     elapsed = format_duration(System.monotonic_time(:second) - (state.started_at || 0))
     IO.puts(IO.ANSI.format([:faint, " #{state.verb} took #{elapsed} · #{state.cost}", :reset]))
 
@@ -492,6 +513,8 @@ defmodule Golem.TUI do
     end
     {:reply, :ok, %{state | active: false, pinned: false, ticker: nil}}
   end
+
+  def handle_call(:paused?, _from, state), do: {:reply, state.paused, state}
 
   def handle_call({:confirm_continue, question, _opts}, _from, state) do
     # Pause the spinner: cancel ticker so it doesn't fire while we
@@ -536,6 +559,12 @@ defmodule Golem.TUI do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
+  def handle_cast(:toggle_pause, state) do
+    state = %{state | paused: not state.paused}
+    state = push_status(state)
+    {:noreply, state}
+  end
+
   def handle_cast({:update, updates}, state) do
     state = Enum.reduce(updates, state, fn {k, v}, s -> Map.put(s, k, v) end)
     state = push_status(state)
@@ -585,13 +614,20 @@ defmodule Golem.TUI do
   end
 
   defp build_bottom_line(state) do
-    spinner = Enum.at(@spinner_frames, state.spinner_idx)
     elapsed = if state.started_at, do: format_duration(System.monotonic_time(:second) - state.started_at), else: "0s"
-    action_part = if state.action, do: [:faint, " · ", :magenta, wtrunc(state.action, 30), :reset], else: []
 
-    [:cyan, " #{spinner} ", :reset,
-     :white, "#{state.verb} for #{elapsed}", :reset,
-     :faint, " · ", :yellow, state.cost, :reset] ++ action_part
+    if state.paused do
+      [:yellow, " ⏸ PAUSED", :reset,
+       :faint, " — press ", :reset, :white, "p", :reset,
+       :faint, " to resume · #{elapsed} · ", :reset, :yellow, state.cost, :reset]
+    else
+      spinner = Enum.at(@spinner_frames, state.spinner_idx)
+      action_part = if state.action, do: [:faint, " · ", :magenta, wtrunc(state.action, 30), :reset], else: []
+
+      [:cyan, " #{spinner} ", :reset,
+       :white, "#{state.verb} for #{elapsed}", :reset,
+       :faint, " · ", :yellow, state.cost, :reset] ++ action_part
+    end
   end
 
   defp build_status_lines(state) do

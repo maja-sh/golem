@@ -329,6 +329,11 @@ defmodule Golem.Runner do
   end
 
   defp do_loop(state) do
+    # Block at turn boundaries while the operator has paused via `p`.
+    # Only the top-level agent honors pause — sub-agents are short-lived
+    # and pause is meaningful at the run scope, not nested.
+    if state.depth == 0, do: wait_while_paused()
+
     step = state.step + 1
     p = state.prefix
     if run_id = Map.get(state, :run_id), do: Process.put(:golem_run_id, run_id)
@@ -1045,6 +1050,15 @@ defmodule Golem.Runner do
   end
 
   defdelegate truncate_str(s, max), to: Golem.Runner.Compaction
+
+  # Block until the operator-pause flag is cleared. Polled at 250ms
+  # so resume is human-perceptibly instant without burning CPU.
+  defp wait_while_paused do
+    if Process.whereis(Golem.TUI) && Golem.TUI.paused?() do
+      Process.sleep(250)
+      wait_while_paused()
+    end
+  end
 
   # --- Snip Compact ---
 
