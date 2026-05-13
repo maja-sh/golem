@@ -39,7 +39,20 @@ defmodule Golem.TUI do
   @impl true
   def agent_text(nil), do: :ok
   @impl true
-  def agent_text(text) do
+  def agent_text(text) when is_binary(text) do
+    # Some providers (e.g. some OpenRouter upstreams of Kimi K2) emit
+    # whitespace-only `content` alongside their tool calls. Don't draw
+    # a lonely ● bullet for that — it just looks broken.
+    case String.trim(text) do
+      "" ->
+        :ok
+
+      _ ->
+        do_agent_text(text)
+    end
+  end
+
+  defp do_agent_text(text) do
     width = terminal_width() - 4  # leave room for "● " prefix + margin
     lines = wrap_text(text, width)
     formatted = case lines do
@@ -309,7 +322,10 @@ defmodule Golem.TUI do
     |> Enum.flat_map(&wrap_text(&1, width))
     |> Enum.each(fn line -> println([:faint, "  #{line}", :reset]) end)
 
-    println([])
+    # No trailing blank — every output type that follows
+    # (agent_text/planning) prepends its own leading blank, so emitting
+    # one here would stack two blanks between the header and the next
+    # block.
 
     {:ok, ticker} = :timer.send_interval(@spinner_interval, :tick)
 

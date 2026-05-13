@@ -120,12 +120,32 @@ defmodule PinnedStatus do
 
   @impl true
   def init(opts) do
+    # Trap exits so terminate/2 runs when the parent process dies —
+    # without it, the cursor stays hidden after a crash because we
+    # never get a chance to emit `\e[?25h`.
+    Process.flag(:trap_exit, true)
+
     io = Keyword.get(opts, :io, :stdio)
     hide_cursor = Keyword.get(opts, :hide_cursor, true)
 
-    if hide_cursor, do: IO.write(io, "\e[?25l")
+    if hide_cursor do
+      IO.write(io, "\e[?25l")
+
+      # Belt-and-braces: register a System.at_exit handler so the
+      # cursor is restored even when terminate/2 doesn't run (BEAM
+      # hard halt, brutal_kill shutdown, etc.). Writes directly to
+      # :stdio rather than `io` because by the time at_exit fires the
+      # captured StringIO pid (used by tests) may already be gone.
+      System.at_exit(fn _status -> IO.write("\e[?25h") end)
+    end
 
     {:ok, %{io: io, current: [], hide_cursor: hide_cursor, attached: true}}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    if state.hide_cursor, do: IO.write(state.io, "\e[?25h")
+    :ok
   end
 
   @impl true

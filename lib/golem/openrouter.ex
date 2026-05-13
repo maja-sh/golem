@@ -34,13 +34,16 @@ defmodule Golem.OpenRouter do
     system = opts[:system]
     tools = opts[:tools]
 
+    openai_tool_defs = openai_tools(tools)
+
     body =
       %{
         model: model,
         max_tokens: max_tokens,
         messages: to_openai_messages(messages, system)
       }
-      |> maybe_put(:tools, openai_tools(tools))
+      |> maybe_put(:tools, openai_tool_defs)
+      |> maybe_put(:provider, provider_routing(openai_tool_defs))
 
     headers = [
       {"authorization", "Bearer #{api_key}"},
@@ -213,6 +216,16 @@ defmodule Golem.OpenRouter do
 
   defp stringify_tool_result_content(_), do: ""
 
+  # When we're sending tools, ask OpenRouter to only route the request
+  # to upstream providers that natively support every parameter we send
+  # (in particular, `tools`). Without this, OpenRouter may pick a
+  # provider that ignores or rejects tool calls and we get a 404 like
+  # "No endpoints found that support tool use." Returns nil when there
+  # are no tools so OpenRouter is free to pick the cheapest endpoint.
+  defp provider_routing(nil), do: nil
+  defp provider_routing([]), do: nil
+  defp provider_routing(_tools), do: %{require_parameters: true}
+
   defp openai_tools(nil), do: nil
   defp openai_tools([]), do: nil
 
@@ -235,14 +248,15 @@ defmodule Golem.OpenRouter do
     msg = choice["message"] || %{}
     content = msg["content"] || ""
     tool_calls = msg["tool_calls"] || []
+    trimmed = String.trim(content)
 
     %{
       thinking: nil,
-      text: if(content == "", do: nil, else: content),
+      text: if(trimmed == "", do: nil, else: content),
       tool_use:
         Enum.map(tool_calls, fn tc ->
           %{
-            id: tc["id"],
+            id: sanitize_tool_id(tc["id"]),
             name: get_in(tc, ["function", "name"]),
             input: decode_args(get_in(tc, ["function", "arguments"]))
           }
@@ -265,6 +279,26 @@ defmodule Golem.OpenRouter do
     usage: %{input_tokens: 0, output_tokens: 0, cache_read: 0, cache_create: 0},
     raw: other
   }
+
+  # Anthropic's tool_use.id validator only accepts `[a-zA-Z0-9_-]+`.
+  # OpenRouter upstreams (e.g. Moonshot/Kimi) sometimes return IDs with
+  # `.`, `:`, or other chars. We rewrite at the boundary so that when
+  # the conversation history is later fed to Anthropic (e.g. when the
+  # planner finalizes a plan with Opus after Kimi has done exploration),
+  # the IDs already match Anthropic's regex. OpenRouter doesn't care
+  # that we changed the ID — it only checks tool_use ↔ tool_result
+  # consistency within the conversation, and we use the rewritten ID
+  # on both sides.
+  defp sanitize_tool_id(nil) do
+    "toolu_or_" <> (:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false))
+  end
+
+  defp sanitize_tool_id(id) when is_binary(id) do
+    case Regex.replace(~r/[^a-zA-Z0-9_-]/, id, "_") do
+      "" -> sanitize_tool_id(nil)
+      clean -> clean
+    end
+  end
 
   defp decode_args(nil), do: %{}
   defp decode_args(""), do: %{}

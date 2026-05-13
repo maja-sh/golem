@@ -160,10 +160,19 @@ defmodule Golem.ToolHandler do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
 
-    # Use find with -path for glob matching, or shell globstar
-    cmd = "cd #{escape(path)} && find . -path './#{pattern}' -type f 2>/dev/null | sort | head -200"
+    # `-prune` stops descending into vendored/build dirs entirely —
+    # without it, find walks every file under node_modules / vendor /
+    # .git which routinely pushes a single glob past 60s on a Laravel
+    # + Vue codebase. The positive `-path` match then runs only on the
+    # remaining tree.
+    cmd =
+      "cd #{escape(path)} && find . " <>
+        "\\( -path '*/node_modules' -o -path '*/vendor' -o -path '*/.git' " <>
+        "-o -path '*/_build' -o -path '*/deps' -o -path '*/dist' " <>
+        "-o -path '*/.next' -o -path '*/.nuxt' -o -path '*/target' \\) -prune -o " <>
+        "-path './#{pattern}' -type f -print 2>/dev/null | sort | head -200"
 
-    case Golem.Sandbox.exec(cmd, timeout: 15_000) do
+    case Golem.Sandbox.exec(cmd, timeout: 60_000) do
       {:ok, %{output: output, exit_code: _}} ->
         if output == "" do
           {:continue, "No files matched pattern '#{pattern}' in #{path}"}
@@ -190,20 +199,27 @@ defmodule Golem.ToolHandler do
 
     glob_flag = if file_glob, do: " --include='#{file_glob}'", else: ""
     context_flag = if context > 0, do: " -C #{context}", else: ""
+    # Skip vendored/build dirs — searching node_modules alone can blow
+    # past 60s on a frontend codebase. Same exclusion list as glob.
+    exclude_dirs =
+      " --exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=.git" <>
+        " --exclude-dir=_build --exclude-dir=deps --exclude-dir=dist" <>
+        " --exclude-dir=.next --exclude-dir=.nuxt --exclude-dir=target"
 
     # Get total count first (cheap) so we can show pagination hints
-    count_cmd = "grep -rl#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | wc -l"
+    count_cmd = "grep -rl#{exclude_dirs}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null | wc -l"
     # Get results with offset + limit
     skip = if offset > 0, do: " | tail -n +#{offset + 1}", else: ""
-    results_cmd = "grep -rn#{context_flag}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null#{skip} | head -#{@grep_limit}"
+    results_cmd =
+      "grep -rn#{context_flag}#{exclude_dirs}#{glob_flag} -- #{escape(pattern)} #{escape(path)} 2>/dev/null#{skip} | head -#{@grep_limit}"
 
     # Serialize: the Sandbox is single-threaded so there's no gain from
     # Task.async here — and with the grep handler being one of many
     # things that can run concurrently from the planner, firing two
     # tasks used to deadlock half the batch on :busy before the busy
     # path was made queueing.
-    count_result = Golem.Sandbox.exec(count_cmd, timeout: 15_000)
-    results_result = Golem.Sandbox.exec(results_cmd, timeout: 15_000)
+    count_result = Golem.Sandbox.exec(count_cmd, timeout: 60_000)
+    results_result = Golem.Sandbox.exec(results_cmd, timeout: 60_000)
 
     total_files =
       case count_result do

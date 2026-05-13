@@ -408,10 +408,22 @@ defmodule Golem.ProjectSetup do
   defp run_setup_script([], _path, _verbose), do: :ok
 
   # List of steps: [{label, command, user}, ...]
+  #
+  # `npm install`, `composer install`, `apt-get install` and friends
+  # legitimately go silent for minutes during heavy download/build
+  # phases. Disable stall detection here and rely on the 30-minute
+  # hard timeout — the stall heuristic is meant for the agent's
+  # interactive shell calls, where a long quiet period really does
+  # mean something's wrong.
   defp run_setup_script(steps, path, verbose) when is_list(steps) do
     Enum.reduce_while(steps, :ok, fn {label, command, user}, :ok ->
       cmd = "cd #{path} && #{command}" |> wrap_user(user)
-      case run_cmd(cmd, timeout: 300_000, verbose: verbose, display: label) do
+      case run_cmd(cmd,
+             timeout: 1_800_000,
+             stall_timeout: :infinity,
+             verbose: verbose,
+             display: label
+           ) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}
       end
@@ -426,7 +438,12 @@ defmodule Golem.ProjectSetup do
         tmp_path = "/tmp/golem_setup_#{:crypto.strong_rand_bytes(4) |> Base.encode16()}.sh"
 
         with :ok <- Golem.Sandbox.write_file(tmp_path, content) do
-          run_cmd("chmod +x #{tmp_path} && #{tmp_path}", timeout: 300_000, verbose: verbose, display: script_path)
+          run_cmd("chmod +x #{tmp_path} && #{tmp_path}",
+            timeout: 1_800_000,
+            stall_timeout: :infinity,
+            verbose: verbose,
+            display: script_path
+          )
         end
 
       {:error, reason} ->
@@ -455,10 +472,17 @@ defmodule Golem.ProjectSetup do
     verbose = Keyword.get(opts, :verbose, false)
     display = Keyword.get(opts, :display, cmd)
     timeout = Keyword.get(opts, :timeout, 60_000)
+    stall_timeout = Keyword.get(opts, :stall_timeout, :default)
 
     if verbose, do: IO.puts("  $ #{display}")
 
-    case Golem.Sandbox.exec(cmd, timeout: timeout) do
+    exec_opts =
+      case stall_timeout do
+        :default -> [timeout: timeout]
+        other -> [timeout: timeout, stall_timeout: other]
+      end
+
+    case Golem.Sandbox.exec(cmd, exec_opts) do
       {:ok, %{output: output, exit_code: 0}} ->
         if verbose and output != "" do
           output |> String.trim() |> truncate_output() |> IO.puts()
