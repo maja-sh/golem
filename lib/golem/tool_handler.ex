@@ -6,12 +6,47 @@ defmodule Golem.ToolHandler do
   require Logger
 
   @doc """
-  Execute a tool call. Returns {:continue, result_text}, {:done, summary}, etc.
-  Depth is passed through for sub-agent spawning.
-  """
-  def execute(tool_call, depth \\ 0)
+  Execute a tool call. Returns `{:continue, text}`, `{:done, summary}`,
+  `{:think_replan, reasoning}`, etc.
 
-  def execute(%{name: "shell", input: %{"command" => command}}, _depth) do
+  Wraps dispatch in a try/rescue/catch so a malformed tool input or a
+  bug in a single handler can't kill the run — it becomes a
+  `{:continue, "[error] …"}` tool_result the model sees on its next
+  turn. This is essential when running non-Anthropic providers whose
+  tool-input schemas don't always match what our handlers expect
+  (e.g. Kimi K2 emitting `"context"` for the `think` tool instead of
+  the schema's `"reasoning"`).
+  """
+  def execute(tool_call, depth \\ 0) do
+    dispatch(tool_call, depth)
+  rescue
+    e ->
+      name = tool_name(tool_call)
+      Logger.error(
+        "Tool #{inspect(name)} raised #{inspect(e.__struct__)}: " <>
+          "#{Exception.message(e)}\n" <>
+          Exception.format_stacktrace(__STACKTRACE__)
+      )
+
+      {:continue,
+       "[error] Tool '#{name}' raised #{inspect(e.__struct__)}: #{Exception.message(e)}. " <>
+         "Check the tool's input keys against its schema and retry."}
+  catch
+    kind, reason ->
+      name = tool_name(tool_call)
+      Logger.error(
+        "Tool #{inspect(name)} #{kind} #{inspect(reason)}\n" <>
+          Exception.format_stacktrace(__STACKTRACE__)
+      )
+
+      {:continue, "[error] Tool '#{name}' failed (#{kind}): #{inspect(reason)}"}
+  end
+
+  defp tool_name(%{name: n}) when is_binary(n), do: n
+  defp tool_name(%{"name" => n}) when is_binary(n), do: n
+  defp tool_name(_), do: "<unknown>"
+
+  defp dispatch(%{name: "shell", input: %{"command" => command}}, _depth) do
 
     case Golem.Sandbox.exec(command) do
       {:ok, %{output: output, exit_code: 0}} ->
@@ -32,7 +67,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
+  defp dispatch(%{name: "write_file", input: %{"path" => path, "content" => content}}, _depth) do
 
     # Ensure parent directory exists — avoids wasting a step on mkdir -p
     dir = Path.dirname(path)
@@ -48,7 +83,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "read_file", input: %{"path" => path} = input}, _depth) do
+  defp dispatch(%{name: "read_file", input: %{"path" => path} = input}, _depth) do
     with {:ok, offset} <- coerce_int(Map.get(input, "offset"), "offset"),
          {:ok, limit} <- coerce_int(Map.get(input, "limit"), "limit") do
       # Check cache first (verifies hash against container)
@@ -99,7 +134,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}, _depth) do
+  defp dispatch(%{name: "edit_file", input: %{"path" => path, "old_string" => old, "new_string" => new}}, _depth) do
 
     # Try cache first, fall back to reading from container
     content =
@@ -147,16 +182,16 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "list_directory", input: %{"path" => path}}, _depth) do
+  defp dispatch(%{name: "list_directory", input: %{"path" => path}}, _depth) do
 
-    case Golem.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 10_000) do
+    case Golem.Sandbox.exec("ls -lAh #{escape(path)}", timeout: 60_000) do
       {:ok, %{output: output, exit_code: 0}} -> {:continue, truncate(output, 50_000)}
       {:ok, %{output: output}} -> {:continue, "[error] #{output}"}
       {:error, reason} -> {:continue, "[error] #{inspect(reason)}"}
     end
   end
 
-  def execute(%{name: "glob", input: input}, _depth) do
+  defp dispatch(%{name: "glob", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
 
@@ -190,7 +225,7 @@ defmodule Golem.ToolHandler do
 
   @grep_limit 200
 
-  def execute(%{name: "grep", input: input}, _depth) do
+  defp dispatch(%{name: "grep", input: input}, _depth) do
     pattern = Map.fetch!(input, "pattern")
     path = Map.get(input, "path", ".")
     file_glob = Map.get(input, "glob")
@@ -256,7 +291,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "web_search", input: %{"query" => query}}, _depth) do
+  defp dispatch(%{name: "web_search", input: %{"query" => query}}, _depth) do
 
     case Golem.Web.search(query) do
       {:ok, result} -> {:continue, truncate(result, 50_000)}
@@ -264,7 +299,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "web_fetch", input: %{"url" => url}}, _depth) do
+  defp dispatch(%{name: "web_fetch", input: %{"url" => url}}, _depth) do
 
     case Golem.Web.fetch(url) do
       {:ok, content} -> {:continue, truncate(content, 50_000)}
@@ -272,8 +307,15 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "think", input: input}, _depth) do
-    reasoning = Map.fetch!(input, "reasoning")
+  defp dispatch(%{name: "think", input: input}, _depth) do
+    # Some non-Anthropic providers (Kimi K2 in particular) emit the
+    # reasoning text under alternate keys — "context", "thought",
+    # "thoughts". Accept those rather than crash; the tool is just a
+    # scratchpad either way.
+    reasoning =
+      input["reasoning"] || input["context"] || input["thought"] ||
+        input["thoughts"] || ""
+
     replan = Map.get(input, "request_replan", false)
 
     Golem.Events.emit(:thought, %{
@@ -288,7 +330,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "browse", input: %{"url" => url}}, _depth) do
+  defp dispatch(%{name: "browse", input: %{"url" => url}}, _depth) do
 
     # Kill any existing Firefox, then open the URL
     Golem.Sandbox.exec("DISPLAY=:99 pkill -f firefox 2>/dev/null; sleep 0.5", timeout: 5_000)
@@ -307,7 +349,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "update_progress", input: %{"items" => items}}, depth) do
+  defp dispatch(%{name: "update_progress", input: %{"items" => items}}, depth) do
     # Handle items sent as a JSON string instead of a parsed list
     items =
       case items do
@@ -408,7 +450,7 @@ defmodule Golem.ToolHandler do
   # indefinitely blocking the parent (which used to be `:infinity`).
   @parallel_sub_agents_timeout_ms 60 * 60 * 1000
 
-  def execute(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
+  defp dispatch(%{name: "parallel_sub_agents", input: %{"agents" => agents}}, depth) do
     parent_state = Process.get(:golem_parent_state)
     # The parent process owns the events.jsonl run id in its process
     # dict. Spawned Tasks start with an empty dict, so we capture the
@@ -503,7 +545,7 @@ defmodule Golem.ToolHandler do
     {:continue, "#{succeeded}/#{total} sub-agents succeeded:\n#{Enum.join(all_summaries, "\n")}"}
   end
 
-  def execute(%{name: "screenshot", input: _input}, _depth) do
+  defp dispatch(%{name: "screenshot", input: _input}, _depth) do
 
     case Golem.Screenshot.capture() do
       {:ok, %{path: path, base64: base64}} ->
@@ -514,7 +556,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_click", input: %{"x" => x, "y" => y}}, _depth) do
+  defp dispatch(%{name: "gui_click", input: %{"x" => x, "y" => y}}, _depth) do
 
     case Golem.Sandbox.exec("DISPLAY=:99 xdotool mousemove #{x} #{y} click 1", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Clicked at (#{x}, #{y})"}
@@ -523,7 +565,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_type", input: %{"text" => text}}, _depth) do
+  defp dispatch(%{name: "gui_type", input: %{"text" => text}}, _depth) do
     # Use xdotool type with --clearmodifiers to avoid modifier key issues
     escaped = String.replace(text, "'", "'\\''")
 
@@ -534,7 +576,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_key", input: %{"key" => key}}, _depth) do
+  defp dispatch(%{name: "gui_key", input: %{"key" => key}}, _depth) do
 
     case Golem.Sandbox.exec("DISPLAY=:99 xdotool key --clearmodifiers #{key}", timeout: 5_000) do
       {:ok, %{exit_code: 0}} -> {:continue, "Pressed #{key}"}
@@ -543,7 +585,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "gui_scroll", input: input}, _depth) do
+  defp dispatch(%{name: "gui_scroll", input: input}, _depth) do
     direction = Map.get(input, "direction", "down")
     clicks = Map.get(input, "clicks", 3)
     button = if direction == "up", do: 4, else: 5
@@ -557,7 +599,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "sub_agent", input: input}, depth) do
+  defp dispatch(%{name: "sub_agent", input: input}, depth) do
     goal = Map.fetch!(input, "goal")
     context = Map.get(input, "context", "")
     parent_state = Process.get(:golem_parent_state)
@@ -596,14 +638,14 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: "done", input: input}, _depth) do
+  defp dispatch(%{name: "done", input: input}, _depth) do
     success = Map.get(input, "success", false)
     summary = Map.get(input, "summary", "No summary provided")
     {:done, %{success: success, summary: summary}}
   end
 
   # MCP tools — namespaced as mcp_{server}_{tool}
-  def execute(%{name: "mcp_" <> _ = name, input: input}, _depth) do
+  defp dispatch(%{name: "mcp_" <> _ = name, input: input}, _depth) do
 
     case Golem.MCP.call_tool(name, input) do
       {:ok, text} -> {:continue, truncate(text, 50_000)}
@@ -611,7 +653,7 @@ defmodule Golem.ToolHandler do
     end
   end
 
-  def execute(%{name: name}, _depth) do
+  defp dispatch(%{name: name}, _depth) do
     Logger.warning("  [unknown tool] #{name}")
     {:continue, "[error] Unknown tool: #{name}"}
   end
