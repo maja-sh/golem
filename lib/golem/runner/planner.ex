@@ -213,7 +213,16 @@ defmodule Golem.Runner.Planner do
       output().tool_call(tc.name, summarize_planner_input(tc))
     end)
 
-    # Execute all read-only tools in parallel
+    # Execute all read-only tools in parallel.
+    #
+    # Outer timeout is `:infinity` because each tool already has its
+    # own deadlines inside `Sandbox.exec` (per-command + stall). Setting
+    # a finite timeout here layered on top of those was the bug — the
+    # outer killed slow-but-valid tools (grep over a large tree) before
+    # the inner could either finish or surface a clean error, and the
+    # subsequent `Enum.map({:ok, _} = ...)` crashed on the resulting
+    # `{:exit, :timeout}`. Combined with try/rescue inside
+    # ToolHandler.execute, this keeps tool failures local.
     results =
       tool_calls
       |> Task.async_stream(fn tc ->
@@ -227,8 +236,20 @@ defmodule Golem.Runner.Planner do
         # Collect file paths from tool calls for AGENTS.md discovery
         paths = extract_paths_from_tool(tc)
         {tc.id, result_text, paths}
-      end, max_concurrency: 8, timeout: 60_000)
-      |> Enum.map(fn {:ok, result} -> result end)
+      end, max_concurrency: 8, timeout: :infinity)
+      |> Enum.zip(tool_calls)
+      |> Enum.map(fn
+        {{:ok, result}, _tc} ->
+          result
+
+        {{:exit, reason}, tc} ->
+          # Belt-and-braces: with try/rescue inside ToolHandler.execute
+          # and :infinity outer timeout this is unreachable in practice,
+          # but if a task does crash, surface it as an error tied to the
+          # original tool_use_id so the message history stays well-formed.
+          Logger.error("Planner tool task crashed (#{tc.name}): #{inspect(reason)}")
+          {tc.id, "[error] tool task crashed: #{inspect(reason)}", []}
+      end)
 
     # Discover AGENTS.md files in directories touched by these tool calls
     all_paths = Enum.flat_map(results, fn {_id, _text, paths} -> paths end)
@@ -277,8 +298,13 @@ defmodule Golem.Runner.Planner do
           _ ->
             nil
         end
-      end, max_concurrency: 8, timeout: 10_000)
-      |> Enum.map(fn {:ok, result} -> result end)
+      end, max_concurrency: 8, timeout: :infinity)
+      |> Enum.map(fn
+        {:ok, result} -> result
+        # AGENTS.md discovery is best-effort — a crashed cat is fine to
+        # drop. We just won't surface that doc to the planner.
+        _ -> nil
+      end)
       |> Enum.reject(&is_nil/1)
 
     # Update seen set
