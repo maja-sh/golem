@@ -86,6 +86,7 @@ Every `golem <cmd>` is also exposed as `mix golem.<cmd>` (same implementation, t
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Claude API key |
+| `OPENROUTER_API_KEY` | If any `models.*.provider: openrouter` | OpenRouter API key — required when routing a role through OpenRouter (Qwen / Kimi / DeepSeek / etc). Get one at <https://openrouter.ai/keys>. |
 | `PERPLEXITY_API_KEY` | For web_search | Perplexity API key |
 | `JIRA_EMAIL` | For `--jira` | Atlassian account email |
 | `JIRA_API_TOKEN` | For `--jira` | Atlassian API token |
@@ -356,9 +357,6 @@ Test scenarios live in `scenarios/`. Run with `--scenario <name>`:
 | `cli_sitemap` | Medium | 30-40 | CLI tool build |
 | `rest_api_bookmarks` | Medium | 20-40 | Flask REST API |
 | `gui_snake` | Medium | 20-30 | GUI rendering test |
-| `money_maker` | Hard | 150-300 | Research + plan + build cycle |
-| `chainpost_backend` | Hard | 200-400 | Rust blockchain microblogging |
-| `chainpost_frontend` | Hard | 150-300 | Tauri + React desktop client |
 
 ## Per-run event log
 

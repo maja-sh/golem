@@ -114,7 +114,6 @@ Test scenarios in `scenarios/`. Run with `--scenario <name>`:
 - `cli_sitemap` — Medium CLI tool build (30-40 steps)
 - `rest_api_bookmarks` — Complex API build (20-40 steps)
 - `gui_snake` — GUI rendering test
-- `money_maker` — Full research → plan → build cycle (150-300 steps)
 
 ## Documentation Rules
 
