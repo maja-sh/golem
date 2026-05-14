@@ -52,17 +52,22 @@ defmodule Golem.Runner.SubAgent do
     context_section = if context && context != "", do: "\n\n## Additional Context\n\n#{context}", else: ""
 
     directive = """
-    ## Sub-Agent Task
+    ## STOP — Sub-Agent Handoff
 
-    You are a sub-agent working on a specific task. The conversation above is your parent agent's full context — you know everything it knows.
+    The conversation above is your parent agent's context, provided so you can read it like reference material. You are NOT the parent agent. You are NOT continuing the parent's work. You have ONE narrow task, defined below.
 
-    Your task: #{goal}#{context_section}
+    ## Your task
 
-    Rules:
-    - Focus ONLY on this task. Do not work on other items from the plan.
-    - Do NOT spawn sub-agents yourself.
-    - When done, call `done` with a clear summary of what you accomplished and which files you created/modified.
-    - You have a limited number of steps. Be efficient.
+    #{goal}#{context_section}
+
+    ## Hard rules
+
+    1. **Do EXACTLY what the task says — nothing else.** If the task says "find and read X", you grep, you read_file, you call `done`. You do NOT also: back up files, run builds, modify code, check related files, or continue any work the parent was doing.
+    2. **Read the task as a literal scope contract.** "Find X" does not include "and fix it". "Read Y" does not include "and verify it builds". If the task doesn't say to write or modify a file, DO NOT write or modify any file.
+    3. **Step budget: aim for under 15 steps. Hard cap: #{max_steps}.** If you're past 15 steps and not close to calling `done`, you're off-track — narrow your approach.
+    4. **Skip "verify every step" instincts unless your task is to build/modify code.** No `php -l`, no `vue-tsc`, no `npm run`, no test runs, unless the task explicitly involves changing code that needs that verification.
+    5. **Call `done` the moment you have what the task asked for.** For read/find/check tasks, the `summary` IS the answer (file path, function signature, the thing you found). Don't keep exploring "just to be thorough".
+    6. Do NOT spawn sub-agents yourself.
     """
 
     # Fork model: inherit parent's messages for full context + prompt cache reuse
@@ -102,10 +107,12 @@ defmodule Golem.Runner.SubAgent do
 
     # Pull the real step count out of the summary (the loop runs a
     # recursive immutable state, so the closure-captured `state.step`
-    # is forever 0). For non-:done exits we fall back to 0 — those
-    # paths don't surface to sub-agent UI today.
+    # is forever 0). On :max_steps_reached the loop now carries the
+    # step count in the error tuple, so capped sub-agents render as
+    # "50 steps" instead of misleading "0 steps".
     {success, steps} = case result do
       {:ok, %{success: s} = summary} -> {s, Map.get(summary, :steps, 0)}
+      {:error, :max_steps_reached, step} -> {false, step}
       _ -> {false, 0}
     end
 
@@ -135,6 +142,7 @@ defmodule Golem.Runner.SubAgent do
       summary: case result do
         {:ok, %{summary: s}} -> String.slice(s || "", 0, 500)
         {:error, reason} -> "error: #{inspect(reason)}"
+        {:error, reason, _step} -> "error: #{inspect(reason)}"
         _ -> ""
       end
     })

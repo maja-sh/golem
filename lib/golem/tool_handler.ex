@@ -632,7 +632,13 @@ defmodule Golem.ToolHandler do
           {:error, :max_steps_reached} ->
             {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
 
+          {:error, :max_steps_reached, _step} ->
+            {:continue, "Sub-agent hit its step limit without finishing. The sub-task may be partially complete — read the files it created with `read_file` before making changes."}
+
           {:error, reason} ->
+            {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
+
+          {:error, reason, _step} ->
             {:continue, "[error] Sub-agent failed: #{inspect(reason)}"}
         end
     end

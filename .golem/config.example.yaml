@@ -32,6 +32,14 @@ models:
     provider: anthropic
     model: claude-sonnet-4-6
 
+  # Stronger model the executor switches to when a stuck/think loop is
+  # detected. Defaults to Sonnet — a meaningful step up from a smaller
+  # executor without paying Opus rates for every burst. See
+  # `limits.max_escalations` for the per-run cap.
+  # escalation:
+  #   provider: anthropic
+  #   model: claude-sonnet-4-6
+
   # Optional: model used for compaction summaries. Falls back to
   # `executor` if unset.
   # compaction:
@@ -102,6 +110,13 @@ limits:
   # and incurs 2× input pricing on every token beyond the 200K mark.
   # The compaction trigger is derived as `context_window - 15000`.
   context_window: 200000
+
+  # Hard cap on the number of times the executor will switch to the
+  # escalation model in one run. The stuck/think warning is still
+  # injected once the cap is hit (the agent gets the nudge) but the
+  # model swap is skipped — keeps a chronically stuck loop from
+  # burning premium tokens. Default: 5.
+  # max_escalations: 5
 
 container:
   # Name of the podman/docker container to exec into.

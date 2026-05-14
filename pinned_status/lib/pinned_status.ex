@@ -211,7 +211,7 @@ defmodule PinnedStatus do
   # Walk both lists in parallel, emit:
   #   - same line   -> "\e[1E" (cursor next line)
   #   - new line    -> "\r\e[2K" <line> "\n"
-  #   - stale line  -> "\r\e[2K\n"
+  #   - stale line  -> handled in bulk by the [_|_]/[] clause below
   defp diff_lines([], []), do: []
 
   defp diff_lines([h | t_old], [h | t_new]) do
@@ -226,8 +226,20 @@ defmodule PinnedStatus do
     ["\r\e[2K", new_h, ?\n | diff_lines([], t_new)]
   end
 
-  defp diff_lines([_ | t_old], []) do
-    ["\r\e[2K\n" | diff_lines(t_old, [])]
+  # Old has lines we no longer want. Don't emit "\r\e[2K\n" per stale
+  # line — that clears the row but advances the cursor past it, which
+  # leaves the cursor invariant ("on row after last status line")
+  # pointing at a row *below* where the new block now ends. Subsequent
+  # renders then move_up by the new (smaller) line count and miss the
+  # actual top of the block — old content above the cursor never gets
+  # cleared, and the next terminal scroll pushes it into scrollback as
+  # a ghost snapshot of the bar.
+  #
+  # Instead, clear from the cursor to the end of the screen in one shot
+  # and don't advance. Cursor stays on the row directly after the last
+  # new status line, which is exactly what the invariant requires.
+  defp diff_lines([_ | _], []) do
+    ["\e[J"]
   end
 
   # Used by println and detach — wipe the on-screen block back to

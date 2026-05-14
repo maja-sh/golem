@@ -197,6 +197,23 @@ defmodule Golem.TUI do
     ], :pr_skipped})
   end
 
+  @impl true
+  def pr_summary([]), do: :ok
+  def pr_summary(prs) when is_list(prs) do
+    header_word = if length(prs) == 1, do: "PR created", else: "PRs created"
+    lines =
+      [
+        [],
+        [:bright, "● #{header_word}", :reset]
+      ] ++
+        Enum.map(prs, fn {repo, url} ->
+          [:green, "  ✓ ", :reset, :bright, repo, :reset,
+           :faint, "  →  ", :reset, :cyan, :underline, url, :reset]
+        end)
+
+    GenServer.call(__MODULE__, {:print, lines, :pr_summary})
+  end
+
   def sub_agent_start(goal, display_name \\ nil) do
     label = display_name || trunc(goal, 60)
     GenServer.call(__MODULE__, {:sub_agent_start, label})
@@ -790,7 +807,14 @@ defmodule Golem.TUI do
   end
 
   defp trunc(text, max) when is_binary(text) do
-    if String.length(text) > max, do: String.slice(text, 0, max - 3) <> "...", else: text
+    # Collapse to one line. Agents sometimes pass multi-line strings as
+    # tool labels, goals, or shell commands; if we kept the newlines,
+    # the terminal would render the second half on its own row with no
+    # indent or color prefix, breaking the visual alignment of every
+    # block that uses trunc/wtrunc (sub-agent headers, tool batch
+    # items, progress checklist entries, etc.).
+    flat = text |> String.replace(~r/\s+/, " ") |> String.trim()
+    if String.length(flat) > max, do: String.slice(flat, 0, max - 3) <> "...", else: flat
   end
   defp trunc(_, _), do: ""
 

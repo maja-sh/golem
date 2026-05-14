@@ -309,7 +309,10 @@ defmodule Golem.Runner do
           {:error, :max_steps_reached}
       end
     else
-      {:error, :max_steps_reached}
+      # Carry the step count so the sub-agent caller can report it.
+      # Without this the TUI defaults to "0 steps" on cap, which looks
+      # like an instant crash rather than a budget exhaustion.
+      {:error, :max_steps_reached, state.step}
     end
   end
 
@@ -354,14 +357,17 @@ defmodule Golem.Runner do
     agents_md = Map.get(state, :agents_md)
     system = Golem.Prompt.executor_system(errors, agents_md)
 
-    # Escalate to the planner model when stuck, drop back after a few
-    # steps. The planner is typically a stronger (and pricier) model
-    # than the executor — Opus 4.7 in the default config.
+    # Escalate to a stronger model when stuck, drop back after a few
+    # steps. The escalation target is separate from the planner — see
+    # `:escalation_model` / `:escalation_provider` in Application
+    # defaults. Defaulting to Sonnet instead of Opus cuts the cost of a
+    # stuck spell by ~5× without losing meaningful reasoning headroom
+    # over a small executor.
     {model, provider} =
       if Map.get(state, :escalated_until, 0) > step do
         {
-          Application.get_env(:golem, :planner_model),
-          Application.get_env(:golem, :planner_provider, :anthropic)
+          Application.get_env(:golem, :escalation_model),
+          Application.get_env(:golem, :escalation_provider, :anthropic)
         }
       else
         {
@@ -473,7 +479,7 @@ defmodule Golem.Runner do
           {:continue, executed} ->
             messages = append_multi_tool_exchange(messages, response, executed)
             messages = maybe_inject_review(messages, executed)
-            {messages, escalated_until} = maybe_inject_stuck_warning(messages, executed, state)
+            {messages, escalated_until, escalations_used} = maybe_inject_stuck_warning(messages, executed, state)
             messages = maybe_inject_file_size_warning(messages, executed)
             messages = maybe_inject_search_nudge(messages, executed, state)
             new_errors = extract_errors(executed)
@@ -484,11 +490,13 @@ defmodule Golem.Runner do
                        phase_costs: phase_costs, last_completed: last_completed,
                        history: update_history(state.history, executed)}
             state = Map.put(state, :escalated_until, escalated_until)
+            state = Map.put(state, :escalations_used, escalations_used)
             # Track consecutive think-only turns
-            {messages, consecutive_thinks, escalated_until} = maybe_inject_think_warning(state.messages, executed, state)
+            {messages, consecutive_thinks, escalated_until, escalations_used} = maybe_inject_think_warning(state.messages, executed, state)
             state = %{state | messages: messages}
             state = Map.put(state, :consecutive_thinks, consecutive_thinks)
             state = Map.put(state, :escalated_until, escalated_until)
+            state = Map.put(state, :escalations_used, escalations_used)
             {messages, consecutive_drifts} = maybe_inject_drift_warning(state)
             state = %{state | messages: messages}
             state = Map.put(state, :consecutive_drifts, consecutive_drifts)
@@ -517,10 +525,15 @@ defmodule Golem.Runner do
               "Continue executing the plan. Use a tool for your next action, or use `done` if the goal is achieved."
           end
 
-        escalated_until =
-          if no_tool_count >= 5,
-            do: step + @escalation_steps,
-            else: Map.get(state, :escalated_until, 0)
+        {escalated_until, escalations_used} =
+          if no_tool_count >= 5 do
+            maybe_bump_escalation(state, step)
+          else
+            {
+              Map.get(state, :escalated_until, 0),
+              Map.get(state, :escalations_used, 0)
+            }
+          end
 
         messages = state.messages ++ [
           %{role: "assistant", content: text},
@@ -529,6 +542,7 @@ defmodule Golem.Runner do
         state = %{state | messages: messages, step: step, costs: costs}
         state = Map.put(state, :no_tool_count, no_tool_count)
         state = Map.put(state, :escalated_until, escalated_until)
+        state = Map.put(state, :escalations_used, escalations_used)
         loop(state, system)
 
       {:error, reason} ->
@@ -1431,6 +1445,20 @@ defmodule Golem.Runner do
   # --- Phase Cost Tracking ---
 
   defp track_phase_costs(executed, costs, state) do
+    # Sub-agents don't own the parent's checklist (tool_handler.ex:386
+    # gates that to depth 0). They shouldn't accumulate their own
+    # phase-cost snapshots either — otherwise an inherited message
+    # history that contains the parent's "all items done" call makes
+    # the sub-agent record bogus phase costs and print a "Cost
+    # breakdown" block mid-sub-agent-flow when it finishes.
+    if state.depth != 0 do
+      {Map.get(state, :phase_costs, []), Map.get(state, :last_completed, 0)}
+    else
+      do_track_phase_costs(executed, costs, state)
+    end
+  end
+
+  defp do_track_phase_costs(executed, costs, state) do
     # Check if update_progress was called with newly completed items
     progress_call = Enum.find(executed, fn {tc, _} -> tc.name == "update_progress" end)
 
@@ -1438,13 +1466,8 @@ defmodule Golem.Runner do
       {tc, _} ->
         # Bump the call-step counter so the silence nudge knows the
         # agent did *something* on the checklist this turn, even if no
-        # item advanced to completed. Gated to depth 0 — sub-agent
-        # update_progress calls don't touch the parent's checklist
-        # (tool_handler.ex:386), so they shouldn't reset the parent's
-        # silence counter either.
-        if state.depth == 0 do
-          :persistent_term.put(:golem_last_progress_call_step, state.step)
-        end
+        # item advanced to completed.
+        :persistent_term.put(:golem_last_progress_call_step, state.step)
 
         items = Map.get(tc.input, "items", [])
         completed = Enum.count(items, fn i ->
@@ -1477,7 +1500,11 @@ defmodule Golem.Runner do
 
   defp log_phase_costs(state) do
     phase_costs = Map.get(state, :phase_costs, [])
-    if phase_costs != [] do
+    # Only the parent run's cost breakdown belongs in the operator-
+    # facing TUI. With track_phase_costs already gated to depth 0
+    # this should always be [] for sub-agents, but the depth guard
+    # here is cheap insurance against future regressions.
+    if phase_costs != [] and state.depth == 0 do
       output().show_phase_costs(phase_costs)
     end
   end
@@ -1488,32 +1515,54 @@ defmodule Golem.Runner do
   # owns the side effects: logging, model escalation, and turning the
   # classification into a warning message appended to the conversation.
 
+  # Decide whether to actually bump the escalation window forward.
+  #
+  # Each triggered escalation extends the "use the escalation model"
+  # window by @escalation_steps and increments `:escalations_used`.
+  # Once the count exceeds the configured cap, additional triggers
+  # leave the window unchanged — the warning text is still injected
+  # in the calling function, so the agent gets the nudge, but we stop
+  # burning premium tokens for a chronically stuck loop.
+  defp maybe_bump_escalation(state, step) do
+    used = Map.get(state, :escalations_used, 0)
+    max = Application.get_env(:golem, :max_escalations, 5)
+
+    if used >= max do
+      {Map.get(state, :escalated_until, 0), used}
+    else
+      {step + @escalation_steps, used + 1}
+    end
+  end
+
   defp maybe_inject_stuck_warning(messages, executed, state) do
     step = state.step + 1
     current_escalation = Map.get(state, :escalated_until, 0)
+    current_used = Map.get(state, :escalations_used, 0)
 
     case Golem.Runner.Triggers.classify_stuck(state.history, executed) do
       {:edit_loop, stuck_files} ->
         Logger.warning("Stuck detection (edits): #{Enum.join(stuck_files, ", ")}")
         Golem.Events.emit(:stuck, %{step: step, category: "edit_loop", detail: stuck_files})
+        {esc_until, esc_used} = maybe_bump_escalation(state, step)
 
         msg =
           "[System] WARNING: You appear to be stuck in an edit loop on: " <>
             Enum.join(stuck_files, ", ") <>
-            ". STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
+            ". STOP editing and do one of these instead:\n1. Use `think` to step back and analyze WHY your edits keep failing\n2. Read the FULL file to understand the actual current state\n3. Try a completely different approach (e.g. rewrite the whole file instead of patching)\n4. Move on to a different task and come back to this later\n\nDo NOT make another edit to the same file without first explaining your new approach via `think`."
 
-        {messages ++ [%{role: "user", content: msg}], step + @escalation_steps}
+        {messages ++ [%{role: "user", content: msg}], esc_until, esc_used}
 
       {:shell_loop, shell_repeats} ->
         Logger.warning("Stuck detection (shell): #{Enum.join(shell_repeats, ", ")}")
         Golem.Events.emit(:stuck, %{step: step, category: "shell_loop", detail: shell_repeats})
+        {esc_until, esc_used} = maybe_bump_escalation(state, step)
 
         msg =
           "[System] WARNING: You are repeating the same shell command(s): " <>
             Enum.join(shell_repeats, ", ") <>
-            ". If it failed before, it will fail again. STOP and:\n1. Read the error output carefully\n2. Use `think` to analyze what's going wrong\n3. Try a fundamentally different approach\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
+            ". If it failed before, it will fail again. STOP and:\n1. Read the error output carefully\n2. Use `think` to analyze what's going wrong\n3. Try a fundamentally different approach"
 
-        {messages ++ [%{role: "user", content: msg}], step + @escalation_steps}
+        {messages ++ [%{role: "user", content: msg}], esc_until, esc_used}
 
       {:repeat_loop, count} ->
         Logger.warning("Stuck detection (repeat): #{count} repeated tool calls")
@@ -1524,14 +1573,14 @@ defmodule Golem.Runner do
         # because the detector fired constantly on normal iteration
         # (several reads of the same file, repeated shell sanity checks)
         # the executor stayed on Opus for the entire run. Edit and shell
-        # loops are stronger signals and still escalate below.
+        # loops are stronger signals and still escalate above.
         msg =
           "[System] WARNING: You are repeating identical tool calls without making progress. This is wasting steps. STOP and use `think` to analyze why you're stuck, then try a different approach."
 
-        {messages ++ [%{role: "user", content: msg}], current_escalation}
+        {messages ++ [%{role: "user", content: msg}], current_escalation, current_used}
 
       :ok ->
-        {messages, current_escalation}
+        {messages, current_escalation, current_used}
     end
   end
 
@@ -1541,20 +1590,22 @@ defmodule Golem.Runner do
     tool_names = Enum.map(executed, fn {tc, _} -> tc.name end)
     prev_thinks = Map.get(state, :consecutive_thinks, 0)
     escalated_until = Map.get(state, :escalated_until, 0)
+    escalations_used = Map.get(state, :escalations_used, 0)
 
     case Golem.Runner.Triggers.classify_think_loop(tool_names, prev_thinks) do
       {:think_loop, consecutive} ->
         Logger.warning("Think loop detected: #{consecutive} consecutive think-only turns")
         step = state.step + 1
         Golem.Events.emit(:think_loop, %{step: step, consecutive: consecutive})
+        {esc_until, esc_used} = maybe_bump_escalation(state, step)
 
         msg =
-          "[System] WARNING: You have called `think` #{consecutive} times in a row without taking any other action. Stop thinking and ACT. Use a tool that changes state — `shell`, `write_file`, `edit_file`, `sub_agent` — or call `done` if you're finished. Do NOT call `think` again without an accompanying action tool.\n\n[System] Escalating to a stronger model for the next #{@escalation_steps} steps."
+          "[System] WARNING: You have called `think` #{consecutive} times in a row without taking any other action. Stop thinking and ACT. Use a tool that changes state — `shell`, `write_file`, `edit_file`, `sub_agent` — or call `done` if you're finished. Do NOT call `think` again without an accompanying action tool."
 
-        {messages ++ [%{role: "user", content: msg}], consecutive, step + @escalation_steps}
+        {messages ++ [%{role: "user", content: msg}], consecutive, esc_until, esc_used}
 
       {:ok, consecutive} ->
-        {messages, consecutive, escalated_until}
+        {messages, consecutive, escalated_until, escalations_used}
     end
   end
 

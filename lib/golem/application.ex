@@ -49,6 +49,20 @@ defmodule Golem.Application do
       executor_model: "claude-sonnet-4-6",
       executor_provider: :anthropic,
       compaction_provider: :anthropic,
+      # Model the executor swaps to when a stuck/think loop is detected.
+      # Defaults to Sonnet (cheaper but still capable) rather than the
+      # planner — escalating to Opus was responsible for >50% of cost on
+      # a real Kimi-executor run because every short stuck-warning
+      # window burned premium tokens. Sonnet costs ~5× less and is
+      # still a meaningful step up from a smaller executor like Kimi.
+      escalation_model: "claude-sonnet-4-6",
+      escalation_provider: :anthropic,
+      # Cap on how many times the executor will switch to the escalation
+      # model in a single run. The warning text is still injected once
+      # the cap is hit — the agent gets the nudge — but the model swap
+      # is skipped so we don't burn premium tokens chasing a chronically
+      # stuck loop.
+      max_escalations: 5,
       planner_max_tokens: 16_000,
       planner_max_steps: 75,
       executor_max_tokens: 16_000,

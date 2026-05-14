@@ -87,7 +87,7 @@ defmodule Golem.Verify do
       {:ok, %{success: false, summary: summary}} ->
         {:error, summary}
 
-      {:error, :max_steps_reached} ->
+      {:error, :max_steps_reached, _step} ->
         # Inconclusive is NOT the same as failing. The verifier used
         # up its budget without finding specific defects — either
         # there are none, or they aren't reachable within 10 steps.
@@ -100,6 +100,11 @@ defmodule Golem.Verify do
         :ok
 
       {:error, reason} ->
+        Logger.warning("Verification crashed (#{inspect(reason)}) — accepting to avoid fix loop")
+        Golem.Events.emit(:verify_inconclusive, %{reason: inspect(reason)})
+        :ok
+
+      {:error, reason, _step} ->
         Logger.warning("Verification crashed (#{inspect(reason)}) — accepting to avoid fix loop")
         Golem.Events.emit(:verify_inconclusive, %{reason: inspect(reason)})
         :ok

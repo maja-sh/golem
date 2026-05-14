@@ -28,6 +28,15 @@ defmodule Golem.Output do
   @callback pr_skipped(repo :: String.t(), reason :: String.t()) :: :ok
 
   @doc """
+  Final closing block listing every PR created during the run. Called
+  by the Jira integration after `push_all` completes so the operator
+  doesn't have to scroll back through post-PR Jira logging to find
+  the URLs to click. `prs` is a list of `{repo, url}` tuples; an empty
+  list is a no-op (handler should print nothing).
+  """
+  @callback pr_summary(prs :: [{String.t(), String.t()}]) :: :ok
+
+  @doc """
   Announce a batch of tool calls that are about to run in parallel. Each
   item is `%{id: String.t(), name: String.t(), detail: String.t()}`. The
   TUI should render them as pending entries so the user sees what the

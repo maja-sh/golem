@@ -149,9 +149,9 @@ defmodule Golem.Jira.Integration do
   defp handle_success(config, ticket, branch, result) do
     Logger.info("Agent succeeded for #{ticket.key}, pushing and creating PRs")
     pr_body = build_pr_body(ticket, :success, result.summary)
-    pr_urls = push_all(config, ticket, branch, pr_body)
+    prs = push_all(config, ticket, branch, pr_body)
 
-    comment = build_success_comment(result.summary, pr_urls)
+    comment = build_success_comment(result.summary, prs)
     comment_on_ticket(config, ticket, comment)
 
     # Transition ticket to done status
@@ -161,17 +161,18 @@ defmodule Golem.Jira.Integration do
       {:error, reason} -> Logger.warning("Failed to transition #{ticket.key}: #{reason}")
     end
 
+    output().pr_summary(prs)
     {:ok, result}
   end
 
   defp handle_rejection(config, ticket, branch, result) do
     Logger.info("Agent rejected #{ticket.key}: #{result.summary}")
     pr_body = build_pr_body(ticket, :rejected, result.summary)
-    pr_urls = push_all(config, ticket, branch, pr_body)
+    prs = push_all(config, ticket, branch, pr_body)
 
-    pr_section = case pr_urls do
+    pr_section = case prs do
       [] -> ""
-      urls -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(urls, "\n", &"- #{&1}")
+      list -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(list, "\n", fn {repo, url} -> "- #{repo}: #{url}" end)
     end
 
     comment = """
@@ -181,6 +182,7 @@ defmodule Golem.Jira.Integration do
     """
 
     comment_on_ticket(config, ticket, comment)
+    output().pr_summary(prs)
     {:ok, result}
   end
 
@@ -190,11 +192,11 @@ defmodule Golem.Jira.Integration do
   defp handle_paused(config, ticket, branch, reason) do
     Logger.info("Agent paused for #{ticket.key} (#{reason}); pushing any committed work")
     pr_body = build_pr_body(ticket, :paused, reason)
-    pr_urls = push_all(config, ticket, branch, pr_body)
+    prs = push_all(config, ticket, branch, pr_body)
 
-    pr_section = case pr_urls do
+    pr_section = case prs do
       [] -> "\n\nNo commits were pushed — either nothing was committed yet, or the push failed (check `logs/golem.log`)."
-      urls -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(urls, "\n", &"- #{&1}")
+      list -> "\n\n**Draft PRs (for review):**\n" <> Enum.map_join(list, "\n", fn {repo, url} -> "- #{repo}: #{url}" end)
     end
 
     comment = """
@@ -204,15 +206,20 @@ defmodule Golem.Jira.Integration do
     """
 
     comment_on_ticket(config, ticket, comment)
+    output().pr_summary(prs)
   end
 
   defp push_all(config, ticket, branch, pr_body) do
     output().planning("Pushing branches and creating PRs...")
 
     config.projects
-    |> Enum.map(fn project -> push_and_pr(config, project, ticket, branch, pr_body) end)
-    |> Enum.filter(&match?({:ok, _}, &1))
-    |> Enum.map(fn {:ok, url} -> url end)
+    |> Enum.map(fn project ->
+      {project.repo, push_and_pr(config, project, ticket, branch, pr_body)}
+    end)
+    |> Enum.flat_map(fn
+      {repo, {:ok, url}} -> [{repo, url}]
+      _ -> []
+    end)
   end
 
   defp handle_error(config, ticket, reason) do
@@ -542,11 +549,11 @@ defmodule Golem.Jira.Integration do
     end
   end
 
-  defp build_success_comment(summary, pr_urls) do
+  defp build_success_comment(summary, prs) do
     pr_section =
-      case pr_urls do
+      case prs do
         [] -> "No code changes were needed."
-        urls -> "**Pull Requests:**\n" <> Enum.map_join(urls, "\n", &"- #{&1}")
+        list -> "**Pull Requests:**\n" <> Enum.map_join(list, "\n", fn {repo, url} -> "- #{repo}: #{url}" end)
       end
 
     """

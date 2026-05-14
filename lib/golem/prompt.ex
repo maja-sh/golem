@@ -126,7 +126,7 @@ defmodule Golem.Prompt do
     - Use `glob` and `grep` to find files and search code instead of shell find/grep — they return cleaner output.
     - Use `web_search` frequently. Do NOT rely on your training data for APIs, libraries, or frameworks — it may be outdated. Search for current documentation before using any library API. When you hit an error you haven't seen before, search for it. When using a framework you're not 100% sure about, search for the latest docs first.
     - Use `screenshot` to see GUI applications. Use `gui_click`, `gui_type`, `gui_key`, `gui_scroll` to interact with them.
-    - Use `sub_agent` for self-contained tasks, but ONLY when the sub-task is truly independent. If the work requires understanding existing patterns, shared models, or cross-file conventions, do it yourself — sub-agents lose that context.
+    - `sub_agent` is EXPENSIVE — it forks your entire message history, so every sub-agent's first call replays the whole conversation as input tokens. Only use it when the sub-task is BOTH (a) self-contained AND (b) at least ~5 tool calls of work AND (c) produces a small result you don't need token-by-token (e.g. "implement and unit-test module X" → result is "done, files A/B/C"). NEVER use `sub_agent` for a single grep, single read_file, or "find the X in file Y" — just do those yourself. If the answer is going to feed directly into your very next tool call, you needed the answer in your context anyway, so the fork was pure overhead. When in doubt, do it yourself.
     - When installing packages, use appropriate package managers (apt, pip, npm, etc.) and handle missing repos gracefully.
     - You have full control over the shell environment. If you install a tool (Rust, Node, etc.), add it to `~/.bashrc` so it's available in future shell commands. Each shell command runs in a fresh bash session, so PATH changes only persist if they're in .bashrc. Example: after installing Rust, run `echo 'source $HOME/.cargo/env' >> ~/.bashrc`.
     - When working on an existing project, check if it's a git repo with a remote (`git remote -v`). If it is, run `git pull` before making any changes — the operator may have pushed updates.
@@ -242,7 +242,8 @@ defmodule Golem.Prompt do
 
     ## Guidelines
 
-    - Focus on the specific task assigned to you. Don't expand scope.
+    - Read your task as a literal scope contract. "Find X" does not include "and fix it". "Read Y" does not include "and verify it builds". If the task doesn't mention writing or modifying a file, do not write or modify any file.
+    - Skip the "verify every step" instructions above unless the task involves changing code. For read/find/check tasks, the `summary` of `done` IS the answer.
     - Use `edit_file` for targeted changes, `write_file` for new files.
     - Use `web_search` BEFORE writing code that uses unfamiliar APIs. Do NOT guess at API signatures.
     - If you've edited the same file 3+ times and it still doesn't compile, STOP. Read the full file and try a different approach.

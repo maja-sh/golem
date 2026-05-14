@@ -45,6 +45,7 @@ defmodule Golem.Config do
     {["limits", "planner_max_steps"], :planner_max_steps, :int, "GOLEM_PLANNER_MAX_STEPS"},
     {["limits", "executor_max_tokens"], :executor_max_tokens, :int, "GOLEM_EXECUTOR_MAX_TOKENS"},
     {["limits", "context_window"], :context_window, :int, "GOLEM_CONTEXT_WINDOW"},
+    {["limits", "max_escalations"], :max_escalations, :int, "GOLEM_MAX_ESCALATIONS"},
 
     # container
     {["container", "name"], :container, :string, "GOLEM_CONTAINER"},
@@ -88,7 +89,7 @@ defmodule Golem.Config do
   defp load_models_block(yaml) do
     models = get_in(yaml, ["models"]) || %{}
 
-    for role <- ~w(planner executor compaction) do
+    for role <- ~w(planner executor compaction escalation) do
       {yaml_model, yaml_provider} = parse_model_entry(Map.get(models, role))
       env_model = nonempty(System.get_env("GOLEM_#{String.upcase(role)}_MODEL"))
       env_provider = nonempty(System.get_env("GOLEM_#{String.upcase(role)}_PROVIDER"))

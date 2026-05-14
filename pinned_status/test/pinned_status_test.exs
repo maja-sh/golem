@@ -89,9 +89,11 @@ defmodule PinnedStatusTest do
       PinnedStatus.set_status(["a", "b"], name: name)
       delta = written_since(io, mark)
 
-      # Two \e[2K — for c being cleared, plus the trailing-cursor
-      # ensure for c's line.
-      assert delta =~ "\e[2K"
+      # Stale tail is cleared in one shot with \e[J (erase to end of
+      # screen) rather than per-line \r\e[2K\n — the latter would
+      # advance the cursor past the new block's bottom and break the
+      # "cursor on row after last status line" invariant.
+      assert delta =~ "\e[J"
       refute delta =~ "a"
       refute delta =~ "b"
       refute delta =~ "c"

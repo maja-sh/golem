@@ -257,7 +257,7 @@ defmodule Golem.OpenRouter do
         Enum.map(tool_calls, fn tc ->
           %{
             id: sanitize_tool_id(tc["id"]),
-            name: get_in(tc, ["function", "name"]),
+            name: normalize_tool_name(get_in(tc, ["function", "name"])),
             input: decode_args(get_in(tc, ["function", "arguments"]))
           }
         end),
@@ -289,6 +289,21 @@ defmodule Golem.OpenRouter do
   # that we changed the ID — it only checks tool_use ↔ tool_result
   # consistency within the conversation, and we use the rewritten ID
   # on both sides.
+  # Some OpenRouter upstreams (notably Moonshot/Kimi K2) emit tool names
+  # in OpenAI's namespaced format — `functions.grep` or `functions_grep` —
+  # and append a per-call index like `_0` / `_1` when multiple tools fire
+  # in one response. Neither shape matches the names we registered. Strip
+  # the prefix and the trailing index so the dispatcher recognizes them.
+  defp normalize_tool_name("functions." <> rest), do: strip_index_suffix(rest)
+  defp normalize_tool_name("functions_" <> rest), do: strip_index_suffix(rest)
+  defp normalize_tool_name(name), do: name
+
+  defp strip_index_suffix(name) when is_binary(name) do
+    Regex.replace(~r/_\d+$/, name, "")
+  end
+
+  defp strip_index_suffix(other), do: other
+
   defp sanitize_tool_id(nil) do
     "toolu_or_" <> (:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false))
   end
