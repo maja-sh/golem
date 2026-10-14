@@ -15,12 +15,12 @@ Setting `comment_on_ticket: false` silences all five Jira comment paths — eval
 
 ## Run a ticket
 
-Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
+Run a ticket with `mix golem.run --jira PROJ-123`. The pipeline:
 
 1. **Evaluate** — Opus assesses the ticket. Rejects if too vague or complex, comments on Jira with the reason.
 2. **Select projects** — Picks which repos from `projects:` are relevant to the ticket.
-3. **Setup** — Clones/pulls only selected repos, creates feature branch `golem/SA-1111-slug`.
-4. **Execute** — Agent works the ticket, committing as it goes with `[SA-1111]` prefix.
+3. **Setup** — Clones/pulls only selected repos, creates feature branch `golem/PROJ-123-slug`.
+4. **Execute** — Agent works the ticket, committing as it goes with `[PROJ-123]` prefix.
 5. **Deliver** — Pushes branches, creates draft PRs on Bitbucket, comments PR links on Jira, transitions the ticket to `jira.done_transition`.
 
 ### Nudging interpretation
@@ -28,8 +28,8 @@ Run a ticket with `mix golem.run --jira SA-1111`. The pipeline:
 When a ticket offers multiple approaches or is genuinely ambiguous, pass `--nudge` (alias `-n`) to steer the run without editing the ticket itself:
 
 ```bash
-mix golem.run --jira SA-1111 --nudge "go with approach 2 from the description"
-mix golem.run --jira SA-1111 -n "use the Phoenix LiveView pattern, not the Vue one"
+mix golem.run --jira PROJ-123 --nudge "go with approach 2 from the description"
+mix golem.run --jira PROJ-123 -n "use the Phoenix LiveView pattern, not the Vue one"
 ```
 
 The note is shown to the pre-flight evaluator and injected as an **Operator note** section near the top of the agent's goal — flagged as overriding any conflicting interpretation. It's per-run and not recorded on the ticket; for decisions that should be visible to teammates, leave a Jira comment instead.
@@ -54,11 +54,11 @@ When running Jira tasks, golem uses git worktrees so multiple tasks can run simu
 /home/agent/repos/api          ← persistent main clone (always on default branch)
 /home/agent/repos/app          ← persistent main clone
 
-/home/agent/tasks/SA-1111/api  ← worktree for SA-1111
-/home/agent/tasks/SA-1111/app  ← worktree for SA-1111
+/home/agent/tasks/PROJ-123/api  ← worktree for PROJ-123
+/home/agent/tasks/PROJ-123/app  ← worktree for PROJ-123
 
-/home/agent/tasks/SA-2222/api  ← worktree for SA-2222 (runs concurrently)
-/home/agent/tasks/SA-2222/app  ← worktree for SA-2222
+/home/agent/tasks/PROJ-789/api  ← worktree for PROJ-789 (runs concurrently)
+/home/agent/tasks/PROJ-789/app  ← worktree for PROJ-789
 ```
 
 - Main clones in `/repos/` are created once and reused (only `git fetch` on subsequent runs)

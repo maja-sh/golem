@@ -212,7 +212,7 @@ defmodule Golem.Iterate do
     Enum.find(config.projects, fn p -> p.repo == expected_repo end)
   end
 
-  # `golem/SA-2100-add-location` → "SA-2100"
+  # `golem/PROJ-456-add-location` → "PROJ-456"
   defp ticket_key_from_branch(branch) do
     case Regex.run(~r{^golem/([A-Z]+-\d+)-}, branch) do
       [_, key] -> key
@@ -614,9 +614,9 @@ defmodule Golem.Iterate do
 
   Recognized shapes:
 
-    * `"SA-2100"` → `{:ticket, "SA-2100"}`
-    * `"hrdl/api/3480"` → `{:pr_path, "hrdl", "api", 3480}`
-    * `"https://bitbucket.org/hrdl/api/pull-requests/3480"` → same
+    * `"PROJ-456"` → `{:ticket, "PROJ-456"}`
+    * `"your-workspace/api/42"` → `{:pr_path, "your-workspace", "api", 42}`
+    * `"https://bitbucket.org/your-workspace/api/pull-requests/42"` → same
   """
   def parse_arg(arg) when is_binary(arg) do
     cond do

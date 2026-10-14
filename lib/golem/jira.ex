@@ -6,7 +6,7 @@ defmodule Golem.Jira do
   require Logger
 
   @doc """
-  Fetch a Jira ticket by key (e.g. "SA-1111").
+  Fetch a Jira ticket by key (e.g. "PROJ-123").
   Returns {:ok, ticket} or {:error, reason}.
   """
   def fetch_ticket(key, base_url) do

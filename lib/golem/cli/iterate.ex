@@ -4,14 +4,14 @@ defmodule Golem.CLI.Iterate do
 
   Usage:
 
-      golem iterate SA-2100                # by ticket key
-      golem iterate hrdl/api/3480          # by workspace/repo/id
-      golem iterate https://bitbucket.org/hrdl/api/pull-requests/3480
+      golem iterate PROJ-456                # by ticket key
+      golem iterate your-workspace/api/42          # by workspace/repo/id
+      golem iterate https://bitbucket.org/your-workspace/api/pull-requests/42
 
       golem iterate                        # list open bot PRs with
                                            # unresolved comments
 
-      golem iterate SA-2100 --budget 20    # raise the cost ceiling
+      golem iterate PROJ-456 --budget 20    # raise the cost ceiling
 
   Pipeline:
 
@@ -93,9 +93,9 @@ defmodule Golem.CLI.Iterate do
         Unrecognized argument: #{inspect(arg)}
 
         Expected one of:
-          SA-2100                 # ticket key
-          hrdl/api/3480           # bitbucket workspace/repo/id
-          https://bitbucket.org/hrdl/api/pull-requests/3480
+          PROJ-456                 # ticket key
+          your-workspace/api/42           # bitbucket workspace/repo/id
+          https://bitbucket.org/your-workspace/api/pull-requests/42
         """)
 
         exit({:shutdown, 1})

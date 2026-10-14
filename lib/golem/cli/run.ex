@@ -8,8 +8,8 @@ defmodule Golem.CLI.Run do
       golem run --scenario smoke_maze
       golem run --plan plan.md "Build a web scraper in Python"
       golem run --max-steps 50 "Set up a Phoenix project"
-      golem run --jira SA-1111
-      golem run --jira SA-1111 --nudge "go with approach 2 from the description"
+      golem run --jira PROJ-123
+      golem run --jira PROJ-123 --nudge "go with approach 2 from the description"
   """
 
   def run(argv) do
@@ -105,7 +105,7 @@ defmodule Golem.CLI.Run do
     if goal == "" do
       IO.puts(:stderr, "Usage: golem run \"your goal here\"")
       IO.puts(:stderr, "       golem run --scenario smoke_maze")
-      IO.puts(:stderr, "       golem run --jira SA-1111")
+      IO.puts(:stderr, "       golem run --jira PROJ-123")
       exit({:shutdown, 1})
     end
 

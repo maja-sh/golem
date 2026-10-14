@@ -52,7 +52,7 @@ The config-file lookup checks `./.golem/config.yaml` first, then `~/.golem/confi
 
 ### Onboarding checklist
 
-To get a coworker from zero to `golem run --jira SA-1111`:
+To get a coworker from zero to `golem run --jira PROJ-123`:
 
 - [ ] `podman` (or `docker`) installed and runnable
 - [ ] `erl` on their PATH (Erlang/OTP 27+)
@@ -64,7 +64,7 @@ To get a coworker from zero to `golem run --jira SA-1111`:
 - [ ] A filled-in `.golem/config.yaml` — at minimum `bitbucket.workspace`, `jira.base_url`, and the `projects:` list pointing at the repos they want the agent to work on
 - [ ] `golem doctor` returns all green
 
-Then `golem run --jira SA-1111` works end-to-end on the first invocation. The first run is slow because the container image builds once.
+Then `golem run --jira PROJ-123` works end-to-end on the first invocation. The first run is slow because the container image builds once.
 
 ### Developing on golem itself
 
@@ -286,12 +286,12 @@ golem run "Build a REST API in Python"
 ### Run a Jira ticket
 
 ```bash
-golem run --jira SA-1111
+golem run --jira PROJ-123
 
 # Add an --nudge to steer interpretation when the ticket offers
 # multiple approaches or is ambiguous. The note is injected near the
 # top of the goal and is also visible to the pre-flight evaluator.
-golem run --jira SA-1111 --nudge "go with approach 2 from the description"
+golem run --jira PROJ-123 --nudge "go with approach 2 from the description"
 ```
 
 Other `--jira` flags: `--force` (skip evaluation), `--budget <n>` (raise the cost ceiling), `--max-steps <n>`, `--visual` (require browser verification), `--model <id>`.
@@ -316,11 +316,11 @@ weighted by type (suggestion / question / nit).
 ```bash
 # By Jira ticket key — the most common case. Resolves to whichever
 # open PR has a `golem/<KEY>-…` source branch.
-golem iterate SA-2100
+golem iterate PROJ-456
 
 # By workspace/repo/PR id, when you only have the URL handy.
-golem iterate hrdl/api/3480
-golem iterate https://bitbucket.org/hrdl/api/pull-requests/3480
+golem iterate your-workspace/api/42
+golem iterate https://bitbucket.org/your-workspace/api/pull-requests/42
 
 # Bare invocation lists open bot PRs with unresolved-item counts
 # (comments + tasks) — informative, not active. Use it when you don't
@@ -328,7 +328,7 @@ golem iterate https://bitbucket.org/hrdl/api/pull-requests/3480
 golem iterate
 
 # Cost ceiling and step ceiling work the same way as `golem run`.
-golem iterate SA-2100 --budget 20
+golem iterate PROJ-456 --budget 20
 ```
 
 Threads and tasks are NOT auto-resolved — that authority stays with

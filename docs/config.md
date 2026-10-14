@@ -56,12 +56,12 @@ Project setup lives under the `projects:` block in `.golem/config.yaml`:
 
 ```yaml
 bitbucket:
-  workspace: hrdl
+  workspace: your-workspace
 
 default_branch: master   # fallback for all projects
 
 projects:
-  - repo: hrdl/api
+  - repo: your-workspace/api
     path: /home/agent/api
     description: "Laravel JSON API"
     branch_from: main             # per-project override
@@ -84,7 +84,7 @@ projects:
 
 | Field | Required | Description |
 |---|---|---|
-| `repo` | yes | Bitbucket repo path (e.g. `hrdl/api`) |
+| `repo` | yes | Bitbucket repo path (e.g. `your-workspace/api`) |
 | `path` | yes | Absolute path in the container where the repo is cloned |
 | `description` | no | Human-readable project description, included in agent prompts |
 | `branch_from` | no | Base branch for this project (overrides `default_branch`) |

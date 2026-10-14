@@ -19,14 +19,14 @@ mix golem.resume --list
 mix golem.resume <run_id>
 
 # Run a Jira ticket
-mix golem.run --jira SA-1111
-mix golem.run --jira SA-1111 --visual
-mix golem.run --jira SA-1111 --nudge "go with approach 2 from the description"
-mix golem.run --jira SA-1111 --force --budget 30 --model claude-opus-4-20250514
+mix golem.run --jira PROJ-123
+mix golem.run --jira PROJ-123 --visual
+mix golem.run --jira PROJ-123 --nudge "go with approach 2 from the description"
+mix golem.run --jira PROJ-123 --force --budget 30 --model claude-opus-4-20250514
 
 # Iterate on reviewer feedback
-mix golem.iterate SA-1111
-mix golem.iterate hrdl/api/3480
+mix golem.iterate PROJ-123
+mix golem.iterate your-workspace/api/42
 mix golem.iterate                  # list open bot PRs
 
 # Other utilities
@@ -83,7 +83,7 @@ Adding a new setting: append a row to `@settings` in `lib/golem/config.ex` (yaml
 
 ## Jira & Bitbucket Workflow
 
-`mix golem.run --jira SA-1111` evaluates the ticket, picks relevant repos, sets up worktrees, executes, and pushes a draft PR. `mix golem.iterate <ticket | pr-path | pr-url>` applies reviewer feedback to an existing bot PR.
+`mix golem.run --jira PROJ-123` evaluates the ticket, picks relevant repos, sets up worktrees, executes, and pushes a draft PR. `mix golem.iterate <ticket | pr-path | pr-url>` applies reviewer feedback to an existing bot PR.
 
 See [docs/jira.md](docs/jira.md) for the full pipeline, worktree layout, and iterate flow.
 

@@ -116,7 +116,7 @@ defmodule Golem.Runner.TriggersTest do
       # at different byte ranges all hashed to the same signature and
       # triggered repeat_loop. That false-positive pinned the executor
       # on Opus via stuck-escalation for the rest of the run.
-      path = "/home/agent/tasks/SA-2100/app/src/components/Foo.vue"
+      path = "/home/agent/tasks/PROJ-456/app/src/components/Foo.vue"
 
       history = [
         hist("read_file", "#{path}@1+30"),
@@ -131,7 +131,7 @@ defmodule Golem.Runner.TriggersTest do
     end
 
     test "three reads of the exact same offset+limit still trigger repeat_loop" do
-      path = "/home/agent/tasks/SA-2100/app/src/components/Foo.vue"
+      path = "/home/agent/tasks/PROJ-456/app/src/components/Foo.vue"
 
       history = [
         hist("read_file", "#{path}@100+50"),

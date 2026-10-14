@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Golem do
   binary's syntax for muscle-memory consistency.
 
       mix golem doctor
-      mix golem run --jira SA-1111
+      mix golem run --jira PROJ-123
       mix golem iterate
       mix golem                       # prints help
 

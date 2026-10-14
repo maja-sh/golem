@@ -218,7 +218,7 @@ defmodule Golem.ProjectSetup do
 
   @doc """
   Build a branch name from ticket key and summary.
-  Example: "golem/SA-1111-add-user-auth"
+  Example: "golem/PROJ-123-add-user-auth"
   """
   def build_branch_name(key, summary) do
     slug =

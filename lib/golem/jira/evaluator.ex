@@ -189,7 +189,7 @@ defmodule Golem.Jira.Evaluator do
           selected_projects: %{
             type: "array",
             items: %{type: "string"},
-            description: "List of repo identifiers (e.g. 'hrdl/api') that need changes for this ticket. Empty if rejecting."
+            description: "List of repo identifiers (e.g. 'your-workspace/api') that need changes for this ticket. Empty if rejecting."
           }
         },
         required: ["decision", "reason", "selected_projects"]

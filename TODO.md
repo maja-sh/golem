@@ -8,7 +8,7 @@
 - [x] Ticket evaluation (Opus pre-flight, accept/reject with Jira comment)
 - [x] Dynamic project selection (evaluator picks relevant repos)
 - [x] Commit-during-work (agent commits as it goes, orchestrator pushes)
-- [x] `mix golem.run --jira SA-1111` CLI entry point
+- [x] `mix golem.run --jira PROJ-123` CLI entry point
 - [x] `mix golem.setup` test project setup without running agent
 - [x] Split config: `.golem/projects.yml` (general) + `.golem/jira.yml` (Jira-specific)
 - [x] Shell stall detection (120s no-output timeout)
@@ -88,18 +88,18 @@ A guided onboarding command that prompts for each piece of config a teammate nee
 2. Prompt for ANTHROPIC_API_KEY, ping the API to validate.
 3. Prompt for Bitbucket workspace + ask if the user wants Jira integration; if yes, prompt for `JIRA_EMAIL`, `JIRA_API_TOKEN`, `BITBUCKET_API_TOKEN`, `jira.base_url`. Validate by hitting `/myself` on each API.
 4. Generate `ssh/id_ed25519` if absent, print the public key + Bitbucket account-settings URL, wait for the user to confirm they've added it.
-5. Walk through `projects:` interactively — paste a repo path (e.g. `hrdl/api`), prompt for container path + branch + setup commands.
+5. Walk through `projects:` interactively — paste a repo path (e.g. `your-workspace/api`), prompt for container path + branch + setup commands.
 6. Write `.env` (mode 0600) and `.golem/config.yml`. Run `golem doctor` at the end.
 
 Effort: ~half a day for a serviceable version. Owl/IO.gets-based prompting is fine for v1.
 
 ### PR review loop — apply reviewer suggestions to an open PR
-New CLI: `mix golem.run --pr hrdl/api/3480`. Most plumbing already exists (Bitbucket client, worktrees, commit + push flow); the missing piece is turning reviewer feedback into a goal and pushing back to the same branch.
+New CLI: `mix golem.run --pr your-workspace/api/42`. Most plumbing already exists (Bitbucket client, worktrees, commit + push flow); the missing piece is turning reviewer feedback into a goal and pushing back to the same branch.
 
 Pipeline:
 1. **Fetch comments.** `getPullRequestComments` + `getPullRequestTasks` from the Bitbucket MCP. Filter to unresolved threads not authored by the bot. Prioritize PR tasks (explicit action items) over free-floating comments. Parse Bitbucket ` ```suggestion ` blocks as first-class "apply exactly this" instructions.
 2. **Assemble goal.** Single agent goal containing PR title/description + grouped reviewer comments with their `file:line` anchors and verbatim text. Tell the agent to apply concrete suggestions and explain-and-skip questions it can't resolve from context.
-3. **Worktree on the existing PR branch.** Reuse `Golem.ProjectSetup.create_worktree` but check out the PR's branch (no new branch), worktree path like `/home/agent/tasks/pr-3480/api`.
+3. **Worktree on the existing PR branch.** Reuse `Golem.ProjectSetup.create_worktree` but check out the PR's branch (no new branch), worktree path like `/home/agent/tasks/pr-42/api`.
 4. **Run.** Normal runner loop with current budget/step limits.
 5. **Push + reply.** Push the branch back (no force unless commits were rewritten — usually not). For each addressed thread, post `Addressed in <sha>` via `addPullRequestComment`. **Don't auto-resolve** — leave thread resolution to the human reviewer so they see what was done.
 
@@ -113,7 +113,7 @@ Effort: ~half a day for MVP (comment fetching + goal assembly + reply-with-sha).
 ## Medium Priority
 
 ### Parallel task execution
-Git worktrees are built but there's no CLI to run multiple Jira tickets concurrently (`mix golem.run --jira SA-1111,SA-2222`). Would need concurrent Runner processes sharing the same container.
+Git worktrees are built but there's no CLI to run multiple Jira tickets concurrently (`mix golem.run --jira PROJ-123,PROJ-789`). Would need concurrent Runner processes sharing the same container.
 
 ### Webhook mode
 Trigger runs from Jira webhooks (ticket moved to "Ready for Dev" → auto-start). No manual CLI needed. Could use a simple Phoenix endpoint or a polling approach.
@@ -159,7 +159,7 @@ Ship `golem` as a self-contained executable users install with one command, conf
 ### CLI interface
 ```
 golem setup                    # provision container, validate config
-golem run --jira SA-1111
+golem run --jira PROJ-123
 golem run --task "inline prompt"
 golem run --file path-to-markdown.md
 golem resume <run_id>
